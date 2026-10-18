@@ -22,10 +22,18 @@
 //!
 //! # What this can and cannot find
 //!
-//! It finds crashes, hangs and sanitizer reports: an out-of-bounds read, an
-//! arithmetic overflow, a loop that does not terminate. The parser has no
-//! `unsafe`, so the realistic catch is a future edit that adds an indexing
-//! operator or a `checked_add` that became a bare `+`.
+//! It finds crashes and sanitizer reports: an out-of-bounds read, an
+//! arithmetic overflow, a panic. The parser has no `unsafe`, so the realistic
+//! catch is a future edit that adds an indexing operator or a `checked_add`
+//! that became a bare `+`.
+//!
+//! It does not meaningfully guard against non-termination across entries. The
+//! count is one byte, so a walk is at most 255 steps, and the iterator
+//! decrements its remaining count before every step, so a cursor that stopped
+//! advancing would simply run out the count. That class is owned by the native
+//! `drain` test with a promised count of `u32::MAX`. (`-timeout=10` in
+//! `scripts/fuzz-parser.sh` still turns a hang inside one entry into a failure
+//! rather than a 20-minute stall.)
 //!
 //! It cannot find the defect class that matters most. A wrong-but-plausible
 //! number, such as an attribute read although the kernel's returned-attributes
@@ -54,12 +62,16 @@ fuzz_target!(|data: &[u8]| {
         assert!(yielded <= count, "iterator exceeded its count");
         if let Ok(e) = entry {
             // Borrowed, never copied: a name that points outside the input
-            // buffer would be a read the bounds checks missed.
-            let name = e.name.as_ptr_range();
-            assert!(
-                span.start <= name.start && name.end <= span.end,
-                "name escaped the input buffer"
-            );
+            // buffer would be a read the bounds checks missed. An empty name
+            // is exempt: it carries no bytes, and a literal `&[]` would have a
+            // dangling address outside the buffer without being a bug.
+            if !e.name.is_empty() {
+                let name = e.name.as_ptr_range();
+                assert!(
+                    span.start <= name.start && name.end <= span.end,
+                    "name escaped the input buffer"
+                );
+            }
             let _ = (e.name.len(), e.allocated);
         }
     }

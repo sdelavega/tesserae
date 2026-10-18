@@ -12,6 +12,10 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+# The nightly toolchain is pinned in scripts/nightly-toolchain, not floating:
+# a floating nightly goes red on days its Miri build is missing, and a job that
+# is red for reasons unrelated to the code teaches people to ignore it. Bump the
+# pin every few weeks, as its own commit.
 env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "13.0"
@@ -28,8 +32,8 @@ jobs:
       # Miri is nightly-only and ships as a component; it needs rust-src to
       # build its own sysroot. If a given nightly lacks the miri component this
       # step fails loudly, which is the right outcome.
-      - name: Install nightly with Miri
-        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+      - name: Install pinned nightly with Miri
+        run: rustup toolchain install "$(cat scripts/nightly-toolchain)" --profile minimal --component miri,rust-src
 
       # The script fails if fewer than the expected number of tests ran, so a
       # filter that stops matching cannot turn this into a green no-op.
@@ -42,8 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nightly
-        run: rustup toolchain install nightly --profile minimal
+      - name: Install pinned nightly
+        run: rustup toolchain install "$(cat scripts/nightly-toolchain)" --profile minimal
 
       # RUSTFLAGS="-Zsanitizer=address" is set inside the script, which also
       # checks the test count and that the binary links the ASAN runtime.
@@ -56,8 +60,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nightly
-        run: rustup toolchain install nightly --profile minimal
+      - name: Install pinned nightly
+        run: rustup toolchain install "$(cat scripts/nightly-toolchain)" --profile minimal
 
       - name: Cache cargo-fuzz
         id: cargo-fuzz-cache
@@ -68,7 +72,7 @@ jobs:
 
       - name: Install cargo-fuzz
         if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-fuzz --version 0.13.2 --locked
+        run: cargo "+$(cat scripts/nightly-toolchain)" install cargo-fuzz --version 0.13.2 --locked
 
       - name: Fuzz parse::entries (15 min)
         run: scripts/fuzz-parser.sh 900

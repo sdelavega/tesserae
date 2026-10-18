@@ -440,10 +440,11 @@ mod tests {
     use super::*;
     use crate::attrs::{COMMON_MASK, FILE_MASK};
 
-    // Shared synthetic-buffer builders. Everything in `synthetic` is pure over
-    // bytes it assembles itself -- no filesystem, no syscall -- which is what
-    // lets Miri run it. See `scripts/miri-parser.sh`.
     // -- synthetic buffers ------------------------------------------------
+    //
+    // Shared builders. Everything in `synthetic` is pure over bytes it
+    // assembles itself -- no filesystem, no syscall -- which is what lets Miri
+    // run it. See `scripts/parser-sanitizers.sh`.
 
     /// Hand-assembles one entry in the measured layout, so a test can create
     /// shapes the filesystem will not produce: a name that is not UTF-8

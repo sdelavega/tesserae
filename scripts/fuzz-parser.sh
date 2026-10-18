@@ -3,8 +3,10 @@
 #
 # Usage: scripts/fuzz-parser.sh SECONDS
 #
-# Needs a nightly toolchain and cargo-fuzz (`cargo install cargo-fuzz`).
-# `+nightly` is explicit because rust-toolchain.toml pins stable.
+# Needs the pinned nightly named in scripts/nightly-toolchain and cargo-fuzz
+# (`cargo install cargo-fuzz`). The toolchain is explicit because
+# rust-toolchain.toml pins stable; to use a locally installed floating nightly:
+# TESSERAE_NIGHTLY=nightly.
 #
 # A fuzz run that loaded no seeds or executed nothing still exits 0, the same
 # trap as a test filter that matches nothing, so the log is checked for both.
@@ -15,6 +17,8 @@ set -euo pipefail
 seconds="${1:?usage: $0 SECONDS}"
 cd "$(dirname "$0")/.."
 
+nightly="${TESSERAE_NIGHTLY:-$(cat scripts/nightly-toolchain)}"
+
 seeds="$(find fuzz/corpus/parse_entries -name 'golden_*.bin' | wc -l | tr -d ' ')"
 if [ "$seeds" -lt 2 ]; then
     echo "error: expected the committed golden seeds in fuzz/corpus/parse_entries, found $seeds" >&2
@@ -24,7 +28,8 @@ fi
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 
-cargo +nightly fuzz run parse_entries -- "-max_total_time=$seconds" 2>&1 | tee "$log"
+# -timeout is per input; libFuzzer's default of 1200 s exceeds the CI job.
+cargo "+$nightly" fuzz run parse_entries -- "-max_total_time=$seconds" -timeout=10 2>&1 | tee "$log"
 
 # libFuzzer prints "INFO: seed corpus: files: N ..." before it starts.
 loaded="$(sed -n 's/^INFO: seed corpus: files: \([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)"
