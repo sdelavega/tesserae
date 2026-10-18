@@ -102,9 +102,12 @@
 //! When an entry's `link_count` is above one the walker claims its
 //! `(dev, inode)` in an [`InodeSet`] as it pushes the node: the first claimant
 //! keeps its sizes, every later one is stored with zero sizes and
-//! [`FLAG_CLONE`] and counted in [`WalkStats::hardlink_dups`]. The gate keeps
+//! [`FLAG_HARDLINK_DUP`] and counted in [`WalkStats::hardlink_dups`]. The gate keeps
 //! the set nearly empty, and directories (`link_count == 0`) never enter it.
 //! The values come from the entry at push time, so the node stores neither.
+//! If the set cannot reserve memory for a new inode, that link keeps its bytes
+//! (the total errs high) and `incomplete` is set to
+//! [`Incomplete::OutOfMemory`], like any other resource shortfall.
 //!
 //! The set is built per walk and passed by reference, so the parallel walker
 //! can hand one instance to every worker. Because "first" is whichever link is
@@ -124,10 +127,10 @@ use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
-use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_CLONE, FLAG_PERM_DENIED};
+use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
 use crate::boundary::{should_descend, volume_of, SkipReason, VolumeId};
-use crate::dedup::InodeSet;
+use crate::dedup::{InodeSet, ReserveFailed};
 use crate::parse::{entries, ObjType, RawEntry};
 
 /// The default scan root: the user-visible data volume on modern macOS.
@@ -214,7 +217,7 @@ pub struct WalkStats {
     /// terminal reason may have replaced it since.
     pub lost_entries: u64,
     /// Hardlinks counted as zero because an earlier link to the same inode
-    /// already carried the bytes. Each has [`FLAG_CLONE`] set. Also included
+    /// already carried the bytes. Each has [`FLAG_HARDLINK_DUP`] set. Also included
     /// in `files`: the entry exists, it just adds nothing to the total.
     pub hardlink_dups: u64,
     pub stalled_at: Option<PathBuf>,
@@ -623,13 +626,24 @@ impl<O: DirOpener> Walker<'_, O> {
         let node = match entry {
             Some(e) => {
                 // The gate: only a multiply-linked entry is worth a set
-                // lookup. Directories report 0 and never reach `claim`.
-                dup = e.link_count > 1 && !self.inodes.claim(e.dev_id, e.file_id);
+                // lookup. Directories report 0 and never reach `try_claim`.
+                if e.link_count > 1 {
+                    match self.inodes.try_claim(e.dev_id, e.file_id) {
+                        Ok(first) => dup = !first,
+                        // Not recorded, so this link keeps its bytes: the
+                        // total errs high, never low. It is still a wrong
+                        // total, so say so in the same channel as every other
+                        // resource shortfall.
+                        Err(ReserveFailed) => {
+                            self.stats.incomplete.get_or_insert(Incomplete::OutOfMemory);
+                        }
+                    }
+                }
                 ScanNode {
                     name,
                     parent,
                     obj_type: e.obj_type,
-                    flags: if dup { FLAG_CLONE } else { 0 },
+                    flags: if dup { FLAG_HARDLINK_DUP } else { 0 },
                     logical: if dup { 0 } else { e.logical },
                     allocated: if dup { 0 } else { e.allocated },
                 }

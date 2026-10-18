@@ -20,9 +20,9 @@
 //! every path, so without correction it reports the file's bytes once per
 //! link and the total exceeds the disk. [`InodeSet`] fixes that: the walker
 //! *claims* an inode the first time it meets it, and every later link to the
-//! same inode is recorded with zero size and [`FLAG_CLONE`].
+//! same inode is recorded with zero size and [`FLAG_HARDLINK_DUP`].
 //!
-//! [`FLAG_CLONE`]: crate::arena::FLAG_CLONE
+//! [`FLAG_HARDLINK_DUP`]: crate::arena::FLAG_HARDLINK_DUP
 //!
 //! # Insertion is gated on `link_count > 1`
 //!
@@ -56,6 +56,10 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+/// Memory for a new entry could not be reserved; see [`InodeSet::try_claim`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReserveFailed;
+
 /// A concurrent set of `(device, inode)` pairs that have been seen.
 pub struct InodeSet {
     /// Never empty. A key lives in exactly one shard, chosen by [`Self::shard`].
@@ -79,19 +83,26 @@ impl InodeSet {
     /// If memory for the new entry cannot be reserved the key is *not*
     /// recorded and this returns `true`, so the caller keeps the bytes. The
     /// failure direction is a total that is too high for the affected links,
-    /// never one that silently loses a file.
+    /// never one that loses a file. This form hides the shortfall; the walker
+    /// uses [`InodeSet::try_claim`] so it can report it.
     pub fn claim(&self, dev: i32, ino: u64) -> bool {
+        self.try_claim(dev, ino).unwrap_or(true)
+    }
+
+    /// [`InodeSet::claim`], but an out-of-memory shortfall is reported rather
+    /// than absorbed. `Err(ReserveFailed)` means the key was *not* recorded;
+    /// the caller should treat the entry as a first claim (keep its bytes) and
+    /// announce the shortfall, since the total is now too high.
+    pub fn try_claim(&self, dev: i32, ino: u64) -> Result<bool, ReserveFailed> {
         let shard = &self.shards[self.shard(dev, ino)];
         // A panic elsewhere cannot leave a `HashSet` half-updated in a way
         // that matters here, so a poisoned lock is still usable.
         let mut set = shard.lock().unwrap_or_else(|e| e.into_inner());
         if set.contains(&(dev, ino)) {
-            return false;
+            return Ok(false);
         }
-        if set.try_reserve(1).is_err() {
-            return true;
-        }
-        set.insert((dev, ino))
+        set.try_reserve(1).map_err(|_| ReserveFailed)?;
+        Ok(set.insert((dev, ino)))
     }
 
     /// Distinct keys claimed so far, summed over shards. Not a consistent
@@ -119,7 +130,7 @@ impl InodeSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::{Arena, FLAG_CLONE, FLAG_PERM_DENIED};
+    use crate::arena::{Arena, FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
     use crate::parse::ObjType;
     use crate::walk::{walk_serial_with_inodes, OpenAt, WalkOptions, WalkStats};
     use std::path::Path;
@@ -155,7 +166,7 @@ mod tests {
     fn flagged(arena: &Arena) -> usize {
         arena
             .iter()
-            .filter(|(_, n)| n.flags & FLAG_CLONE != 0)
+            .filter(|(_, n)| n.flags & FLAG_HARDLINK_DUP != 0)
             .count()
     }
 
@@ -165,6 +176,14 @@ mod tests {
         assert!(s.claim(1, 42));
         assert!(!s.claim(1, 42));
         assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn try_claim_agrees_with_claim_when_memory_is_available() {
+        let s = InodeSet::new(2);
+        assert_eq!(s.try_claim(3, 9), Ok(true));
+        assert_eq!(s.try_claim(3, 9), Ok(false));
+        assert!(!s.claim(3, 9));
     }
 
     #[test]
@@ -208,9 +227,9 @@ mod tests {
     #[test]
     fn dedup_flag_is_bit_two_and_collides_with_nothing() {
         // Spec section 6 order: dir=0, symlink=1, clone=2, perm_denied=3.
-        assert_eq!(FLAG_CLONE, 1 << 2);
+        assert_eq!(FLAG_HARDLINK_DUP, 1 << 2);
         assert_eq!(FLAG_PERM_DENIED, 1 << 3);
-        assert_eq!(FLAG_CLONE & FLAG_PERM_DENIED, 0);
+        assert_eq!(FLAG_HARDLINK_DUP & FLAG_PERM_DENIED, 0);
     }
 
     #[test]
@@ -243,8 +262,14 @@ mod tests {
             .filter(|n| n.obj_type == ObjType::Reg)
             .collect();
         assert_eq!(files.len(), 2);
-        let dups: Vec<_> = files.iter().filter(|n| n.flags & FLAG_CLONE != 0).collect();
-        let owners: Vec<_> = files.iter().filter(|n| n.flags & FLAG_CLONE == 0).collect();
+        let dups: Vec<_> = files
+            .iter()
+            .filter(|n| n.flags & FLAG_HARDLINK_DUP != 0)
+            .collect();
+        let owners: Vec<_> = files
+            .iter()
+            .filter(|n| n.flags & FLAG_HARDLINK_DUP == 0)
+            .collect();
         assert_eq!((dups.len(), owners.len()), (1, 1));
         assert_eq!((dups[0].logical, dups[0].allocated), (0, 0));
         assert_eq!(owners[0].logical, MIB);
@@ -290,7 +315,7 @@ mod tests {
         assert!(arena
             .iter()
             .filter(|(_, n)| n.obj_type == ObjType::Dir)
-            .all(|(_, n)| n.flags & FLAG_CLONE == 0));
+            .all(|(_, n)| n.flags & FLAG_HARDLINK_DUP == 0));
     }
 
     #[test]

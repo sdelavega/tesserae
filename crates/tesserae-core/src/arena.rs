@@ -90,12 +90,19 @@ pub struct NameRef {
     pub len: u16,
 }
 
-/// [`ScanNode::flags`] bit 2 (spec order: dir, symlink, clone, perm_denied,
-/// aggregated): this entry's bytes are counted elsewhere. The walker sets it
-/// on every hardlink after the first to the same inode, and zeroes the node's
-/// sizes. Which link is "first" is whichever the walk reaches first, so only
-/// the total is meaningful, not which node carries it. See [`crate::dedup`].
-pub const FLAG_CLONE: u16 = 1 << 2;
+/// [`ScanNode::flags`] bit 2: this entry is a hardlink whose bytes are counted
+/// on another link to the same inode. The walker sets it on every link after
+/// the first and zeroes the node's sizes. Which link is "first" is whichever
+/// the walk reaches first, so only the total is meaningful, not which node
+/// carries it. See [`crate::dedup`].
+///
+/// Spec section 6 lists this bit as "clone" (dir, symlink, clone, perm_denied,
+/// aggregated). The position is binding and is kept; the name is not. "Clone"
+/// was written when APFS clones were assumed detectable, and section 7 later
+/// established that no public API reveals block sharing, so nothing here can
+/// set a bit for a clone. What the bit does mark is a hardlink duplicate, and
+/// the name says that.
+pub const FLAG_HARDLINK_DUP: u16 = 1 << 2;
 
 /// [`ScanNode::flags`] bit: the directory could not be read for lack of
 /// permission, so it holds no children and its size is unknown rather than
