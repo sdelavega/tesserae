@@ -96,6 +96,21 @@
 //! rather than omitting it. The policy and the reasons the check reads the
 //! descriptor rather than the entry are in [`crate::boundary`].
 //!
+//! # Hardlinks
+//!
+//! A file with more than one link would otherwise be counted once per path.
+//! When an entry's `link_count` is above one the walker claims its
+//! `(dev, inode)` in an [`InodeSet`] as it pushes the node: the first claimant
+//! keeps its sizes, every later one is stored with zero sizes and
+//! [`FLAG_CLONE`] and counted in [`WalkStats::hardlink_dups`]. The gate keeps
+//! the set nearly empty, and directories (`link_count == 0`) never enter it.
+//! The values come from the entry at push time, so the node stores neither.
+//!
+//! The set is built per walk and passed by reference, so the parallel walker
+//! can hand one instance to every worker. Because "first" is whichever link is
+//! reached first, only the *total* is invariant, not which node holds the
+//! bytes; see [`crate::dedup`].
+//!
 //! # Per-arena budget
 //!
 //! The node budget belongs to the [`Arena`], so it is per thread. That is
@@ -109,9 +124,10 @@ use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
-use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_PERM_DENIED};
+use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_CLONE, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
 use crate::boundary::{should_descend, volume_of, SkipReason, VolumeId};
+use crate::dedup::InodeSet;
 use crate::parse::{entries, ObjType, RawEntry};
 
 /// The default scan root: the user-visible data volume on modern macOS.
@@ -197,6 +213,10 @@ pub struct WalkStats {
     /// `incomplete` was set to [`Incomplete::MalformedBatch`], though a
     /// terminal reason may have replaced it since.
     pub lost_entries: u64,
+    /// Hardlinks counted as zero because an earlier link to the same inode
+    /// already carried the bytes. Each has [`FLAG_CLONE`] set. Also included
+    /// in `files`: the entry exists, it just adds nothing to the total.
+    pub hardlink_dups: u64,
     pub stalled_at: Option<PathBuf>,
     /// `Some` if the result is partial and why.
     pub incomplete: Option<Incomplete>,
@@ -289,6 +309,18 @@ pub(crate) fn walk_serial_with<O: DirOpener>(
     opts: &WalkOptions,
     opener: &O,
 ) -> io::Result<(Arena, WalkStats)> {
+    // One walker, so a handful of shards is plenty; the type is sharded for
+    // the parallel walker's sake, which passes its own shared set instead.
+    walk_serial_with_inodes(opts, opener, &InodeSet::new(16))
+}
+
+/// [`walk_serial_with`] with the caller's [`InodeSet`], so a test can inspect
+/// it afterwards and the parallel walker can share one across threads.
+pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
+    opts: &WalkOptions,
+    opener: &O,
+    inodes: &InodeSet,
+) -> io::Result<(Arena, WalkStats)> {
     if opts.buffer_bytes < MIN_BUFFER_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -308,6 +340,7 @@ pub(crate) fn walk_serial_with<O: DirOpener>(
 
     let mut walker = Walker {
         opener,
+        inodes,
         buf,
         attrlist: scan_attrlist(),
         max_depth: opts.max_depth,
@@ -362,6 +395,9 @@ struct Frame {
 
 struct Walker<'a, O> {
     opener: &'a O,
+    /// Inodes already seen with more than one link. Shared by reference:
+    /// the walker never owns it.
+    inodes: &'a InodeSet,
     /// The `getattrlistbulk` output buffer, reused for every directory.
     buf: Vec<u8>,
     attrlist: libc::attrlist,
@@ -583,15 +619,21 @@ impl<O: DirOpener> Walker<'_, O> {
         entry: Option<&RawEntry<'_>>,
     ) -> Result<ScanId, Incomplete> {
         let name = self.arena.push_name(name)?;
+        let mut dup = false;
         let node = match entry {
-            Some(e) => ScanNode {
-                name,
-                parent,
-                obj_type: e.obj_type,
-                flags: 0,
-                logical: e.logical,
-                allocated: e.allocated,
-            },
+            Some(e) => {
+                // The gate: only a multiply-linked entry is worth a set
+                // lookup. Directories report 0 and never reach `claim`.
+                dup = e.link_count > 1 && !self.inodes.claim(e.dev_id, e.file_id);
+                ScanNode {
+                    name,
+                    parent,
+                    obj_type: e.obj_type,
+                    flags: if dup { FLAG_CLONE } else { 0 },
+                    logical: if dup { 0 } else { e.logical },
+                    allocated: if dup { 0 } else { e.allocated },
+                }
+            }
             None => ScanNode {
                 name,
                 parent,
@@ -607,6 +649,9 @@ impl<O: DirOpener> Walker<'_, O> {
             self.stats.dirs += 1;
         } else {
             self.stats.files += 1;
+        }
+        if dup {
+            self.stats.hardlink_dups += 1;
         }
         Ok(id)
     }
@@ -1043,8 +1088,10 @@ mod tests {
         let first_len = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
         buf[first_len..first_len + 4].copy_from_slice(&0u32.to_le_bytes());
 
+        let inodes = InodeSet::new(1);
         let mut w = Walker {
             opener: &OpenAt,
+            inodes: &inodes,
             buf: Vec::new(),
             attrlist: scan_attrlist(),
             max_depth: 512,

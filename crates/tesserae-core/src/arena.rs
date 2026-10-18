@@ -90,6 +90,13 @@ pub struct NameRef {
     pub len: u16,
 }
 
+/// [`ScanNode::flags`] bit 2 (spec order: dir, symlink, clone, perm_denied,
+/// aggregated): this entry's bytes are counted elsewhere. The walker sets it
+/// on every hardlink after the first to the same inode, and zeroes the node's
+/// sizes. Which link is "first" is whichever the walk reaches first, so only
+/// the total is meaningful, not which node carries it. See [`crate::dedup`].
+pub const FLAG_CLONE: u16 = 1 << 2;
+
 /// [`ScanNode::flags`] bit: the directory could not be read for lack of
 /// permission, so it holds no children and its size is unknown rather than
 /// zero. Set by the walker; the UI renders it as locked.
