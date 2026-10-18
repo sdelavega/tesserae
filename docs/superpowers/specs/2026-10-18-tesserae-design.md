@@ -28,10 +28,19 @@ recommendable to anyone.
 
 ### Success criteria
 
-1. A full data-volume scan of a typical Mac completes fast enough that no
-   persistent index is warranted. The target is single-digit seconds for
-   1–2M files on Apple Silicon NVMe. **This number is an estimate and must
-   be validated by the spike in §13 before implementation begins.**
+1. A full data-volume scan completes fast enough that no persistent index
+   is warranted. The criterion is a **rate, not a wall time**: a warm scan
+   at or under about 5 s per 1M entries on Apple Silicon NVMe, which puts a
+   1–2M-entry Mac under about 10 s. *Measured (§13 spike), over 6.39M
+   entries on an Apple M5:* warm, 3.3 s per 1M at best and 4.3 s per 1M at
+   the median (27.3 s total, n=14), so the criterion is met warm. The
+   original wording ("single-digit seconds for 1–2M files") assumed a
+   smaller volume than the 6.39M entries this machine holds, where a full
+   warm scan takes about 27 s. **The cold path has not been characterised:**
+   the one cold-ish observation was 14 s per 1M (89 s total, n=1,
+   confounded, no root `purge` available), which does **not** meet the
+   criterion. No cold criterion can be set until cold data exists (§13
+   item 6). Do not read this criterion as satisfied for cold scans.
 2. The treemap stays fluid — smooth zoom, no stutter — on a tree of a
    million nodes.
 3. The app can account for the whole volume, including the space it cannot
@@ -83,7 +92,8 @@ These are the author's inferences, recorded so they can be challenged:
 ### 1.x
 
 - Container breakdown via `diskutil apfs list -plist`.
-- Purgeable estimate.
+- Purgeable total, read directly from Foundation (§9). The UI surface is
+  deferred; the data is not hard to get.
 - "System Data" explainer — mapping macOS's residual category to real
   directories. This is curation work, not API work.
 - One-click cleanup presets (DerivedData, caches, Homebrew), deliberately
@@ -92,7 +102,9 @@ These are the author's inferences, recorded so they can be challenged:
 ### Explicitly never
 
 - Purgeable *breakdown*. There is no public API; delivering it would mean
-  private frameworks or guessing.
+  private frameworks or guessing. The purgeable **total** is a different
+  matter and is directly obtainable (§9); only the per-file or
+  per-category breakdown is out of reach.
 - Permanent delete or secure erase.
 - Snapshot deletion.
 - Background or scheduled deletion.
@@ -111,7 +123,7 @@ These are the author's inferences, recorded so they can be challenged:
 | Rust core + SwiftUI | Rust is the best available language for an arena-allocated flat tree with work-stealing parallelism. SwiftUI/AppKit is the only way to ship Mac-native polish. Neither alone does both. |
 | FDA, no root | **Root does not bypass TCC on macOS.** It buys only POSIX wins (other users' homes, restrictive modes). A privileged helper would still need its own FDA grant, so root costs an XPC attack surface and an authorization prompt while skipping nothing. Staying non-root is also a safety property for a tool that deletes. |
 | GPL-3.0 | Prevents closed-source resale. Its App Store incompatibility costs nothing here. GPLv3's System Libraries exception covers linking AppKit/Metal. |
-| Stateless scan | If the scan is genuinely fast, an index buys nothing and costs a database, cache invalidation, and FSEvents reconciliation gaps across reboots. "Fast enough not to need a cache" is also the better product story. |
+| Stateless scan (**provisional**) | If the scan is genuinely fast, an index buys nothing and costs a database, cache invalidation, and FSEvents reconciliation gaps across reboots. "Fast enough not to need a cache" is also the better product story. **Downgraded from settled to provisional by the §13 spike:** warm scans held up (234K entries/s median, 6.39M entries, n=14), but the one cold-ish run was 72K entries/s (n=1, unreproducible without root `purge`, machine under load 3 to 12). That is too thin to abandon the architecture and enough to unsettle the decision. **Condition: Phase 3 may not commit to shipping without an index until proper cold-cache data exists.** This does not disturb Phase 1: an index would persist the snapshot this engine produces rather than replace it, so no Phase 1 task changes either way. |
 | Trash-only deletion | Free undo; correct `.Trashes` and Put Back semantics; and trashing a directory is an O(1) rename regardless of how many files it holds. |
 | No sidecar process | Crash isolation obtained more cheaply via `catch_unwind`, depth caps, and refusing non-local mounts. Accepted cost: a genuine segfault in the parser takes the app down. |
 
@@ -391,11 +403,17 @@ them.
 
 Both stored; **allocated is the default display.**
 
-Known accounting trap: `UF_COMPRESSED` files (common in `/usr`, `/System`)
-report a data-fork allocated size near zero, with real bytes in the
-resource fork. For flagged files that means consulting
-`ATTR_FILE_RSRCALLOCSIZE`. Whether that is cheap enough to request
-unconditionally is a spike question (§13).
+Defensive handling, **not observed on macOS 27.2:** `UF_COMPRESSED` files
+(common in `/usr`, `/System`) were expected to report a data-fork allocated
+size near zero, with the real bytes in the resource fork, which for flagged
+files would mean consulting `ATTR_FILE_RSRCALLOCSIZE`. The §13 spike
+weakened this from a "known accounting trap": over 3.36M `UF_COMPRESSED`
+files the resource-fork allocation summed to only 0.05 GiB, and
+`ATTR_FILE_ALLOCSIZE` alone matched `st_blocks * 512` on a compressed test
+file. Keep `effective_allocated` and keep requesting
+`ATTR_FILE_RSRCALLOCSIZE` unconditionally: it measured at about +1% scan
+time (within noise), so it is effectively free, and older or other macOS
+releases may still behave as originally described.
 
 ### Progress and cancellation
 
@@ -563,9 +581,19 @@ Not `statfs` as the primary source: on APFS, volumes share a container's
 free space, so `f_blocks - f_bfree` is *container-wide* usage.
 `ATTR_VOL_SPACEUSED` exists specifically to report per-volume usage.
 
-The gap between `SPACEAVAIL` and `SPACEFREE` is the system's own estimate
-of reclaimable-on-demand space. **Verify the direction empirically** (§13);
-this semantic is easy to get backwards.
+**Purgeable space comes from Foundation, not from `getattrlist`.** An
+earlier draft of this section treated the gap between `SPACEAVAIL` and
+`SPACEFREE` as the system's estimate of reclaimable-on-demand space. The §13
+spike refuted that: the two are **equal** (137,216,397,312 B on the Data
+volume and on `/`), so there is no gap to read. The purgeable total is
+`volumeAvailableCapacityForImportantUsageKey` (via `URLResourceValues`)
+minus the plain available capacity; the spike measured 176,749,443,260 B
+against 137,179,013,120 B, about 39.6 GB purgeable. This **improves** the
+design: purgeable is obtained directly rather than inferred, and it feeds
+`purgeableEstimate` below as a measured total. Only the per-file breakdown
+stays unavailable (§2). Gotcha from the same spike: in the `getattrlist`
+reply `ATTR_VOL_SPACEUSED` packs **before** `ATTR_VOL_FILECOUNT` and
+`ATTR_VOL_DIRCOUNT`; parse by the returned-attributes mask.
 
 **Snapshots** via `fs_snapshot_list` on a volume fd, or `tmutil
 listlocalsnapshots` as fallback. Both give names and dates; **neither gives
@@ -772,11 +800,33 @@ flag.
 
 ### Permissions
 
-**Detecting FDA.** There is no API for it. Probe a known TCC-protected path
-whose contents aren't needed — `~/Library/Application
-Support/com.apple.TCC/TCC.db` is conventional since it always exists;
-`EPERM` means no FDA. Keep `~/Library/Mail` as a secondary probe. Verify
-the primary's behaviour in the spike (§13).
+**Detecting FDA.** There is no API for it. Probe a **list** of candidate
+TCC-protected paths whose contents aren't needed, not a single path. The
+earlier single-path design named `~/Library/Application
+Support/com.apple.TCC/TCC.db` as primary "since it always exists"; the §13
+spike showed that false: on macOS 27.2 the file and its directory are
+absent and `open` returns `ENOENT` (errno 2), not `EPERM`. Candidates:
+`~/Library/Mail`, `~/Library/Messages`, `~/Library/Safari`, and the
+user-level `TCC.db` when present. (Only the first three were confirmed
+listable under FDA on 27.2; the world-readable system
+`/Library/Application Support/com.apple.TCC/TCC.db` has no measured
+without-FDA behaviour, so do not use it as a positive signal.) Rules:
+
+- any `EPERM` on a candidate that exists means **no FDA**;
+- every existing candidate readable, or every candidate `ENOENT`, means
+  **provisionally FDA**, to be confirmed or refuted by the scan's own
+  unreadable-directory count.
+
+The spike's full-count baseline gives that check a scale: with FDA held,
+the data volume had 57 `EPERM` and 194 `EACCES` directory opens (about 250
+of ~0.83M directories). A count far above that refutes a provisional grant.
+
+**What is still unmeasured.** The without-FDA case could not be run,
+because the measuring process already held the grant, so no `EPERM`
+behaviour was observed and the with-FDA case is pending a human grant. The
+useful consequence: the spike's 6.39M entry count is a **full** count, not
+one truncated by TCC, so its throughput figures are honest. A no-FDA scan
+will see fewer entries and cannot be extrapolated from them.
 
 **FDA cannot be requested programmatically.** There is no prompt to
 trigger. The only move is opening the pane:
@@ -1009,8 +1059,9 @@ machine was live). 795 GiB allocated, 3.6 TiB logical (sparse files).
 **Rates below are entries per second over that 6.39M**, and "per 1M" figures
 are scaled from it. Unreadable: 57 directories `EPERM`, 194 `EACCES`, plus
 one `EACCES` from `getattrlistbulk` itself (about 250 directories, <0.03%).
-The measuring process appears to have had Full Disk Access already (see
-item 5), so a no-FDA scan would skip substantially more.
+The measuring process held Full Disk Access already (see item 5), so
+6.39M is a full count, not a TCC-truncated one, and the rates are honest; a
+no-FDA scan would skip substantially more.
 
 **Hygiene.** The machine was in normal use throughout (load average 3 to 12,
 a Time Machine helper seen running once), so single runs vary by roughly 30%.
@@ -1054,7 +1105,7 @@ cache needs root (`purge`) and was not attempted.
    reclaimable-on-demand estimate does **not** hold. Purgeable space does
    exist: `volumeAvailableCapacityForImportantUsage` read 176,749,443,260 B
    against 137,179,013,120 B available moments later, so ~39.6 GB (36.9
-   GiB) purgeable, visible only through Foundation. §9 must source
+   GiB) purgeable, visible only through Foundation. §9 now sources
    purgeable space from there, not from the `getattrlist` pair.
    `ATTR_VOL_SPACEUSED` was 826,595,618,816 B (769.83 GiB), matching
    `diskutil`'s Volume Used Space (826,586,357,760 B); `SPACEFREE` tracks
@@ -1069,15 +1120,21 @@ cache needs root (`purge`) and was not attempted.
    or listed successfully, so `EPERM` could not be provoked. Findings
    that do hold: **`~/Library/Application Support/com.apple.TCC/TCC.db`
    does not exist on this macOS 27.2 install** (`open` gives `ENOENT`,
-   errno 2; the `com.apple.TCC` directory is absent), so the §11 primary
-   probe returns `ENOENT`, not `EPERM`, here. The system-level
+   errno 2; the `com.apple.TCC` directory is absent), so the former §11
+   single-path probe returned `ENOENT`, not `EPERM`, here. The system-level
    `/Library/Application Support/com.apple.TCC/TCC.db` opened successfully
    (mode 0644, root-owned, so it proves nothing about FDA while the process
    already has it). No system prompt was observed, but no screen capture
-   was taken, so that is unconfirmed. Re-run from a process with no FDA
-   (for example a fresh launchd job) before settling the probe design;
-   until then treat `ENOENT` as indeterminate and fall back to
-   `~/Library/Mail` as a probe.
+   was taken, so that is unconfirmed. §11 now uses a candidate-list probe
+   in place of the single path. Re-run from a process with no FDA (for
+   example a fresh launchd job) to settle the without-FDA behaviour.
+6. **Cold-cache throughput: unresolved, an explicit open item.** The only
+   cold-ish observation is one run (n=1) at 89.0 s, ~72K entries/s, 14 s per
+   1M entries, confounded by machine load and one `ETIMEDOUT`. A true cold
+   cache needs root (`purge`), which the spike did not have. This is a
+   **prerequisite for Phase 3's index decision (§3), not for Phase 1.**
+   Needed: repeated cold runs after `purge` on a quiet machine, plus a
+   no-FDA run.
 
 Where thread count stops helping falls out of (1): **about 4 to 8
 threads.** Over 6.39M entries, rsrc on, 256 KB: 1 thread **90.6 s and
@@ -1092,7 +1149,8 @@ at twice the logical CPU count.
 Warm: **passes**, median 234K entries/s (best 304K) over 6.39M entries. The
 one cold-ish run, 72K entries/s, is below the line but is a single
 confounded observation. The stateless design (§3) stands on the warm
-evidence; the cold result is an open item, not a reopening of §5.
+evidence; the cold result is open item 6 and makes §3's stateless decision
+provisional, not a reopening of §5.
 
 ---
 
@@ -1261,7 +1319,7 @@ machines that need a disk visualizer.
 
 | Risk | Mitigation |
 |---|---|
-| Scan is slower than assumed, invalidating the stateless design | Spike first (§13). A 30-second result changes the architecture, and better now than after a UI exists. |
+| Cold-cache scan is too slow for the stateless design | The spike (§13) has run and retired the warm risk: 3.3 to 4.3 s per 1M entries over 6.39M. The residual risk is the **cold path**: one cold-ish run at 14 s per 1M (n=1, confounded, no root `purge`). Mitigation: stream progress so a long scan is usable; characterise cold throughput before Phase 3 (§13 item 6); §3 stays provisional until then. |
 | Unchecked offset in the bulk parser | Bounds-check against entry and buffer length; fuzz, ASAN, Miri. Accepted residual: a segfault takes the app down. |
 | Deletion bug destroys user data | Trash-only; two guard layers; identity re-verification; audit log; independent test containment; no cleanup presets in 1.0. |
 | Snapshot use-after-release | Immutability plus ARC ownership plus a debug generation counter. One stated code rule. |
