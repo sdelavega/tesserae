@@ -58,14 +58,27 @@
 //!
 //! | condition                          | effect                              |
 //! |------------------------------------|-------------------------------------|
-//! | `EPERM`, `EACCES`                  | path pushed to `unreadable`         |
+//! | `EPERM`, `EACCES`                  | path pushed to `unreadable`, node   |
+//! |                                    | flagged [`FLAG_PERM_DENIED`]        |
 //! | `ENOENT`, `ENOTDIR` (a race)       | `errors += 1`, the walk continues   |
 //! | `EINTR`                            | the call is retried                 |
-//! | `EMFILE`, `ENFILE`                 | `incomplete = FdExhausted`, that    |
+//! | `EMFILE`, `ENFILE`                 | `incomplete = FdExhausted`; that    |
 //! |                                    | subtree is skipped, the walk goes on|
-//! | any other errno, a malformed batch | `errors += 1`, the walk continues   |
-//! | node budget or memory exhausted    | the walk stops: [`Incomplete`]      |
+//! | `ENOMEM`                           | `incomplete = OutOfMemory`; likewise|
+//! | a malformed batch                  | `incomplete = MalformedBatch`; the  |
+//! |                                    | entries lost are added to           |
+//! |                                    | `lost_entries`; the walk goes on    |
+//! | any other errno (`EIO`, ...)       | `errors += 1`, the walk continues   |
+//! | node budget or arena memory out    | the walk stops: [`Incomplete`]      |
 //! | the root cannot be opened          | `Err` from [`walk_serial`]          |
+//! | the root opens, enumeration fails  | `Ok`; the root is in `unreadable`   |
+//! |                                    | (EPERM/EACCES) or counted in `errors`|
+//!
+//! The split is by what the failure does to the totals. A race (`ENOENT`) or
+//! one directory's I/O fault loses one directory at most and says nothing about
+//! the rest of the walk, so it is counted. A resource shortfall or a batch the
+//! parser rejected makes the result systematically short, so it is flagged in
+//! `incomplete` where a caller cannot miss it.
 //!
 //! A node-budget failure is terminal: `push_name` has already stored the
 //! entry's name, so a failed `push_node` leaves orphaned name bytes in the
@@ -84,7 +97,7 @@ use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
-use crate::arena::{Arena, ArenaError, ScanId, ScanNode};
+use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
 use crate::parse::{entries, ObjType, RawEntry};
 
@@ -107,7 +120,8 @@ const MAX_NAME_BYTES: usize = 1023;
 #[derive(Debug, Clone)]
 pub struct WalkOptions {
     pub root: PathBuf,
-    /// Directories deeper than this are recorded but not entered. The root is
+    /// The deepest level the walk records. A directory at exactly this depth
+    /// is recorded but not entered, so nothing deeper exists. The root is
     /// depth 0.
     pub max_depth: u16,
     /// Most nodes the arena will hold. Per arena, so per walker thread.
@@ -156,6 +170,11 @@ pub struct WalkStats {
     pub skipped_mounts: Vec<PathBuf>,
     /// Directories recorded at `max_depth` and therefore not entered.
     pub depth_capped: u64,
+    /// Entries the kernel returned that the parser rejected or never reached
+    /// (those after a bad entry in the same batch). Nonzero means
+    /// `incomplete` was set to [`Incomplete::MalformedBatch`], though a
+    /// terminal reason may have replaced it since.
+    pub lost_entries: u64,
     pub stalled_at: Option<PathBuf>,
     /// `Some` if the result is partial and why.
     pub incomplete: Option<Incomplete>,
@@ -174,6 +193,9 @@ pub enum Incomplete {
     /// (popping frames frees descriptors), but every subtree skipped this way
     /// is missing from the totals.
     FdExhausted,
+    /// The parser rejected a `getattrlistbulk` batch, so the entries after the
+    /// bad one were never read. [`WalkStats::lost_entries`] says how many.
+    MalformedBatch,
 }
 
 impl From<ArenaError> for Incomplete {
@@ -411,13 +433,23 @@ impl<O: DirOpener> Walker<'_, O> {
         buf: &[u8],
         count: u32,
     ) -> Result<(), Incomplete> {
+        let mut read = 0u32;
         for entry in entries(buf, count) {
             match entry {
-                Ok(e) => self.add_entry(frame, dir, &e)?,
+                Ok(e) => {
+                    self.add_entry(frame, dir, &e)?;
+                    read += 1;
+                }
                 Err(_) => {
-                    // Parsing stops at the first bad entry, so the rest of
-                    // this batch is lost. Say so, and keep draining.
-                    self.stats.errors += 1;
+                    // Parsing stops at the first bad entry, so it and
+                    // everything after it in this batch (up to a buffer's
+                    // worth, thousands of entries) is lost. That is a short
+                    // result, not a stray error: count the loss and flag the
+                    // walk, then keep draining the directory.
+                    self.stats.lost_entries += u64::from(count - read);
+                    self.stats
+                        .incomplete
+                        .get_or_insert(Incomplete::MalformedBatch);
                     break;
                 }
             }
@@ -510,6 +542,16 @@ impl<O: DirOpener> Walker<'_, O> {
                     .try_reserve(1)
                     .map_err(|_| Incomplete::OutOfMemory)?;
                 self.stats.unreadable.push(path);
+                // The path list is for the report; the flag is what lets the
+                // node itself render as locked instead of as an empty folder.
+                if let Some(node) = self.arena.get_mut(id) {
+                    node.flags |= FLAG_PERM_DENIED;
+                }
+            }
+            libc::ENOMEM => {
+                // The kernel, not this process's arena, ran out of memory: a
+                // shortfall, so flagged like descriptor exhaustion.
+                self.stats.incomplete.get_or_insert(Incomplete::OutOfMemory);
             }
             libc::EMFILE | libc::ENFILE => {
                 // Not counted in `errors`: that field holds benign races, and
@@ -625,9 +667,9 @@ mod tests {
         }
     }
 
-    /// Entries one `getattrlistbulk` call returns for `dir` into a buffer of
-    /// `buf_len` bytes: the number a walker that called it only once would see.
-    fn single_call_entry_count(dir: &Path, buf_len: usize) -> i32 {
+    /// One `getattrlistbulk` call into a buffer of `buf_len` bytes: the raw
+    /// bytes and the entry count the kernel reported.
+    fn single_call(dir: &Path, buf_len: usize) -> (Vec<u8>, i32) {
         use std::os::unix::ffi::OsStrExt;
         let c = CString::new(dir.as_os_str().as_bytes()).unwrap();
         // SAFETY: `c` is a live NUL-terminated string.
@@ -648,7 +690,13 @@ mod tests {
         // SAFETY: `fd` was opened above and is not used again.
         unsafe { libc::close(fd) };
         assert!(n > 0, "getattrlistbulk returned {n}");
-        n
+        (buf, n)
+    }
+
+    /// Entries a single call returns: the number a walker that called
+    /// `getattrlistbulk` only once would see.
+    fn single_call_entry_count(dir: &Path, buf_len: usize) -> i32 {
+        single_call(dir, buf_len).1
     }
 
     #[test]
@@ -712,6 +760,13 @@ mod tests {
         assert_eq!(stats.files, 1, "only ok/f.bin: hidden.bin is unknowable");
         assert_eq!(stats.dirs, 3, "root, secret and ok; secret is still a node");
         assert_eq!(arena.len(), 4);
+        // The node itself carries the fact, so it can render as locked rather
+        // than as an empty folder. Nothing else is flagged.
+        let secret = find(&arena, b"secret");
+        assert_eq!(secret.len(), 1);
+        assert_eq!(secret[0].flags & FLAG_PERM_DENIED, FLAG_PERM_DENIED);
+        let flagged = arena.iter().filter(|(_, n)| n.flags != 0).count();
+        assert_eq!(flagged, 1, "only the unreadable directory is flagged");
     }
 
     #[test]
@@ -832,6 +887,95 @@ mod tests {
         assert!(opener.failed.get(), "the EMFILE must actually have fired");
         assert_eq!(arena.len(), 5);
         assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
+    }
+
+    #[test]
+    fn kernel_out_of_memory_is_flagged_not_counted() {
+        let fx = Fixture::new().unwrap();
+        fx.file("victim/inner.bin", 4096).unwrap();
+        fx.file("other/f.bin", 4096).unwrap();
+
+        let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(libc::ENOMEM)).unwrap();
+
+        assert_eq!(stats.incomplete, Some(Incomplete::OutOfMemory));
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.files, 1, "the walk went on to other/f.bin");
+    }
+
+    /// Hands back a regular file's descriptor for the directory `victim`, so
+    /// the open succeeds and `getattrlistbulk` is what fails (`ENOTDIR`).
+    struct FileForDir(std::path::PathBuf);
+
+    impl DirOpener for FileForDir {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if name.to_bytes() == b"victim" {
+                return Ok(OwnedFd::from(File::open(&self.0).unwrap()));
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    #[test]
+    fn an_enumeration_failure_is_absorbed_and_the_walk_continues() {
+        // The `getattrlistbulk` error branch. `chmod 0o111` cannot reach it:
+        // `open(O_RDONLY)` on a directory needs read permission, so that fails
+        // at `openat` (EACCES) before enumeration. A descriptor that opens
+        // fine but is not a directory fails in the syscall itself.
+        let fx = Fixture::new().unwrap();
+        fx.file("victim/inner.bin", 4096).unwrap();
+        fx.file("other/f.bin", 4096).unwrap();
+        fx.file("plain.bin", 1).unwrap();
+        let opener = FileForDir(fx.path().join("plain.bin"));
+
+        let (_, stats) = walk_serial_with(&opts(fx.path()), &opener).unwrap();
+
+        assert_eq!(stats.errors, 1, "ENOTDIR from getattrlistbulk");
+        assert_eq!(stats.incomplete, None);
+        assert!(stats.unreadable.is_empty());
+        assert_eq!(stats.files, 2, "other/f.bin and plain.bin");
+    }
+
+    #[test]
+    fn a_malformed_batch_reports_the_entries_it_lost() {
+        // Straight at `consume_batch`: it is a private function over bytes, so
+        // no seam is needed. Take a real three-entry batch and zero the
+        // second entry's length field, which the parser rejects as BadLength.
+        let fx = Fixture::new().unwrap();
+        for n in ["a.bin", "b.bin", "c.bin"] {
+            fx.file(n, 1).unwrap();
+        }
+        let (mut buf, count) = single_call(fx.path(), 4096);
+        assert_eq!(count, 3);
+        let first_len = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
+        buf[first_len..first_len + 4].copy_from_slice(&0u32.to_le_bytes());
+
+        let mut w = Walker {
+            opener: &OpenAt,
+            buf: Vec::new(),
+            attrlist: scan_attrlist(),
+            max_depth: 512,
+            arena: Arena::new(0, u64::MAX),
+            stats: WalkStats::default(),
+        };
+        let root = w.push(b"root", ScanId::NONE, None).unwrap();
+        let mut frame = Frame {
+            fd: OwnedFd::from(File::open(fx.path()).unwrap()),
+            depth: 0,
+            children: Vec::new(),
+            next: 0,
+        };
+
+        w.consume_batch(&mut frame, root, &buf, 3).unwrap();
+
+        assert_eq!(w.stats.files, 1, "only the entry before the bad one");
+        assert_eq!(w.stats.lost_entries, 2, "the bad entry and the one after");
+        assert_eq!(w.stats.incomplete, Some(Incomplete::MalformedBatch));
+        assert_eq!(w.stats.errors, 0, "a short result, not a stray error");
+
+        // And a batch that is bad from its first entry loses all of it.
+        buf[..4].copy_from_slice(&0u32.to_le_bytes());
+        w.consume_batch(&mut frame, root, &buf, 3).unwrap();
+        assert_eq!(w.stats.lost_entries, 2 + 3);
     }
 
     #[test]

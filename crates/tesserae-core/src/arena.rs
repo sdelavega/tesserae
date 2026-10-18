@@ -90,6 +90,16 @@ pub struct NameRef {
     pub len: u16,
 }
 
+/// [`ScanNode::flags`] bit: the directory could not be read for lack of
+/// permission, so it holds no children and its size is unknown rather than
+/// zero. Set by the walker; the UI renders it as locked.
+///
+/// `flags` is this program's own semantic space, not `st_flags`. Bits follow
+/// the spec's order (dir, symlink, clone, perm_denied, aggregated), so this is
+/// bit 3; the node's type already says dir and symlink, which is why those two
+/// are not set here.
+pub const FLAG_PERM_DENIED: u16 = 1 << 3;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScanNode {
     pub name: NameRef,
@@ -250,6 +260,18 @@ impl Arena {
         })
     }
 
+    /// Mutable access to a node already pushed, for facts learned after the
+    /// push (a directory turning out to be unreadable). Same validation as
+    /// [`Arena::get`]. Chunks never reallocate, so this cannot move a node.
+    pub fn get_mut(&mut self, id: ScanId) -> Option<&mut ScanNode> {
+        if id.thread() != self.thread {
+            return None;
+        }
+        self.nodes
+            .get_mut(id.chunk() as usize)?
+            .get_mut(id.slot() as usize)
+    }
+
     /// The bytes behind `r`. A `NameRef` that does not describe stored bytes
     /// (for instance one from another arena) yields an empty slice.
     pub fn name_bytes(&self, r: NameRef) -> &[u8] {
@@ -293,6 +315,21 @@ mod tests {
             assert_eq!(arena.get(*id).unwrap().logical, i as u64);
         }
         assert_eq!(Arena::new(0, 1).iter().count(), 0);
+    }
+
+    #[test]
+    fn get_mut_edits_in_place_and_validates_like_get() {
+        let mut arena = Arena::new(2, u64::MAX);
+        let id = arena.push_node(node(7)).unwrap();
+        arena.get_mut(id).unwrap().flags |= FLAG_PERM_DENIED;
+        assert_eq!(arena.get(id).unwrap().flags, FLAG_PERM_DENIED);
+        assert_eq!(arena.get(id).unwrap().logical, 7);
+        assert!(arena.get_mut(ScanId::NONE).is_none());
+        assert!(
+            arena.get_mut(ScanId::pack(3, 0, 0)).is_none(),
+            "wrong thread"
+        );
+        assert!(arena.get_mut(ScanId::pack(2, 0, 1)).is_none(), "empty slot");
     }
 
     #[test]
