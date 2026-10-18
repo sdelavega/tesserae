@@ -12,3 +12,14 @@ allow = [
     "GPL-3.0-or-later",
 ]
 confidence-threshold = 0.93
+
+# libfuzzer-sys is "(MIT OR Apache-2.0) AND NCSA", so NCSA cannot be avoided.
+# It is allowed for this one crate only, not globally: it is the fuzz
+# harness's dependency (fuzz/ is outside the workspace and is never linked
+# into or distributed with the product), and a global entry would quietly
+# permit NCSA in a shipped dependency later. NCSA is permissive (MIT/X11 plus
+# 3-clause BSD) and GPL-compatible. `fuzz/` is audited by its own invocation:
+# `cargo deny --manifest-path fuzz/Cargo.toml check licenses`.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]

@@ -31,11 +31,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # Covers the workspace lockfile only. fuzz/ has its own lockfile and is
-      # not checked here: libfuzzer-sys is "(MIT OR Apache-2.0) AND NCSA" and
-      # NCSA is not on the deny.toml allowlist (undecided, see Task 5 report).
       - name: Licences
         run: cargo deny check licenses
+
+      # fuzz/ has its own lockfile and is not a workspace member, so the step
+      # above cannot see it: a pass there says nothing about the fuzz
+      # dependencies. Audit it explicitly against the same deny.toml.
+      - name: Licences (fuzz)
+        run: cargo deny --manifest-path fuzz/Cargo.toml check licenses
 
   # Short fuzz of the getattrlistbulk buffer parser. Separate from `rust` so
   # it can use nightly without disturbing the stable pin. The longer run and
