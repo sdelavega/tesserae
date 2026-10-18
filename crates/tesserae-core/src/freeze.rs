@@ -71,6 +71,18 @@ pub enum FreezeError {
     /// The allocator refused one of the freeze's working arrays or the output.
     /// Nothing was built; the arenas were consumed.
     OutOfMemory,
+    /// The names add up to more than `u32::MAX` bytes, which
+    /// [`TessNode::name_off`] cannot address. Reachable inside the node budget:
+    /// the limit binds once the average name exceeds about 172 bytes
+    /// (4 GiB / 25M), and 16.8M names of the 255-byte maximum reach it.
+    NamesTooLarge,
+}
+
+/// The total name bytes as a `usize`, if every offset into it fits 32 bits.
+fn checked_name_bytes(total: u64) -> Result<usize, FreezeError> {
+    u32::try_from(total)
+        .map(|t| t as usize)
+        .map_err(|_| FreezeError::NamesTooLarge)
 }
 
 /// Allocate room for exactly `n` elements, reporting failure. The only way
@@ -97,16 +109,17 @@ fn filled<T: Clone>(n: usize, value: T) -> Result<Vec<T>, FreezeError> {
 /// `root == NODE_NONE`.
 ///
 /// This is [`try_freeze`] for callers with nowhere to report a failure. It
-/// panics where `try_freeze` returns [`FreezeError::OutOfMemory`], so a host
-/// that must survive a pathological volume calls `try_freeze` instead.
+/// panics where `try_freeze` returns a [`FreezeError`], so a host that must
+/// survive a pathological volume calls `try_freeze` instead.
 ///
 /// # Panics
 ///
-/// On [`FreezeError::OutOfMemory`], and as `try_freeze` documents.
+/// On any [`FreezeError`], and as `try_freeze` documents.
 pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     match try_freeze(arenas, stats) {
         Ok(snapshot) => snapshot,
         Err(FreezeError::OutOfMemory) => panic!("freeze: out of memory building the snapshot"),
+        Err(FreezeError::NamesTooLarge) => panic!("freeze: more than 4 GiB of names"),
     }
 }
 
@@ -117,11 +130,20 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 /// 2 GB at the 25M-node budget) goes through `try_reserve_exact`.
 /// `tests/freeze_oom.rs` fails each allocation in turn to hold that to account.
 ///
+/// # Errors
+///
+/// * [`FreezeError::OutOfMemory`]: an allocation was refused.
+/// * [`FreezeError::NamesTooLarge`]: the names total more than `u32::MAX`
+///   bytes, because [`TessNode::name_off`] is 32 bits. This is a threshold,
+///   not a remote edge: with a 25M-node budget it binds once the average name
+///   exceeds about 172 bytes, and 16.8M names at the 255-byte maximum reach
+///   it. (A typical ~30-byte average would need ~143M entries, so ordinary
+///   volumes trip the node budget first.)
+///
 /// # Panics
 ///
-/// Malformed input and two representation limits panic rather than return an
-/// error, because they are not conditions of the machine. Each panic is
-/// bounded by a limit, not impossible:
+/// Malformed input and one representation limit panic rather than return an
+/// error, because they are not conditions of the machine:
 ///
 /// * **Programmer errors a walk does not produce:** no root or more than one,
 ///   a parent that no supplied arena holds, a parent cycle, or two non-empty
@@ -129,11 +151,6 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 ///   and a node can only name an id already issued, so these need a walker
 ///   bug or a caller who dropped an arena. A tree that rendered anyway would
 ///   be wrong, which is worse than no tree.
-/// * **Names over 4 GiB**, because [`TessNode::name_off`] is 32 bits. Reaching
-///   that takes about 143M entries at ~30 bytes of name, against a node
-///   budget of 25M that trips about 5.7 times sooner; but the budget counts
-///   nodes and not bytes, and at the 255-byte maximum it takes only 16.8M
-///   entries, so a pathological volume of long names gets here first.
 /// * **`u32::MAX` nodes or more**, because indices are 32 bits. That is about
 ///   170 times the node budget, and the budget is per arena until the parallel
 ///   walker makes it global (see the walker's notes), so it is bounded by
@@ -165,10 +182,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             name_bytes += u64::from(node.name.len);
         }
     }
-    let name_bytes = usize::try_from(name_bytes)
-        .ok()
-        .filter(|&b| u32::try_from(b).is_ok())
-        .expect("more than 4 GiB of names");
+    let name_bytes = checked_name_bytes(name_bytes)?;
     let name_of = |v: usize| arenas[usize::from(arena_of[v])].name_bytes(src[v].name);
 
     let mut parent: Vec<u32> = reserved(n)?;
@@ -527,6 +541,20 @@ mod tests {
         );
         let s = try_freeze(vec![empty_arena_with_root()], WalkStats::default()).unwrap();
         assert_eq!((s.nodes.len(), s.root), (1, 0));
+    }
+
+    #[test]
+    fn the_names_limit_is_an_error_at_exactly_four_gib() {
+        // 4 GiB of real names cannot be built in a test, so the check is
+        // exercised directly on the total it is applied to.
+        let max = u64::from(u32::MAX);
+        assert_eq!(checked_name_bytes(0), Ok(0));
+        assert_eq!(checked_name_bytes(max), Ok(u32::MAX as usize));
+        assert_eq!(checked_name_bytes(max + 1), Err(FreezeError::NamesTooLarge));
+        assert_eq!(
+            checked_name_bytes(u64::MAX),
+            Err(FreezeError::NamesTooLarge)
+        );
     }
 
     #[test]
