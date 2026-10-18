@@ -616,26 +616,139 @@ mod tests {
         assert!(stats.dirs > 50 && stats.files == 3000);
     }
 
-    /// The stronger parity comparison, available because this tree has no
+    /// Wide *and* deep, with no hardlinks: eight top-level directories, each
+    /// fanning out to 3 and then 3 again, each of those carrying a `c/d`
+    /// chain. Files at three levels, 249 directories, 1320 files, six levels
+    /// deep. Every directory that has siblings is a candidate for stealing,
+    /// and most stolen directories have children of their own, so a child
+    /// attached under the wrong parent has somewhere visible to go.
+    fn deep_fixture() -> Fixture {
+        let fx = Fixture::new().unwrap();
+        for i in 0..8 {
+            for j in 0..3 {
+                for f in 0..10 {
+                    fx.file(&format!("t{i}/a{j}/f{f}.bin"), 1 + f * 512)
+                        .unwrap();
+                }
+                for k in 0..3 {
+                    for f in 0..10 {
+                        fx.file(&format!("t{i}/a{j}/b{k}/g{f}.bin"), 1 + f * 256)
+                            .unwrap();
+                    }
+                    for f in 0..5 {
+                        fx.file(&format!("t{i}/a{j}/b{k}/c/d/h{f}.bin"), 1 + f * 128)
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        fx
+    }
+
+    /// Workers that stored anything. More than one means the tree really was
+    /// shared, so a comparison against the serial walk is not testing a
+    /// serial walk twice.
+    fn busy(arenas: &[Arena]) -> usize {
+        arenas.iter().filter(|a| !a.is_empty()).count()
+    }
+
+    /// The structural parity check, available because this tree has no
     /// hardlinks: with nothing order-dependent left, the frozen arrays must
-    /// match the serial walk's byte for byte. Freeze sorts each sibling range
-    /// by size and then by name, and siblings have distinct names, so the
-    /// order is fixed by the tree's content and not by which arena a node
-    /// landed in.
+    /// match the serial walk's byte for byte.
+    ///
+    /// This is what the totals test cannot see. A stolen directory whose
+    /// children were attached under the wrong parent `ScanId` still has every
+    /// node counted and every byte summed, so counts and totals agree while
+    /// the tree is wrong. Freeze lays nodes out by parent, so a misattached
+    /// child moves in `nodes` and changes `parent`, `child_start`,
+    /// `child_count` and the rolled-up sizes.
+    ///
+    /// Byte-identity holds whatever the schedule because freeze orders each
+    /// sibling range by size, then by name, and siblings have distinct names:
+    /// the arena-dependent tiebreak never fires (see
+    /// `freeze::tests::frozen_bytes_do_not_depend_on_arena_order`). Several
+    /// walks, sixteen workers each, so several schedules are compared.
     #[test]
     fn parallel_frozen_bytes_match_serial_on_a_hardlink_free_tree() {
-        let fx = wide_fixture();
+        let fx = deep_fixture();
+        let mut o = opts(fx.path());
+        o.workers = 16;
 
-        let (serial, s) = walk_serial(&opts(fx.path())).unwrap();
-        let (parallel, p) = walk(&opts(fx.path())).unwrap();
+        let (serial, s) = walk_serial(&o).unwrap();
         assert_eq!(s.hardlink_dups, 0, "this comparison needs no hardlinks");
-
+        assert_eq!((s.dirs, s.files), (249, 1320));
         let serial = snapshot(vec![serial], s);
-        let parallel = snapshot(parallel, p);
 
-        assert_eq!(serial.nodes, parallel.nodes);
-        assert_eq!(serial.names, parallel.names);
-        assert_eq!(serial.root, parallel.root);
+        for round in 0..5 {
+            let (parallel, p) = walk(&o).unwrap();
+            assert!(
+                busy(&parallel) > 1,
+                "round {round}: one worker did everything, so nothing was stolen"
+            );
+            assert_eq!((p.errors, p.incomplete), (0, None), "round {round}");
+            let parallel = snapshot(parallel, p);
+
+            assert_eq!(serial.root, parallel.root, "round {round}");
+            assert_eq!(serial.names, parallel.names, "round {round}");
+            assert!(
+                serial.nodes == parallel.nodes,
+                "round {round}: frozen nodes differ (first at index {:?})",
+                serial
+                    .nodes
+                    .iter()
+                    .zip(&parallel.nodes)
+                    .position(|(a, b)| a != b)
+            );
+        }
+    }
+
+    /// The paths a user reads ("12 locations unreadable") are rebuilt
+    /// separately from the node structure: by climbing the parent chain as far
+    /// as the task's root and joining onto that task's absolute path. A climb
+    /// that ran past the task root — which it would if it stopped only where
+    /// `Arena::get` fails, since a worker that pops back a directory it
+    /// published itself holds the task root in its own arena — would repeat
+    /// part of the path.
+    ///
+    /// So: locked directories three and four levels down, sixteen workers,
+    /// several walks, and the recorded set must equal the expected set
+    /// exactly every time, whichever worker met which directory.
+    #[test]
+    fn unreadable_paths_are_exact_deep_in_stolen_subtrees() {
+        let fx = deep_fixture();
+        let mut locked: Vec<String> = (0..8).map(|i| format!("t{i}/a0/b2/c")).collect();
+        locked.extend([0, 2, 4, 6].iter().map(|i| format!("t{i}/a1/b1")));
+        for rel in &locked {
+            fx.chmod(rel, 0o000).unwrap();
+        }
+        let mut want: Vec<_> = locked.iter().map(|rel| fx.path().join(rel)).collect();
+        want.sort();
+        let mut o = opts(fx.path());
+        o.workers = 16;
+
+        let (_, s) = walk_serial(&o).unwrap();
+        let mut serial = s.unreadable.clone();
+        serial.sort();
+        assert_eq!(serial, want, "the serial oracle itself");
+
+        for round in 0..5 {
+            let (arenas, p) = walk(&o).unwrap();
+            assert!(
+                busy(&arenas) > 1,
+                "round {round}: one worker did everything, so nothing was stolen"
+            );
+            let mut got = p.unreadable.clone();
+            got.sort();
+            assert_eq!(got, want, "round {round}");
+            let flagged = arenas
+                .iter()
+                .flat_map(Arena::iter)
+                .filter(|(_, n)| n.flags & crate::arena::FLAG_PERM_DENIED != 0)
+                .count();
+            assert_eq!(flagged, want.len(), "round {round}");
+            assert_eq!((p.errors, p.incomplete), (0, None), "round {round}");
+            assert_eq!((p.dirs, p.files), (s.dirs, s.files), "round {round}");
+        }
     }
 
     #[test]

@@ -892,6 +892,21 @@ impl<'a, O: DirOpener> Walker<'a, O> {
 
     /// `dir`'s child `id` as an absolute path, or `None` if it would not fit
     /// `PATH_MAX`.
+    ///
+    /// # The one infallible allocation on the hot path
+    ///
+    /// Everything else the walk allocates per directory goes through
+    /// `try_reserve` and turns a refusal into [`Incomplete::OutOfMemory`].
+    /// (crossbeam's deque buffers also allocate infallibly, but once per
+    /// worker before the walk starts: a buffer starts at 64 slots and is
+    /// regrown only when a push finds it full, and a worker stops publishing
+    /// at 32.) This does not: `to_path_buf` and `Arc::from` allocate through
+    /// the aborting path, and stable Rust has no fallible way to build an
+    /// `Arc`. Under near-total memory exhaustion
+    /// this can abort the process. Its small size is no protection — a
+    /// 100-byte request can be refused after a megabyte chunk succeeded — so
+    /// this is a residual risk, accepted because there is no fallible
+    /// alternative, not one argued away.
     fn child_path(&self, dir: &Path, id: ScanId) -> Option<Arc<Path>> {
         let node = self.arena.get(id)?;
         let name = self.arena.name_bytes(node.name);
