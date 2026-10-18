@@ -94,6 +94,13 @@
 //! Field offsets are compile-time constants in either case, so neither gate
 //! can shift a later read: a surprise yields a default, never another field's
 //! bytes.
+//!
+//! The name reference is the one slot that cannot be handled that way, because
+//! its own value is what locates the fixed region's end and therefore gates
+//! everything else. It has no safe default, so its returned bit is checked
+//! *before* it is read and a clear bit ends the entry with
+//! [`ParseError::NameOutOfBounds`] rather than yielding a shifted layout. The
+//! doctrine holds for all eight slots with no silent exception.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(
@@ -148,8 +155,10 @@ pub enum ParseError {
     /// An entry length that cannot describe an entry: zero, below the fixed
     /// header, or reaching past the end of the buffer.
     BadLength,
-    /// The name's `attrreference_t` does not point at a byte range inside its
-    /// own entry.
+    /// The name's `attrreference_t` was not supplied, or does not point at a
+    /// byte range inside its own entry. Either way the entry's layout cannot
+    /// be established, so no field is reported rather than some being read
+    /// from a shifted offset.
     NameOutOfBounds,
 }
 
@@ -254,6 +263,7 @@ struct CommonBit(u32);
 #[derive(Debug, Clone, Copy)]
 struct FileBit(u32);
 
+const RET_NAME: CommonBit = CommonBit(libc::ATTR_CMN_NAME);
 const RET_DEVID: CommonBit = CommonBit(libc::ATTR_CMN_DEVID);
 const RET_OBJTYPE: CommonBit = CommonBit(libc::ATTR_CMN_OBJTYPE);
 const RET_FLAGS: CommonBit = CommonBit(libc::ATTR_CMN_FLAGS);
@@ -305,10 +315,27 @@ fn parse_entry(rest: &[u8]) -> Result<(RawEntry<'_>, usize), ParseError> {
         file: read_u32(entry, OFF_RETURNED_FILE, len).ok_or(ParseError::Truncated)?,
     };
 
-    // (3) The name reference. `attr_dataoffset` is relative to the address of
-    // the `attrreference_t` itself, which is `OFF_NAME_REF` bytes into the
-    // entry -- measured, not inferred: in the minimal mask the offset is
-    // exactly 8, placing the name directly after the reference.
+    // (3) The name reference, which is the one slot that must be gated before
+    // it is read rather than after. Every other offset in the entry is derived
+    // from its `attr_dataoffset`, so if the slot were absent the whole layout
+    // would shift by 8 and this parser would read `OBJTYPE | FLAGS` as the
+    // reference and the low half of `FILEID` as `DEVID` -- the silent misread,
+    // arriving through the one slot otherwise trusted unconditionally.
+    //
+    // A conforming kernel cannot get here: `ATTR_CMN_NAME` is
+    // `ATTR_BULK_REQUIRED`, `getattrlistbulk` rejects a mask without it, and
+    // the bit is set on every entry of every captured fixture. The check costs
+    // one comparison, no fuzzer can reach the bug it prevents (clearing a bit
+    // in a fixed-layout buffer yields neither a crash nor a value wrong
+    // relative to that buffer), and "unreachable from a conforming kernel" is
+    // the class of assumption that produced this module's hardest surprise.
+    if !returned.has_common(RET_NAME) {
+        return Err(ParseError::NameOutOfBounds);
+    }
+    // `attr_dataoffset` is relative to the address of the `attrreference_t`
+    // itself, which is `OFF_NAME_REF` bytes into the entry -- measured, not
+    // inferred: in the minimal mask the offset is exactly 8, placing the name
+    // directly after the reference.
     let data_offset = read_i32(entry, OFF_NAME_REF, len).ok_or(ParseError::Truncated)?;
     let name_len = read_u32(entry, OFF_NAME_REF + 4, len).ok_or(ParseError::Truncated)?;
     // Widened to i64 so a negative or huge offset cannot wrap. The widest
@@ -753,50 +780,100 @@ mod tests {
 
     // -- further coverage of the measured layout --------------------------
 
+    /// One entry of a golden buffer, split by hand so this test's decoding is
+    /// independent of `parse_entry`.
+    struct RawSlice<'a> {
+        bytes: &'a [u8],
+        len: usize,
+        returned_common: u32,
+        returned_file: u32,
+        /// Where the name begins, relative to the entry: the kernel's own
+        /// account of where the fixed-field region ends.
+        name_start: usize,
+        name: Vec<u8>,
+    }
+
+    /// Walk a golden buffer into its entries by length alone, decoding each by
+    /// hand. Deliberately duplicates the layout knowledge rather than calling
+    /// the parser: this is what keeps the layout test non-circular.
+    fn raw_entries(buf: &[u8]) -> Vec<RawSlice<'_>> {
+        let le32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        while pos < buf.len() {
+            let e = &buf[pos..];
+            let len = le32(e, OFF_LENGTH) as usize;
+            let name_start = (OFF_NAME_REF as i64
+                + i64::from(i32::from_le_bytes(
+                    e[OFF_NAME_REF..OFF_NAME_REF + 4].try_into().unwrap(),
+                ))) as usize;
+            let name_len = le32(e, OFF_NAME_REF + 4) as usize;
+            let field = &e[name_start..name_start + name_len];
+            out.push(RawSlice {
+                bytes: &e[..len],
+                len,
+                returned_common: le32(e, OFF_RETURNED_COMMON),
+                returned_file: le32(e, OFF_RETURNED_FILE),
+                name_start,
+                name: field[..field.len() - 1].to_vec(),
+            });
+            pos += len;
+        }
+        out
+    }
+
     /// Re-derives the layout from a captured buffer on every run, so the
     /// constants above cannot drift away from the bytes they were measured
     /// from without a test failing.
+    ///
+    /// Entries are found by name, not by position: `readdir` order is not
+    /// guaranteed, and a recapture in a different order must not make the
+    /// project's most important non-circular test fail spuriously.
     #[test]
     fn layout_matches_the_captured_golden_buffer() {
         let (buf, count) = golden("simple");
         assert_eq!(count, 2);
+        let raw = raw_entries(&buf);
+        assert_eq!(raw.len(), count as usize, "length walk lost an entry");
+        let find = |n: &[u8]| {
+            raw.iter()
+                .find(|r| r.name == n)
+                .unwrap_or_else(|| panic!("no entry named {}", String::from_utf8_lossy(n)))
+        };
 
-        // Entry 0: the regular file. Full fixed region, name at 72.
-        let len0 = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
-        assert_eq!(len0, 80, "a.bin entry length");
+        // The regular file: full fixed region, name directly after it.
+        let file = find(b"a.bin");
+        assert_eq!(file.len, 80, "a.bin entry length");
+        assert_eq!(file.returned_common, COMMON_MASK);
+        assert_eq!(file.returned_file, FILE_MASK);
         assert_eq!(
-            u32::from_le_bytes(buf[OFF_RETURNED_COMMON..][..4].try_into().unwrap()),
-            COMMON_MASK
-        );
-        assert_eq!(
-            u32::from_le_bytes(buf[OFF_RETURNED_FILE..][..4].try_into().unwrap()),
-            FILE_MASK
-        );
-        let off0 = i32::from_le_bytes(buf[OFF_NAME_REF..][..4].try_into().unwrap());
-        assert_eq!(
-            OFF_NAME_REF as i64 + i64::from(off0),
-            (OFF_DATALENGTH + 8) as i64,
+            file.name_start,
+            OFF_DATALENGTH + 8,
             "the name reference's own address is the base of its offset"
         );
-        assert_eq!(&buf[72..77], b"a.bin");
 
-        // Entry 1: the directory. No `fileattr` group, so the name starts
-        // where ATTR_FILE_LINKCOUNT would have been.
-        let e1 = &buf[len0..];
-        let len1 = u32::from_le_bytes(e1[0..4].try_into().unwrap()) as usize;
-        assert_eq!(len1, 56, "directory entry length");
+        // The directory: no `fileattr` group, so the name starts where
+        // ATTR_FILE_LINKCOUNT would have been.
+        let dir = find(b"d");
+        assert_eq!(dir.len, 56, "directory entry length");
         assert_eq!(
-            u32::from_le_bytes(e1[OFF_RETURNED_FILE..][..4].try_into().unwrap()),
-            0,
+            dir.returned_file, 0,
             "a directory reports no fileattr at all"
         );
-        let off1 = i32::from_le_bytes(e1[OFF_NAME_REF..][..4].try_into().unwrap());
         assert_eq!(
-            OFF_NAME_REF as i64 + i64::from(off1),
-            OFF_LINKCOUNT as i64,
+            dir.name_start, OFF_LINKCOUNT,
             "the directory's fileattr slots are absent, not zero-filled"
         );
-        assert_eq!(&e1[OFF_LINKCOUNT..OFF_LINKCOUNT + 1], b"d");
+        // The decisive arithmetic: the fixed fields need 72 bytes and the
+        // entry is 56, so the three slots cannot be present at any offset.
+        assert!(dir.len < OFF_DATALENGTH + 8);
+        assert_eq!(dir.bytes.len(), 56);
+
+        // ATTR_CMN_NAME is set on every entry, which is why the unconditional
+        // read it guards is unreachable from a conforming kernel.
+        for r in &raw {
+            assert_ne!(r.returned_common & libc::ATTR_CMN_NAME, 0);
+        }
     }
 
     /// The gate that does the real work for directories: even if the returned
@@ -925,6 +1002,78 @@ mod tests {
         }
     }
 
+    /// The accept side of the same boundary, and the only entry shape that can
+    /// be exactly `MIN_ENTRY_LEN` long: the name must then start at 32 with
+    /// `attr_length == 0`, so the field is empty and no attribute slot fits.
+    /// Every field is its default and nothing is read out of bounds.
+    #[test]
+    fn accepts_the_shortest_possible_entry_with_an_empty_name() {
+        let mut buf = vec![0u8; MIN_ENTRY_LEN];
+        buf[OFF_LENGTH..][..4].copy_from_slice(&(MIN_ENTRY_LEN as u32).to_le_bytes());
+        buf[OFF_RETURNED_COMMON..][..4].copy_from_slice(&COMMON_MASK.to_le_bytes());
+        buf[OFF_RETURNED_FILE..][..4].copy_from_slice(&FILE_MASK.to_le_bytes());
+        // attr_dataoffset 8 puts the name immediately after the reference;
+        // attr_length 0 leaves it empty.
+        buf[OFF_NAME_REF..][..4].copy_from_slice(&8i32.to_le_bytes());
+        buf[OFF_NAME_REF + 4..][..4].copy_from_slice(&0u32.to_le_bytes());
+
+        let mut it = entries(&buf, 1);
+        let entry = it.next().expect("one entry").expect("must parse");
+        assert_eq!(entry.name, b"");
+        assert_eq!(entry.obj_type, ObjType::Other);
+        assert_eq!(
+            (
+                entry.file_id,
+                entry.dev_id,
+                entry.flags,
+                entry.logical,
+                entry.allocated,
+                entry.link_count
+            ),
+            (0, 0, 0, 0, 0, 0),
+            "no attribute slot fits before the name, so all are defaults"
+        );
+        assert!(it.next().is_none());
+    }
+
+    /// The name reference is the one slot whose absence would shift every
+    /// other offset, so it is gated before it is read. Unreachable from a
+    /// conforming kernel -- `ATTR_CMN_NAME` is `ATTR_BULK_REQUIRED` -- and no
+    /// fuzzer can reach it, because clearing the bit in a fixed-layout buffer
+    /// produces neither a crash nor a value wrong relative to that buffer.
+    #[test]
+    fn rejects_an_unsupplied_name_reference() {
+        let buf = Synth {
+            returned_common: COMMON_MASK & !libc::ATTR_CMN_NAME,
+            ..Default::default()
+        }
+        .build();
+        assert_eq!(
+            entries(&buf, 1).next(),
+            Some(Err(ParseError::NameOutOfBounds)),
+            "an absent name reference must end the entry, not shift the layout"
+        );
+        // Clearing any other common bit is a value gate, not a layout gate, so
+        // those entries still parse -- the name slot is genuinely special.
+        for bit in [
+            libc::ATTR_CMN_DEVID,
+            libc::ATTR_CMN_OBJTYPE,
+            libc::ATTR_CMN_FLAGS,
+            libc::ATTR_CMN_FILEID,
+        ] {
+            let buf = Synth {
+                returned_common: COMMON_MASK & !bit,
+                ..Default::default()
+            }
+            .build();
+            let entry = entries(&buf, 1)
+                .next()
+                .expect("one entry")
+                .unwrap_or_else(|e| panic!("bit {bit:#x} must still parse, got {e:?}"));
+            assert_eq!(entry.name, b"synthetic.bin");
+        }
+    }
+
     #[test]
     fn an_entry_never_reads_into_its_successor() {
         // Two entries; the first's name reference points past its own length
@@ -960,7 +1109,15 @@ mod tests {
     /// iteration always terminates.
     #[test]
     fn never_panics_on_mutated_golden_bytes() {
-        let (buf, count) = golden("simple");
+        // Both corpora: `mixed` is the one with eight entries, so it exercises
+        // multi-entry walking and a `fileattr`-less entry that is not first.
+        for corpus in ["simple", "mixed"] {
+            mutate_and_drain(corpus);
+        }
+    }
+
+    fn mutate_and_drain(corpus: &str) {
+        let (buf, count) = golden(corpus);
 
         let drain = |b: &[u8], n: u32| {
             let mut seen = 0usize;

@@ -364,13 +364,30 @@ Two consequences bind every consumer of the buffer:
   bytes at the file-attribute offsets yields a plausible wrong link count
   and allocated size — a silent misread, not a crash.
 
-**A directory's own size is legitimately zero**, so nothing is undercounted
-by the absence. APFS directories allocate no blocks: entries live in B-tree
-records rather than a per-directory data fork. Measured `ATTR_DIR_ALLOCSIZE`
-of 0 for an empty directory, a 400-entry directory and `/usr/share` alike,
-with the bit set in `ATTR_CMN_RETURNED_ATTRS` so the zero is a real value
-and not an unsupplied default. **Directory sizes come entirely from the
-bottom-up rollup** in the freeze step (§6).
+**A directory's own allocated size is legitimately zero**, so no *allocated*
+bytes are undercounted by the absence.
+
+*Measured:* `ATTR_DIR_ALLOCSIZE` is 0 for an empty directory, a 400-entry
+directory and `/usr/share` alike, with the bit set in
+`ATTR_CMN_RETURNED_ATTRS` — so the zero is a real returned value, not an
+unsupplied attribute defaulted to zero.
+
+*Inferred, not measured:* the likely mechanism is that APFS keeps directory
+entries in B-tree records rather than a per-directory data fork. That
+explanation is consistent with the zero but was not itself observed, and
+nothing here depends on it.
+
+**The claim is about allocated bytes only.** A directory's
+`ATTR_DIR_DATALENGTH` is *not* zero — measured 64, 448, 1408 and 12864 for
+the directories above, scaling with entry count — while this scan reports 0
+for a directory's logical size, because the attribute is neither requested
+nor present in the entry. That is correct for a tool whose unit is allocated
+space, and §9's reconciliation is against allocated bytes too. Anything that
+later wants a directory's own logical size must request
+`ATTR_DIR_DATALENGTH` explicitly and accept the layout change.
+
+**Directory sizes come entirely from the bottom-up rollup** in the freeze
+step (§6).
 
 `ATTR_DIR_ALLOCSIZE` and `ATTR_FILE_TOTALSIZE` are therefore not requested —
 not because they are recursive (`getattrlist(2)` has no recursive-size

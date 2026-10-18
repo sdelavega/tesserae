@@ -23,9 +23,12 @@
 //! Two files are written per corpus:
 //!
 //! * `golden_<name>.bin` — the raw kernel bytes, preceded by a 16-byte header
-//!   (`TSRGOLD1`, entry count u32-LE, buffer length u32-LE). Nothing in this
-//!   file is parsed on the way in: the bytes are copied verbatim out of the
-//!   syscall's output buffer, so a parser bug cannot be baked into it.
+//!   (`TSRGOLD1`, entry count u32-LE, buffer length u32-LE). **The parser is
+//!   not involved**: the attribute bytes are copied verbatim out of the
+//!   syscall's output buffer, so a parser bug cannot be baked into the
+//!   fixture. This file does read each entry's leading `u32` length, and only
+//!   that, to find where the kernel stopped writing — being precise about what
+//!   is independent is the whole point of this module.
 //!
 //! * `golden_<name>.expect` — the same tree's attributes read back through
 //!   `lstat(2)`, an independent source of truth. The parser test cross-checks
@@ -56,6 +59,12 @@ struct Capture {
 
 /// Call `getattrlistbulk` once on `dir` with the scan's real attrlist and
 /// options, returning the untouched output buffer.
+///
+/// A corpus must fit in a single batch. A second call returning non-zero is an
+/// assertion failure rather than discarded data: `count` and the trimmed byte
+/// range would stay mutually consistent, so a silently half-captured corpus
+/// would let every replay test pass over a fixture missing most of its tree.
+/// Silent truncation is the failure class this module exists to prevent.
 fn capture(dir: &Path) -> Capture {
     let c_dir = CString::new(dir.as_os_str().as_bytes()).unwrap();
     // SAFETY: `c_dir` is a live NUL-terminated string.
@@ -64,20 +73,40 @@ fn capture(dir: &Path) -> Capture {
 
     let mut attrlist = scan_attrlist();
     let mut buf = vec![0u8; BUF_LEN];
-    // SAFETY: `attrlist` and `buf` are live and `buf.len()` is its true size.
-    let count = unsafe {
-        libc::getattrlistbulk(
-            fd,
-            (&mut attrlist as *mut libc::attrlist).cast(),
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-            SCAN_OPTIONS,
-        )
+    let mut call = |b: &mut [u8]| {
+        // SAFETY: `attrlist` and `b` are live and `b.len()` is its true size.
+        unsafe {
+            libc::getattrlistbulk(
+                fd,
+                (&mut attrlist as *mut libc::attrlist).cast(),
+                b.as_mut_ptr().cast(),
+                b.len(),
+                SCAN_OPTIONS,
+            )
+        }
     };
-    // SAFETY: `fd` is owned by this function and not used again.
-    unsafe { libc::close(fd) };
+    let count = call(&mut buf);
     assert!(count >= 0, "getattrlistbulk: {}", last_error());
     assert!(count > 0, "{} produced no entries", dir.display());
+
+    // The directory fd keeps its own offset, so a second call continues where
+    // the first stopped. Zero means the whole directory was captured.
+    let mut tail = vec![0u8; BUF_LEN];
+    let more = call(&mut tail);
+    assert!(more >= 0, "getattrlistbulk (second call): {}", last_error());
+    assert_eq!(
+        more,
+        0,
+        "{} needs more than one batch: the first call returned {count} entries and \
+         a second returned {more}. The fixture would hold only the first batch, with \
+         `count` and the byte range still mutually consistent, so every replay test \
+         would pass over a truncated corpus. Shrink the fixture tree or teach this \
+         function to concatenate batches.",
+        dir.display()
+    );
+
+    // SAFETY: `fd` is owned by this function and not used again.
+    unsafe { libc::close(fd) };
 
     // Trim to the bytes the kernel actually wrote so the fixture holds no
     // zero padding that could mask a length bug.
