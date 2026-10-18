@@ -61,6 +61,8 @@
 //! | `EPERM`, `EACCES`                  | path pushed to `unreadable`         |
 //! | `ENOENT`, `ENOTDIR` (a race)       | `errors += 1`, the walk continues   |
 //! | `EINTR`                            | the call is retried                 |
+//! | `EMFILE`, `ENFILE`                 | `incomplete = FdExhausted`, that    |
+//! |                                    | subtree is skipped, the walk goes on|
 //! | any other errno, a malformed batch | `errors += 1`, the walk continues   |
 //! | node budget or memory exhausted    | the walk stops: [`Incomplete`]      |
 //! | the root cannot be opened          | `Err` from [`walk_serial`]          |
@@ -165,6 +167,13 @@ pub enum Incomplete {
     NodeBudget,
     OutOfMemory,
     Stalled,
+    /// `openat` failed with `EMFILE` or `ENFILE`: the walk ran out of file
+    /// descriptors. Unlike the races counted in [`WalkStats::errors`], this
+    /// means the result is systematically short, so it is reported here. The
+    /// directory that could not be opened is skipped and the walk carries on
+    /// (popping frames frees descriptors), but every subtree skipped this way
+    /// is missing from the totals.
+    FdExhausted,
 }
 
 impl From<ArenaError> for Incomplete {
@@ -218,6 +227,11 @@ fn errno() -> c_int {
 }
 
 /// Walk `opts.root` on the calling thread.
+///
+/// Open file descriptors are bounded by tree depth (at most `max_depth + 1`),
+/// so callers walking deep trees should raise `RLIMIT_NOFILE` first, as the
+/// parallel walker does; a walk that runs out reports
+/// [`Incomplete::FdExhausted`].
 ///
 /// `Err` means nothing could be scanned: bad options, or the root itself could
 /// not be opened. Once the root is open every problem is absorbed into the
@@ -497,6 +511,12 @@ impl<O: DirOpener> Walker<'_, O> {
                     .map_err(|_| Incomplete::OutOfMemory)?;
                 self.stats.unreadable.push(path);
             }
+            libc::EMFILE | libc::ENFILE => {
+                // Not counted in `errors`: that field holds benign races, and
+                // this one makes the totals wrong. The first reason wins; a
+                // later terminal reason still overwrites it in `walk_serial_with`.
+                self.stats.incomplete.get_or_insert(Incomplete::FdExhausted);
+            }
             _ => self.stats.errors += 1,
         }
         Ok(())
@@ -741,6 +761,77 @@ mod tests {
         assert_eq!(stats.errors, 1);
         assert_eq!(stats.files, 1, "other/f.bin once, not again via victim");
         assert_eq!(stats.incomplete, None);
+    }
+
+    /// Fails the open of the directory `victim` with a fixed errno.
+    struct FailOpen(c_int);
+
+    impl DirOpener for FailOpen {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if name.to_bytes() == b"victim" {
+                return Err(self.0);
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    #[test]
+    fn descriptor_exhaustion_is_reported_as_incomplete_not_as_an_error() {
+        for errno in [libc::EMFILE, libc::ENFILE] {
+            let fx = Fixture::new().unwrap();
+            fx.file("victim/inner.bin", 4096).unwrap();
+            fx.file("other/f.bin", 4096).unwrap();
+
+            let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(errno)).unwrap();
+
+            assert_eq!(
+                stats.incomplete,
+                Some(Incomplete::FdExhausted),
+                "errno {errno}"
+            );
+            assert_eq!(stats.errors, 0, "not a benign race (errno {errno})");
+            assert!(stats.unreadable.is_empty());
+            assert_eq!(stats.files, 1, "the walk went on to other/f.bin");
+        }
+    }
+
+    /// Fails the first directory it is asked to open with `EMFILE`, whichever
+    /// that is, and opens every later one for real.
+    struct FailFirstOpen {
+        failed: Cell<bool>,
+    }
+
+    impl DirOpener for FailFirstOpen {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if !self.failed.replace(true) {
+                return Err(libc::EMFILE);
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    #[test]
+    fn a_terminal_reason_overrides_an_earlier_fd_exhaustion() {
+        // Two directories with five files each. Whichever is opened first
+        // fails with EMFILE; the other is entered, and the budget (the root,
+        // both directories and two files) runs out inside it. The field must
+        // name what stopped the walk, not the earlier skip.
+        let fx = Fixture::new().unwrap();
+        for i in 0..5 {
+            fx.file(&format!("a/f{i}.bin"), 1).unwrap();
+            fx.file(&format!("b/f{i}.bin"), 1).unwrap();
+        }
+        let mut o = opts(fx.path());
+        o.node_budget = 5;
+        let opener = FailFirstOpen {
+            failed: Cell::new(false),
+        };
+
+        let (arena, stats) = walk_serial_with(&o, &opener).unwrap();
+
+        assert!(opener.failed.get(), "the EMFILE must actually have fired");
+        assert_eq!(arena.len(), 5);
+        assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
     }
 
     #[test]

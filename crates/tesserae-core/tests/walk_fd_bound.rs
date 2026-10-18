@@ -28,7 +28,7 @@
 
 use std::fs;
 
-use tesserae_core::walk::{walk_serial, WalkOptions};
+use tesserae_core::walk::{walk_serial, Incomplete, WalkOptions};
 use tesserae_testutil::Fixture;
 
 /// Highest descriptor number currently open in this process.
@@ -87,23 +87,30 @@ fn open_descriptors_scale_with_depth_not_with_directories_visited() {
     set_soft_nofile(original.rlim_cur);
     let (_, stats) = wide_and_deep.unwrap();
 
-    assert_eq!(stats.errors, 0, "no EMFILE: descriptors did not pile up");
-    assert_eq!(stats.incomplete, None);
+    assert_eq!(stats.errors, 0);
+    assert_eq!(
+        stats.incomplete, None,
+        "no descriptor exhaustion: descriptors did not pile up"
+    );
     assert_eq!(stats.files, WIDE + 1);
     // root, wide, WIDE directories, deep, DEPTH chain directories.
     assert_eq!(stats.dirs, 1 + 1 + WIDE + 1 + DEPTH as u64);
 
     // Now give it fewer descriptors than the chain is deep. The depth is what
-    // costs descriptors, so this must run out: the failure is absorbed as an
-    // error and the walk still returns a result.
+    // costs descriptors, so this must run out: the walk still returns a
+    // result, flagged as incomplete for lack of descriptors.
     let original = set_soft_nofile(highest_open_fd() + 1 + 10);
     let too_deep = walk_serial(&opts(fx.path().join("deep")));
     set_soft_nofile(original.rlim_cur);
     let (_, stats) = too_deep.unwrap();
 
-    assert!(
-        stats.errors >= 1,
+    assert_eq!(
+        stats.incomplete,
+        Some(Incomplete::FdExhausted),
         "a {DEPTH}-deep chain fitted in 10 descriptors: depth is not what bounds them"
     );
-    assert_eq!(stats.incomplete, None);
+    assert_eq!(
+        stats.errors, 0,
+        "exhaustion is not filed with the benign races"
+    );
 }
