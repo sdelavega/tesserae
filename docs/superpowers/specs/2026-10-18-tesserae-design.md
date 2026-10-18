@@ -427,8 +427,9 @@ Measured on `UF_COMPRESSED` files (flags `restricted,compressed`):
 report non-zero, compression-reflecting values. `ATTR_FILE_RSRCALLOCSIZE`
 measured **zero on every sampled file**, compressed or not, so it is **not
 requested**: it would cost about 1% of scan time and return nothing.
-`ATTR_FILE_ALLOCSIZE` equalled `st_blocks * 512` in all five samples, so our
-totals agree with `du`. There is no `effective_allocated` correction step;
+`ATTR_FILE_ALLOCSIZE` equalled `st_blocks * 512` on all five sampled files,
+which is consistent with our figures agreeing with `du`; five files do not
+establish whole-volume agreement. There is no `effective_allocated` correction step;
 `allocated` is `ATTR_FILE_ALLOCSIZE` as reported.
 
 ### Progress and cancellation
@@ -1140,6 +1141,11 @@ cache needs root (`purge`) and was not attempted.
    under-reporting trap in "Size semantics" did not appear in
    `ATTR_FILE_ALLOCSIZE`; keep the attribute, but do not expect it to move
    totals.
+   **Superseded:** the conclusions "cheap enough to leave on", "keep the
+   attribute" and the trap framing are replaced by §7 "Size semantics":
+   `ATTR_FILE_ALLOCSIZE` already covers all forks and
+   `ATTR_FILE_RSRCALLOCSIZE` is not requested. The measurements above stand
+   as a dated record.
 4. **`SPACEAVAIL` vs `SPACEFREE`: they are equal.** Both read
    **137,216,397,312 B** (127.79 GiB) on the Data volume, and the same on
    `/`. There is no gap, so the §9 premise that the gap is the system's

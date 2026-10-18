@@ -771,15 +771,19 @@ git commit -m "feat: volume boundary and non-local mount skip policy"
 
 ---
 
-## Task 9: Size correctness — hardlink dedup and compressed files
+## Task 9: Hardlink dedup
 
-Two corrections to the raw numbers the parser reports. Both are
-size-accuracy concerns, so they share a task.
+Hardlinked files share an inode, so the raw numbers the parser reports would
+count their bytes once per link. This task corrects that.
+
+Resource-fork work was removed from this task: `ATTR_FILE_ALLOCSIZE` already
+covers all of a file's forks (spec §7 "Size semantics"), so there is no
+compressed-file correction and the attribute mask in `attrs.rs` is not
+touched.
 
 **Files:**
 - Create: `crates/tesserae-core/src/dedup.rs`
-- Create: `crates/tesserae-core/src/compressed.rs`
-- Modify: `crates/tesserae-core/src/walk.rs`, `crates/tesserae-core/src/attrs.rs`
+- Modify: `crates/tesserae-core/src/walk.rs`
 
 **Interfaces:**
 - Produces:
@@ -790,11 +794,6 @@ size-accuracy concerns, so they share a task.
       pub fn claim(&self, dev: i32, ino: u64) -> bool;   // true on first claim
       pub fn len(&self) -> usize;
   }
-
-  /// Returns the allocated size to record, consulting the resource fork
-  /// when `UF_COMPRESSED` is set and the data fork reports ~zero.
-  pub fn effective_allocated(flags: u32, data_alloc: u64, rsrc_alloc: u64) -> u64;
-  pub const UF_COMPRESSED: u32 = 0x0000_0020;
   ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -823,34 +822,12 @@ fn hardlinked_file_is_counted_once_in_a_walk() {
 fn set_stays_empty_when_no_file_has_link_count_above_one() {
     // 100-file fixture, no hardlinks; assert set.len() == 0
 }
-
-#[test]
-fn uncompressed_file_uses_the_data_fork_size() {
-    assert_eq!(effective_allocated(0, 8192, 0), 8192);
-}
-
-#[test]
-fn compressed_file_with_empty_data_fork_uses_the_resource_fork() {
-    assert_eq!(effective_allocated(UF_COMPRESSED, 0, 4096), 4096);
-}
-
-#[test]
-fn compressed_file_with_both_forks_sums_them() {
-    assert_eq!(effective_allocated(UF_COMPRESSED, 4096, 4096), 8192);
-}
-
-#[test]
-fn walk_of_a_compressed_system_file_reports_nonzero_allocated() {
-    // scan /usr/share/man (contains UF_COMPRESSED files on a stock system);
-    // assert no scanned regular file with UF_COMPRESSED has allocated == 0
-    // while logical > 0.  Skipped with a clear message if no such file exists.
-}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p tesserae-core -- dedup compressed`
-Expected: FAIL — `InodeSet` and `effective_allocated` not defined.
+Run: `cargo test -p tesserae-core -- dedup`
+Expected: FAIL — `InodeSet` not defined.
 
 - [ ] **Step 3: Implement `InodeSet` and gate insertion on `link_count > 1` in the walker**
 
@@ -858,29 +835,16 @@ The gate is the point: inserting every inode would make the set megabytes
 large and a contention hotspot. Hardlinks are rare, so the set stays nearly
 empty.
 
-- [ ] **Step 4: Implement `effective_allocated` and add `ATTR_FILE_RSRCALLOCSIZE` to the request**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Spec §7 flags compressed files as a known accounting trap: `UF_COMPRESSED`
-files report a near-zero data fork with the real bytes in the resource
-fork, and `/usr` and `/System` are full of them.
+Run: `cargo test -p tesserae-core -- dedup`
+Expected: PASS (4 tests).
 
-**Whether the attribute is requested unconditionally depends on Task 0's
-third measurement.** If its marginal cost is negligible, request it
-always. If not, add a `WalkOptions::resource_fork_sizes: bool` defaulting
-to true and let the caller trade accuracy for speed. Record which way you
-went, and why, in a comment on `effective_allocated`.
-
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `cargo test -p tesserae-core -- dedup compressed`
-Expected: PASS (8 tests).
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/tesserae-core/src/dedup.rs crates/tesserae-core/src/compressed.rs \
-        crates/tesserae-core/src/walk.rs crates/tesserae-core/src/attrs.rs
-git commit -m "feat: hardlink dedup and compressed-file resource fork sizing"
+git add crates/tesserae-core/src/dedup.rs crates/tesserae-core/src/walk.rs
+git commit -m "feat: hardlink dedup"
 ```
 
 ---

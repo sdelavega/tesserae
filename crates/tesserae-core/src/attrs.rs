@@ -67,7 +67,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attrlist_requests_returned_attrs_first() {
+    fn attrlist_requests_returned_attrs() {
         assert_ne!(
             scan_attrlist().commonattr & libc::ATTR_CMN_RETURNED_ATTRS,
             0
@@ -123,10 +123,17 @@ mod tests {
         assert_eq!(a.reserved, 0);
     }
 
+    /// Pinned as literals, independent of the `libc` crate's constants: a
+    /// wrong constant there would otherwise leave every other test passing
+    /// while changing the buffer layout that Task 4's golden fixtures capture.
+    /// Values hand-checked against `sys/attr.h` in the macOS SDK
+    /// (`$(xcrun --show-sdk-path)/usr/include/sys/attr.h`).
     #[test]
-    fn masks_match_the_list() {
-        assert_eq!(scan_attrlist().commonattr, COMMON_MASK);
-        assert_eq!(scan_attrlist().fileattr, FILE_MASK);
+    fn masks_are_pinned_to_the_sdk_header_values() {
+        assert_eq!(COMMON_MASK, 0x8204_000B);
+        assert_eq!(FILE_MASK, 0x0000_0205);
+        assert_eq!(scan_attrlist().commonattr, 0x8204_000B);
+        assert_eq!(scan_attrlist().fileattr, 0x0000_0205);
     }
 
     #[test]
