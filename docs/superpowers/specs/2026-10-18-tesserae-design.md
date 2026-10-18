@@ -410,17 +410,26 @@ them.
 
 Both stored; **allocated is the default display.**
 
-Defensive handling, **not observed on macOS 27.2:** `UF_COMPRESSED` files
-(common in `/usr`, `/System`) were expected to report a data-fork allocated
-size near zero, with the real bytes in the resource fork, which for flagged
-files would mean consulting `ATTR_FILE_RSRCALLOCSIZE`. The §13 spike
-weakened this from a "known accounting trap": over 3.36M `UF_COMPRESSED`
-files the resource-fork allocation summed to only 0.05 GiB, and
-`ATTR_FILE_ALLOCSIZE` alone matched `st_blocks * 512` on a compressed test
-file. Keep `effective_allocated` and keep requesting
-`ATTR_FILE_RSRCALLOCSIZE` unconditionally: it measured at about +1% scan
-time (within noise), so it is effectively free, and older or other macOS
-releases may still behave as originally described.
+**Compressed files are not an accounting trap.** An earlier revision of this
+section called `UF_COMPRESSED` under-reporting a "known accounting trap"; a
+later one downgraded it to "defensive handling, not observed on macOS 27.2".
+Both were wrong about the cause. `ATTR_FILE_ALLOCSIZE` is documented in
+`man 2 getattrlist` as the "bytes on disk used by all of the file's forks",
+so it already includes everything. The expectation of a near-zero figure
+described `ATTR_FILE_DATAALLOCSIZE` ("bytes on disk used by the data fork"),
+which we do not use. The §13 spike correctly observed no anomaly in
+`ATTR_FILE_ALLOCSIZE`, but we mis-explained why, crediting a macOS version
+difference rather than the attribute's documented semantics.
+
+Measured on `UF_COMPRESSED` files (flags `restricted,compressed`):
+`/usr/lib/dyld` has logical size 4129088 and `ATTR_FILE_ALLOCSIZE` 1560576
+(about 38% of logical); the two `AssetCache*Util` binaries sampled likewise
+report non-zero, compression-reflecting values. `ATTR_FILE_RSRCALLOCSIZE`
+measured **zero on every sampled file**, compressed or not, so it is **not
+requested**: it would cost about 1% of scan time and return nothing.
+`ATTR_FILE_ALLOCSIZE` equalled `st_blocks * 512` in all five samples, so our
+totals agree with `du`. There is no `effective_allocated` correction step;
+`allocated` is `ATTR_FILE_ALLOCSIZE` as reported.
 
 ### Progress and cancellation
 

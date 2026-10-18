@@ -41,35 +41,25 @@ pub const COMMON_MASK: u32 = libc::ATTR_CMN_RETURNED_ATTRS
     | libc::ATTR_CMN_FLAGS
     | libc::ATTR_CMN_FILEID;
 
-/// File attributes without the resource-fork allocation.
-pub const FILE_MASK_REDUCED: u32 =
+/// File attributes: link count, allocated size, data length.
+///
+/// `ATTR_FILE_ALLOCSIZE` is the bytes on disk used by all of the file's forks,
+/// so no resource-fork attribute is requested.
+pub const FILE_MASK: u32 =
     libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE | libc::ATTR_FILE_DATALENGTH;
 
-/// File attributes: link count, allocated size, data length, and resource-fork
-/// allocated size. Compressed files (`UF_COMPRESSED`) report almost nothing in
-/// the data fork; their real bytes are in the resource fork.
-pub const FILE_MASK: u32 = FILE_MASK_REDUCED | libc::ATTR_FILE_RSRCALLOCSIZE;
-
-fn attrlist_with_file_mask(fileattr: u32) -> libc::attrlist {
+/// The attribute request: the nine attributes in [`COMMON_MASK`] and
+/// [`FILE_MASK`].
+pub fn scan_attrlist() -> libc::attrlist {
     libc::attrlist {
         bitmapcount: libc::ATTR_BIT_MAP_COUNT,
         reserved: 0,
         commonattr: COMMON_MASK,
         volattr: 0,
         dirattr: 0,
-        fileattr,
+        fileattr: FILE_MASK,
         forkattr: 0,
     }
-}
-
-/// The full attribute request: all ten attributes.
-pub fn scan_attrlist() -> libc::attrlist {
-    attrlist_with_file_mask(FILE_MASK)
-}
-
-/// The full request minus `ATTR_FILE_RSRCALLOCSIZE`.
-pub fn scan_attrlist_reduced() -> libc::attrlist {
-    attrlist_with_file_mask(FILE_MASK_REDUCED)
 }
 
 #[cfg(test)]
@@ -86,14 +76,13 @@ mod tests {
 
     #[test]
     fn attrlist_requests_no_recursive_size_attributes() {
-        for a in [scan_attrlist(), scan_attrlist_reduced()] {
-            assert_eq!(a.dirattr & libc::ATTR_DIR_ALLOCSIZE, 0);
-            assert_eq!(a.fileattr & libc::ATTR_FILE_TOTALSIZE, 0);
-        }
+        let a = scan_attrlist();
+        assert_eq!(a.dirattr & libc::ATTR_DIR_ALLOCSIZE, 0);
+        assert_eq!(a.fileattr & libc::ATTR_FILE_TOTALSIZE, 0);
     }
 
     #[test]
-    fn attrlist_requests_the_ten_attributes() {
+    fn attrlist_requests_the_nine_spec_attributes() {
         let a = scan_attrlist();
         for bit in [
             libc::ATTR_CMN_RETURNED_ATTRS,
@@ -109,18 +98,17 @@ mod tests {
             libc::ATTR_FILE_DATALENGTH,
             libc::ATTR_FILE_ALLOCSIZE,
             libc::ATTR_FILE_LINKCOUNT,
-            libc::ATTR_FILE_RSRCALLOCSIZE,
         ] {
             assert_eq!(a.fileattr & bit, bit, "file bit {bit:#x} missing");
         }
     }
 
     #[test]
-    fn attrlist_requests_exactly_the_ten_attributes_and_no_others() {
+    fn attrlist_requests_exactly_the_nine_attributes_and_no_others() {
         let a = scan_attrlist();
         assert_eq!(
             a.commonattr.count_ones() + a.fileattr.count_ones(),
-            10,
+            9,
             "the mask fixes the buffer layout; an extra bit changes it"
         );
         assert_eq!(a.volattr, 0);
@@ -130,36 +118,15 @@ mod tests {
 
     #[test]
     fn attrlist_header_fields_are_well_formed() {
-        for a in [scan_attrlist(), scan_attrlist_reduced()] {
-            assert_eq!(a.bitmapcount, libc::ATTR_BIT_MAP_COUNT);
-            assert_eq!(a.reserved, 0);
-        }
+        let a = scan_attrlist();
+        assert_eq!(a.bitmapcount, libc::ATTR_BIT_MAP_COUNT);
+        assert_eq!(a.reserved, 0);
     }
 
     #[test]
-    fn reduced_list_differs_from_full_by_exactly_the_rsrc_alloc_bit() {
-        let full = scan_attrlist();
-        let reduced = scan_attrlist_reduced();
-        assert_eq!(reduced.commonattr, full.commonattr);
-        assert_eq!(reduced.volattr, full.volattr);
-        assert_eq!(reduced.dirattr, full.dirattr);
-        assert_eq!(reduced.forkattr, full.forkattr);
-        assert_eq!(
-            full.fileattr ^ reduced.fileattr,
-            libc::ATTR_FILE_RSRCALLOCSIZE
-        );
-        assert_eq!(
-            full.fileattr & libc::ATTR_FILE_RSRCALLOCSIZE,
-            libc::ATTR_FILE_RSRCALLOCSIZE
-        );
-        assert_eq!(reduced.fileattr & libc::ATTR_FILE_RSRCALLOCSIZE, 0);
-    }
-
-    #[test]
-    fn masks_match_the_lists() {
+    fn masks_match_the_list() {
         assert_eq!(scan_attrlist().commonattr, COMMON_MASK);
         assert_eq!(scan_attrlist().fileattr, FILE_MASK);
-        assert_eq!(scan_attrlist_reduced().fileattr, FILE_MASK_REDUCED);
     }
 
     #[test]
