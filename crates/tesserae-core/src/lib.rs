@@ -17,6 +17,7 @@
 pub mod arena;
 pub mod attrs;
 pub mod parse;
+pub mod walk;
 
 #[cfg(test)]
 mod tests {

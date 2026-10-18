@@ -235,6 +235,21 @@ impl Arena {
         self.nodes.get(id.chunk() as usize)?.get(id.slot() as usize)
     }
 
+    /// Every node and its id, in the order the nodes were pushed.
+    ///
+    /// Within one arena a parent is always pushed before its children, so a
+    /// reverse walk visits children first, which is what a bottom-up rollup
+    /// wants.
+    pub fn iter(&self) -> impl Iterator<Item = (ScanId, &ScanNode)> + '_ {
+        self.nodes.iter().enumerate().flat_map(move |(c, chunk)| {
+            chunk.iter().enumerate().map(move |(s, n)| {
+                // `c` and `s` are bounded by the same checks `push_node` makes
+                // before it issues an id, so neither conversion truncates.
+                (ScanId::pack(self.thread, c as u32, s as u32), n)
+            })
+        })
+    }
+
     /// The bytes behind `r`. A `NameRef` that does not describe stored bytes
     /// (for instance one from another arena) yields an empty slice.
     pub fn name_bytes(&self, r: NameRef) -> &[u8] {
@@ -263,6 +278,21 @@ mod tests {
             logical,
             allocated: logical,
         }
+    }
+
+    #[test]
+    fn iter_yields_every_node_in_push_order_with_resolvable_ids() {
+        let mut arena = Arena::new(5, u64::MAX);
+        let n = CHUNK_NODES as u64 + 3;
+        let pushed: Vec<ScanId> = (0..n).map(|i| arena.push_node(node(i)).unwrap()).collect();
+        let seen: Vec<(ScanId, u64)> = arena.iter().map(|(id, nd)| (id, nd.logical)).collect();
+        assert_eq!(seen.len() as u64, n);
+        for (i, (id, logical)) in seen.iter().enumerate() {
+            assert_eq!(*id, pushed[i]);
+            assert_eq!(*logical, i as u64);
+            assert_eq!(arena.get(*id).unwrap().logical, i as u64);
+        }
+        assert_eq!(Arena::new(0, 1).iter().count(), 0);
     }
 
     #[test]
