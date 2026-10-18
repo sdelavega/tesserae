@@ -16,6 +16,7 @@
 
 pub mod arena;
 pub mod attrs;
+pub mod boundary;
 pub mod parse;
 pub mod walk;
 

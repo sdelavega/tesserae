@@ -20,6 +20,8 @@
 //! available to unit tests, integration tests, benches and other crates'
 //! tests alike, and never ships in the production artefact.
 
+pub mod diskimage;
 pub mod tree;
 
+pub use diskimage::DiskImage;
 pub use tree::Fixture;

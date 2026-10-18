@@ -69,6 +69,8 @@
 //! |                                    | entries lost are added to           |
 //! |                                    | `lost_entries`; the walk goes on    |
 //! | any other errno (`EIO`, ...)       | `errors += 1`, the walk continues   |
+//! | a mount boundary (below)           | path pushed to `skipped_mounts`;    |
+//! |                                    | not entered, not an error           |
 //! | node budget or arena memory out    | the walk stops: [`Incomplete`]      |
 //! | the root cannot be opened          | `Err` from [`walk_serial`]          |
 //! | the root opens, enumeration fails  | `Ok`; the root is in `unreadable`   |
@@ -83,6 +85,16 @@
 //! A node-budget failure is terminal: `push_name` has already stored the
 //! entry's name, so a failed `push_node` leaves orphaned name bytes in the
 //! arena, and carrying on would only add more.
+//!
+//! # Volume boundary
+//!
+//! A scan stays on the volume it was pointed at. Each child is opened, then its
+//! volume is read from the open descriptor (`Walker::admit`) and compared with
+//! the root's before a single entry is read. A child on another volume is
+//! recorded in `skipped_mounts` and its descriptor dropped; it stays a directory
+//! node with no children, so the tree shows the mount point as an empty folder
+//! rather than omitting it. The policy and the reasons the check reads the
+//! descriptor rather than the entry are in [`crate::boundary`].
 //!
 //! # Per-arena budget
 //!
@@ -99,6 +111,7 @@ use std::path::PathBuf;
 
 use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
+use crate::boundary::{should_descend, volume_of};
 use crate::parse::{entries, ObjType, RawEntry};
 
 /// The default scan root: the user-visible data volume on modern macOS.
@@ -128,9 +141,9 @@ pub struct WalkOptions {
     pub node_budget: u64,
     /// Size of the `getattrlistbulk` output buffer.
     pub buffer_bytes: usize,
-    /// Whether to descend into network and other non-local mounts. Read by
-    /// the boundary policy added with the volume-boundary work; the serial
-    /// walker does not consult it yet.
+    /// Whether to descend into network and other non-local mounts. A mount on
+    /// another *local* volume is never entered, whatever this says; see
+    /// [`crate::boundary`].
     pub include_non_local: bool,
     /// Worker thread count. Read only by the parallel walker; the serial
     /// walker ignores it.
@@ -161,12 +174,18 @@ pub struct WalkStats {
     /// special files.
     pub files: u64,
     /// Failures that were absorbed and did not stop the walk: races
-    /// (`ENOENT`, `ENOTDIR`), malformed batches and any other errno that is
-    /// neither a permission denial nor fatal.
+    /// (`ENOENT`, `ENOTDIR`) and any other errno that is neither a permission
+    /// denial nor fatal. (A malformed batch is not counted here: see
+    /// [`WalkStats::lost_entries`] and [`Incomplete::MalformedBatch`].)
     pub errors: u64,
     /// Directories that could not be read for lack of permission. Their sizes
     /// are unknowable, so they hold no children and no bytes.
     pub unreadable: Vec<PathBuf>,
+    /// Directories not entered because they are a different volume's mount
+    /// point or a non-local mount the caller did not opt into. Each is still a
+    /// directory node (`dirs` counts it), holding no children and no bytes.
+    /// This is policy, not failure: it is not in `errors` and does not set
+    /// `incomplete`.
     pub skipped_mounts: Vec<PathBuf>,
     /// Directories recorded at `max_depth` and therefore not entered.
     pub depth_capped: u64,
@@ -277,6 +296,8 @@ pub(crate) fn walk_serial_with<O: DirOpener>(
         ));
     }
     let root_fd = open_root(opts)?;
+    let root_volume = volume_of(root_fd.as_raw_fd())
+        .map_err(|e| io::Error::new(e.kind(), format!("fstatfs {}: {e}", opts.root.display())))?;
     let mut buf = Vec::new();
     buf.try_reserve_exact(opts.buffer_bytes)
         .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
@@ -287,6 +308,8 @@ pub(crate) fn walk_serial_with<O: DirOpener>(
         buf,
         attrlist: scan_attrlist(),
         max_depth: opts.max_depth,
+        root_volume,
+        include_non_local: opts.include_non_local,
         arena: Arena::new(0, opts.node_budget),
         stats: WalkStats::default(),
     };
@@ -340,6 +363,10 @@ struct Walker<'a, O> {
     buf: Vec<u8>,
     attrlist: libc::attrlist,
     max_depth: u16,
+    /// The volume the scan root lives on. Every directory opened is compared
+    /// with it; see `Walker::admit`.
+    root_volume: i32,
+    include_non_local: bool,
     arena: Arena,
     stats: WalkStats,
 }
@@ -363,11 +390,62 @@ impl<O: DirOpener> Walker<'_, O> {
             top.next += 1;
             let (parent_fd, depth) = (top.fd.as_raw_fd(), top.depth + 1);
             match self.open_child(parent_fd, child) {
-                Ok(fd) => self.enter(&mut stack, fd, child, depth)?,
+                Ok(fd) => {
+                    if self.admit(child, &fd)? {
+                        self.enter(&mut stack, fd, child, depth)?;
+                    }
+                    // Otherwise `fd` drops here, closing the directory the
+                    // boundary refused without a single read from it.
+                }
                 Err(e) => self.note_error(child, e)?,
             }
         }
         Ok(())
+    }
+
+    /// Whether to enter `id`, the directory just opened as `fd`, or stay out
+    /// because it is across a volume boundary. The one place the boundary
+    /// policy meets the walk, and it runs after the open and before any read.
+    ///
+    /// The volume comes from the descriptor, not from the entry the parent's
+    /// `getattrlistbulk` returned: for a mount point that entry carries the
+    /// parent's device, not the mounted volume's (see [`crate::boundary`]), so
+    /// comparing it could never detect a crossing. The descriptor is also the
+    /// directory the walk is about to read, so there is no path to re-resolve
+    /// and nothing to swap between the check and the descent.
+    ///
+    /// A directory on the root's own volume is the root's own filesystem, which
+    /// the caller chose, so it is entered without asking whether that
+    /// filesystem is local. The policy governs what is *crossed into*, and
+    /// only a change of volume is a crossing. Cost: one `fstatfs` per
+    /// directory (about 0.4 us against several us for the `openat` it follows),
+    /// plus a second only at a crossing.
+    ///
+    /// Returns `Ok(true)` to enter, `Ok(false)` to skip (recorded in
+    /// `skipped_mounts`, or in the error counters if the descriptor cannot be
+    /// examined). `Err` is only for the terminal reasons.
+    fn admit(&mut self, id: ScanId, fd: &OwnedFd) -> Result<bool, Incomplete> {
+        let raw = fd.as_raw_fd();
+        let volume = match volume_of(raw) {
+            Ok(volume) => volume,
+            Err(e) => {
+                self.note_error(id, e.raw_os_error().unwrap_or(libc::EIO))?;
+                return Ok(false);
+            }
+        };
+        if volume == self.root_volume {
+            return Ok(true);
+        }
+        if should_descend(self.root_volume, volume, raw, self.include_non_local).is_ok() {
+            return Ok(true);
+        }
+        let path = node_path(&self.arena, id)?;
+        self.stats
+            .skipped_mounts
+            .try_reserve(1)
+            .map_err(|_| Incomplete::OutOfMemory)?;
+        self.stats.skipped_mounts.push(path);
+        Ok(false)
     }
 
     /// Enumerate `id`'s directory, then push it as a frame to be descended.
@@ -595,7 +673,7 @@ mod tests {
     use std::cell::Cell;
     use std::fs::{self, File};
     use std::path::Path;
-    use tesserae_testutil::Fixture;
+    use tesserae_testutil::{DiskImage, Fixture};
 
     fn opts(root: &Path) -> WalkOptions {
         WalkOptions {
@@ -954,6 +1032,8 @@ mod tests {
             buf: Vec::new(),
             attrlist: scan_attrlist(),
             max_depth: 512,
+            root_volume: 0,
+            include_non_local: false,
             arena: Arena::new(0, u64::MAX),
             stats: WalkStats::default(),
         };
@@ -976,6 +1056,116 @@ mod tests {
         buf[..4].copy_from_slice(&0u32.to_le_bytes());
         w.consume_batch(&mut frame, root, &buf, 3).unwrap();
         assert_eq!(w.stats.lost_entries, 2 + 3);
+    }
+
+    /// The volume `p` is on, as the boundary sees it.
+    fn volume_at(p: &Path) -> i32 {
+        volume_of(File::open(p).unwrap().as_raw_fd()).unwrap()
+    }
+
+    #[test]
+    fn walk_does_not_cross_into_a_mounted_disk_image() {
+        let fx = Fixture::new().unwrap();
+        fx.file("before.bin", 4096).unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        // Declared after `fx`, so it drops first: the volume is unmounted
+        // before the fixture removes its tree, and on a panic too.
+        let image = DiskImage::attach(&mnt, 16)
+            .expect("this test needs hdiutil to be able to attach a disk image");
+        fs::write(mnt.join("on_image.bin"), vec![1u8; 8192]).unwrap();
+        fs::create_dir(mnt.join("sub")).unwrap();
+        fs::write(mnt.join("sub/deep.bin"), vec![2u8; 8192]).unwrap();
+
+        // Without these the test could pass because the image never mounted and
+        // the files simply are not there. The image is a different volume, the
+        // files exist on it, and a walk that is *rooted* on it finds them.
+        assert_ne!(
+            volume_at(&mnt),
+            volume_at(fx.path()),
+            "the image must be a mount"
+        );
+        assert!(mnt.join("on_image.bin").is_file());
+        let (control, control_stats) = walk_serial(&opts(&mnt)).unwrap();
+        assert_eq!(find(&control, b"on_image.bin").len(), 1);
+        assert_eq!(find(&control, b"deep.bin").len(), 1);
+        assert!(
+            control_stats.skipped_mounts.is_empty(),
+            "the root is walked"
+        );
+
+        // `include_non_local` must not open this: the image is a local volume.
+        for include_non_local in [false, true] {
+            let mut o = opts(fx.path());
+            o.include_non_local = include_non_local;
+
+            let (arena, stats) = walk_serial(&o).unwrap();
+
+            let ctx = format!("include_non_local {include_non_local}");
+            assert_eq!(stats.skipped_mounts, vec![mnt.clone()], "{ctx}");
+            assert!(find(&arena, b"on_image.bin").is_empty(), "{ctx}");
+            assert!(find(&arena, b"sub").is_empty(), "{ctx}");
+            assert!(find(&arena, b"deep.bin").is_empty(), "{ctx}");
+            assert_eq!(find(&arena, b"before.bin").len(), 1, "{ctx}");
+            // The mount point is a node, but a childless one.
+            assert_eq!(find(&arena, b"mnt").len(), 1, "{ctx}");
+            assert_eq!((stats.dirs, stats.files), (2, 1), "{ctx}: root and mnt");
+            assert_eq!(arena.len(), 3, "{ctx}");
+            assert_eq!(stats.errors, 0, "a skip is policy, not an error ({ctx})");
+            assert_eq!(stats.incomplete, None, "{ctx}");
+            assert!(stats.unreadable.is_empty(), "{ctx}");
+        }
+        drop(image);
+    }
+
+    /// Hands back a descriptor on the automounter's `/home` (a mount the
+    /// kernel reports as non-local) in place of the directory `victim`. The
+    /// boundary then sees a real change of volume and a real `MNT_LOCAL` clear.
+    struct NonLocalForVictim;
+
+    impl DirOpener for NonLocalForVictim {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if name.to_bytes() == b"victim" {
+                return File::open("/System/Volumes/Data/home")
+                    .map(OwnedFd::from)
+                    .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO));
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    #[test]
+    fn a_non_local_mount_is_skipped_unless_opted_in() {
+        let fx = Fixture::new().unwrap();
+        fx.file("victim/inner.bin", 4096).unwrap();
+        fx.file("other/f.bin", 4096).unwrap();
+
+        let (arena, stats) = walk_serial_with(&opts(fx.path()), &NonLocalForVictim).unwrap();
+
+        assert_eq!(stats.skipped_mounts, vec![fx.path().join("victim")]);
+        assert_eq!(stats.files, 1, "other/f.bin was still reached");
+        assert_eq!(stats.dirs, 3, "root, victim and other");
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.incomplete, None);
+        assert_eq!(arena.len(), 4);
+
+        // Opted in: nothing else may be what stops it. The stand-in directory
+        // is empty, so entering it is invisible in the node counts; what is
+        // observable is that it is no longer recorded as skipped.
+        let mut o = opts(fx.path());
+        o.include_non_local = true;
+        let (arena, stats) = walk_serial_with(&o, &NonLocalForVictim).unwrap();
+
+        assert!(
+            stats.skipped_mounts.is_empty(),
+            "{:?}",
+            stats.skipped_mounts
+        );
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.dirs, 3);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.incomplete, None);
+        assert_eq!(arena.len(), 4);
     }
 
     #[test]
