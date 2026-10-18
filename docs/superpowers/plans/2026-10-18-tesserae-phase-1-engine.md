@@ -35,8 +35,20 @@ verbatim from the spec.
 - `RLIMIT_NOFILE` raised to **4096** at scan start; on failure, reduce
   worker count to fit the existing limit rather than failing.
 - Default scan root: `/System/Volumes/Data`.
-- **Never request a recursive-size attribute** (`ATTR_DIR_ALLOCSIZE` and
-  similar).
+- **Never request `ATTR_DIR_ALLOCSIZE` or `ATTR_FILE_TOTALSIZE`.** The
+  question was asked and settled by measurement, so it does not need
+  re-litigating. Neither is a *recursive* total — `getattrlist(2)` has no
+  recursive-size attribute at all; both report a single object's own size.
+  They are excluded because they add nothing. `ATTR_FILE_ALLOCSIZE` already
+  covers every fork of a file. And an APFS directory allocates no blocks of
+  its own — entries live in B-tree records, not a per-directory data fork —
+  measured `ATTR_DIR_ALLOCSIZE` of 0 for an empty directory
+  (`DIR_DATALENGTH` 64), a 400-entry directory (12864) and `/usr/share`
+  (1408) alike, with the bit set in `ATTR_CMN_RETURNED_ATTRS` so the zero is
+  a real value and not an unsupplied default. A directory's size therefore
+  comes entirely from the bottom-up rollup, and adding these bits would
+  change the packed buffer layout that Task 4's golden fixtures pin in order
+  to gain a column of zeros.
 - `TessNode` is exactly the eight fields in spec §6, `#[repr(C)]`, 40 bytes
   aligned. No field may be added in this phase.
 - Every source file carries a GPL-3.0 header. `LICENSE` is GPL-3.0.
@@ -273,7 +285,7 @@ fn attrlist_requests_returned_attrs_first() {
 }
 
 #[test]
-fn attrlist_requests_no_recursive_size_attributes() {
+fn attrlist_requests_no_directory_or_total_size_attributes() {
     let a = scan_attrlist();
     assert_eq!(a.dirattr & libc::ATTR_DIR_ALLOCSIZE, 0);
     assert_eq!(a.fileattr & libc::ATTR_FILE_TOTALSIZE, 0);

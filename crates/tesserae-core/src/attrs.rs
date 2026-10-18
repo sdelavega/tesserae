@@ -24,8 +24,16 @@
 //! guaranteed to follow ascending bit value. The parser must therefore derive
 //! the order from captured buffers rather than assume one here.
 //!
-//! No recursive-size attribute (`ATTR_DIR_ALLOCSIZE`, `ATTR_FILE_TOTALSIZE`)
-//! is ever requested: aggregating sizes is this program's job.
+//! Neither `ATTR_DIR_ALLOCSIZE` nor `ATTR_FILE_TOTALSIZE` is requested. Both
+//! name a single object's own size, not a recursive total — `getattrlist(2)`
+//! has no recursive-size attribute at all — so the reason is measurement, not
+//! cost. `ATTR_FILE_ALLOCSIZE` already covers every fork of a file, and APFS
+//! directories allocate no blocks of their own: measured `ATTR_DIR_ALLOCSIZE`
+//! of 0 for an empty directory, a 400-entry directory and `/usr/share` alike,
+//! with the bit set in `ATTR_CMN_RETURNED_ATTRS`, so the zero is a real value
+//! rather than an unsupplied default. Directory sizes come entirely from the
+//! bottom-up rollup, and requesting these bits would change the buffer layout
+//! that `crate::parse`'s golden fixtures pin to gain a column of zeros.
 
 /// Options passed to `getattrlistbulk`: report invalid attributes explicitly
 /// (via `ATTR_CMN_RETURNED_ATTRS`) instead of failing, and do not follow
@@ -74,8 +82,14 @@ mod tests {
         );
     }
 
+    /// Neither of these is a recursive total — there is no such attribute in
+    /// `getattrlist(2)`. They are excluded because they add nothing:
+    /// `ATTR_FILE_ALLOCSIZE` already spans every fork of a file, and an APFS
+    /// directory's own `ATTR_DIR_ALLOCSIZE` is a measured, genuinely-returned
+    /// zero. Requesting either would change the packed buffer layout for no
+    /// information.
     #[test]
-    fn attrlist_requests_no_recursive_size_attributes() {
+    fn attrlist_requests_no_directory_or_total_size_attributes() {
         let a = scan_attrlist();
         assert_eq!(a.dirattr & libc::ATTR_DIR_ALLOCSIZE, 0);
         assert_eq!(a.fileattr & libc::ATTR_FILE_TOTALSIZE, 0);

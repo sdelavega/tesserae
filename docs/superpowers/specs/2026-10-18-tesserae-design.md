@@ -322,8 +322,11 @@ Rust memory. It is closed structurally, not by discipline:
 
 Kept lean, because every additional attribute costs scan time.
 `ATTR_CMN_RETURNED_ATTRS` is requested first so per-entry absence is
-detectable rather than guessed. `FSOPT_PACK_INVAL_ATTRS` keeps offsets
-predictable; `FSOPT_NOFOLLOW` keeps symlinks unresolved.
+detectable rather than guessed — which it must be, because absence is real
+and structural (see below). `FSOPT_PACK_INVAL_ATTRS` asks the kernel to
+supply a default in place of an attribute a filesystem cannot provide;
+it does **not** make entry offsets uniform. `FSOPT_NOFOLLOW` keeps symlinks
+unresolved.
 
 | Attribute | Purpose |
 |---|---|
@@ -337,8 +340,44 @@ predictable; `FSOPT_NOFOLLOW` keeps symlinks unresolved.
 | `ATTR_FILE_ALLOCSIZE` | allocated size |
 | `ATTR_FILE_LINKCOUNT` | gate the dedup set |
 
-**Never request a recursive-size attribute** such as `ATTR_DIR_ALLOCSIZE` —
-that asks the filesystem to do this program's job, slowly.
+The table lists what is *requested*. It is not what every entry carries.
+
+**File attributes are absent from a directory's entry, not zero-filled.**
+Measured on APFS: a regular file's entry is 80 bytes with
+`returned.fileattr == 0x205`, while the directory beside it is 56 bytes with
+`returned.fileattr == 0` and its name beginning at offset 52 — the three
+`ATTR_FILE_*` slots are not there at any offset, since the fixed fields
+would need 72 bytes. `man 2 getattrlist` states the rule for the mirror
+case: *"Requested directory attributes are not returned for file system
+objects that are not directories."* Setting or clearing
+`FSOPT_PACK_INVAL_ATTRS` changes nothing, and the behaviour is identical on
+APFS, HFS+, exFAT and FAT32, so it is VFS-level rather than one
+filesystem's quirk.
+
+Two consequences bind every consumer of the buffer:
+
+- **Entry length and name offset vary by object type.** There is no fixed
+  stride. The name's `attrreference_t` offset is the only reliable marker of
+  where an entry's fixed-field region ends.
+- **A parser must gate each attribute group on its returned bit** and must
+  never index an attribute by assumed position. Reading a directory's name
+  bytes at the file-attribute offsets yields a plausible wrong link count
+  and allocated size — a silent misread, not a crash.
+
+**A directory's own size is legitimately zero**, so nothing is undercounted
+by the absence. APFS directories allocate no blocks: entries live in B-tree
+records rather than a per-directory data fork. Measured `ATTR_DIR_ALLOCSIZE`
+of 0 for an empty directory, a 400-entry directory and `/usr/share` alike,
+with the bit set in `ATTR_CMN_RETURNED_ATTRS` so the zero is a real value
+and not an unsupplied default. **Directory sizes come entirely from the
+bottom-up rollup** in the freeze step (§6).
+
+`ATTR_DIR_ALLOCSIZE` and `ATTR_FILE_TOTALSIZE` are therefore not requested —
+not because they are recursive (`getattrlist(2)` has no recursive-size
+attribute; both report one object's own size), but because they add nothing:
+`ATTR_FILE_ALLOCSIZE` already spans every fork of a file, and the directory
+figure is a measured zero. Requesting either would change the packed layout
+for no information.
 
 ### Worker pool
 
