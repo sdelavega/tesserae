@@ -31,9 +31,16 @@ recommendable to anyone.
 1. A full data-volume scan completes fast enough that no persistent index
    is warranted. The criterion is a **rate, not a wall time**: a warm scan
    at or under about 5 s per 1M entries on Apple Silicon NVMe, which puts a
-   1–2M-entry Mac under about 10 s. *Measured (§13 spike), over 6.39M
-   entries on an Apple M5:* warm, 3.3 s per 1M at best and 4.3 s per 1M at
-   the median (27.3 s total, n=14), so the criterion is met warm. The
+   1–2M-entry Mac under about 10 s. **The 5 s figure is not a measured
+   value:** it is the original wording ("single-digit seconds for 1–2M
+   files") restated as a rate. **The governing statistic is the median** of
+   repeated warm runs. *Measured (§13 spike), over 6.39M entries on an
+   Apple M5:* warm, 3.3 s per 1M at best and 4.3 s per 1M at the median
+   (27.3 s total, n=14), so the median meets the criterion warm. **The worst
+   warm run did not:** 42.9 s is 6.7 s per 1M, and across all 42 warm
+   8-thread runs the 95th percentile (33.7 s, 5.3 s per 1M) also exceeded
+   it, with 6 of 42 runs over the line, all taken while the machine was
+   under load 3 to 12. The
    original wording ("single-digit seconds for 1–2M files") assumed a
    smaller volume than the 6.39M entries this machine holds, where a full
    warm scan takes about 27 s. **The cold path has not been characterised:**
@@ -588,12 +595,24 @@ spike refuted that: the two are **equal** (137,216,397,312 B on the Data
 volume and on `/`), so there is no gap to read. The purgeable total is
 `volumeAvailableCapacityForImportantUsageKey` (via `URLResourceValues`)
 minus the plain available capacity; the spike measured 176,749,443,260 B
-against 137,179,013,120 B, about 39.6 GB purgeable. This **improves** the
+against 137,179,013,120 B, about 39.6 GB purgeable (**derived** from two reads moments apart, not
+cross-checked against `diskutil` or Finder). This **improves** the
 design: purgeable is obtained directly rather than inferred, and it feeds
 `purgeableEstimate` below as a measured total. Only the per-file breakdown
-stays unavailable (§2). Gotcha from the same spike: in the `getattrlist`
-reply `ATTR_VOL_SPACEUSED` packs **before** `ATTR_VOL_FILECOUNT` and
-`ATTR_VOL_DIRCOUNT`; parse by the returned-attributes mask.
+stays unavailable (§2). **Packing-order gotcha, observed, contrary to the
+header's bit order:** in the `getattrlist` reply on macOS 27.2,
+`ATTR_VOL_SPACEUSED` (`0x00800000`) packs **before** `ATTR_VOL_FILECOUNT`
+(`0x00000200`) and `ATTR_VOL_DIRCOUNT` (`0x00000400`), although those have
+lower bit values (`<sys/attr.h>` in the macOS SDK; the same header gives
+`SPACEFREE` `0x8`, `SPACEAVAIL` `0x10`). Reading the buffer in ascending
+bit order yields garbage (`FILECOUNT` 1,208,602,624, `DIRCOUNT` 192).
+Evidence: two independent programs (the Rust spike, and a later C check
+using the SDK's own constants) both found the 8-byte value after
+`SPACEAVAIL` equals `diskutil`'s Volume Used Space to within a few MB
+(828,716,011,520 B against 828,716,015,616 B in the C check), followed by
+`FILECOUNT`/`DIRCOUNT` as plausible 4-byte counts (5,331,652 / 838,297).
+Do not assume ascending-bit order for the volume buffer: pin the order in a
+test against `diskutil`, or request `SPACEUSED` in a separate call.
 
 **Snapshots** via `fs_snapshot_list` on a volume fd, or `tmutil
 listlocalsnapshots` as fallback. Both give names and dates; **neither gives
@@ -812,21 +831,34 @@ listable under FDA on 27.2; the world-readable system
 `/Library/Application Support/com.apple.TCC/TCC.db` has no measured
 without-FDA behaviour, so do not use it as a positive signal.) Rules:
 
-- any `EPERM` on a candidate that exists means **no FDA**;
-- every existing candidate readable, or every candidate `ENOENT`, means
-  **provisionally FDA**, to be confirmed or refuted by the scan's own
-  unreadable-directory count.
+- **Hypothesis, awaiting a no-FDA run:** an `EPERM` on a candidate that
+  exists means **no FDA**. There are zero without-FDA observations behind
+  this rule, and the spike's own with-FDA baseline weakens it as a general
+  signal: 57 directory opens returned `EPERM` while FDA **was** held (cause
+  not investigated, so it is unknown whether any candidate path behaves
+  likewise).
+- Every existing candidate readable means **FDA observed** (the with-FDA
+  behaviour was measured: Mail, Messages and Safari all listable).
+- Every candidate `ENOENT` is **indeterminate**. The earlier draft called
+  this "provisionally FDA"; that defaults to the permissive answer, which
+  sits badly with this spec's rule against silent under-reporting. Treat it
+  as unknown and show the Limited-scan caveat until something confirms
+  otherwise.
 
-The spike's full-count baseline gives that check a scale: with FDA held,
-the data volume had 57 `EPERM` and 194 `EACCES` directory opens (about 250
-of ~0.83M directories). A count far above that refutes a provisional grant.
+**The scan's unreadable-directory count is not known to discriminate.** With
+FDA held, the data volume had 57 `EPERM` and 194 `EACCES` directory opens
+(about 250 of ~0.83M directories). A denied TCC tree fails at its root, so a
+no-FDA scan may add only a handful of unreadable directories on top of
+that, and nothing measured shows the two counts separate. Do not use the
+count as the confirming check until a no-FDA run supplies the comparison.
 
-**What is still unmeasured.** The without-FDA case could not be run,
-because the measuring process already held the grant, so no `EPERM`
-behaviour was observed and the with-FDA case is pending a human grant. The
-useful consequence: the spike's 6.39M entry count is a **full** count, not
-one truncated by TCC, so its throughput figures are honest. A no-FDA scan
-will see fewer entries and cannot be extrapolated from them.
+**What is still unmeasured.** The **without-FDA** case. The measuring
+process already held the grant, so the with-FDA case *was* observed
+(listable: `~/Library/Mail`, `~/Library/Messages`, `~/Library/Safari`) and
+no `EPERM` behaviour was observed. The useful consequence: the spike's
+6.39M entry count is a **full** count, not one truncated by TCC, so its
+throughput figures are honest. A no-FDA scan will see fewer entries and
+cannot be extrapolated from them.
 
 **FDA cannot be requested programmatically.** There is no prompt to
 trigger. The only move is opening the pane:
@@ -1069,9 +1101,9 @@ Warm figures are the median and best of repeated, interleaved runs. Only one
 cold-ish run exists (the first scan after the binary was built); a true cold
 cache needs root (`purge`) and was not attempted.
 
-1. **Actual scan wall time: 3 to 4 s per 1M entries warm, 14 s per 1M cold.**
-   Warm, 8 threads, 256 KB buffer, 14 runs over 6.39M entries: best
-   **21.1 s** (~300K entries/s), median **27.3 s** (~234K entries/s), worst
+1. **Actual scan wall time: 3 to 4 s per 1M entries warm; 14 s per 1M
+   cold-ish (n=1).** Warm, 8 threads, 256 KB buffer, 14 runs over 6.39M
+   entries: best **21.1 s** (~304K entries/s), median **27.3 s** (~234K entries/s), worst
    42.9 s. That is 3.3 s per 1M at best and 4.3 s per 1M at the median, so
    the 1 to 2M-file target of §1 is met warm (about 3 to 9 s). The single
    cold-ish run took **89.0 s** (~72K entries/s, 14 s per 1M; it also hit
@@ -1105,19 +1137,32 @@ cache needs root (`purge`) and was not attempted.
    reclaimable-on-demand estimate does **not** hold. Purgeable space does
    exist: `volumeAvailableCapacityForImportantUsage` read 176,749,443,260 B
    against 137,179,013,120 B available moments later, so ~39.6 GB (36.9
-   GiB) purgeable, visible only through Foundation. §9 now sources
+   GiB) purgeable, **derived** from two Foundation reads taken moments
+   apart and not cross-checked against `diskutil` or Finder. It is visible
+   only through Foundation. §9 now sources
    purgeable space from there, not from the `getattrlist` pair.
    `ATTR_VOL_SPACEUSED` was 826,595,618,816 B (769.83 GiB), matching
-   `diskutil`'s Volume Used Space (826,586,357,760 B); `SPACEFREE` tracks
-   container-wide free space. `ATTR_VOL_FILECOUNT` / `DIRCOUNT` read
-   5,328,862 / 837,861, usable as a progress denominator. Packing-order
-   gotcha: `SPACEUSED` comes **before** `FILECOUNT`/`DIRCOUNT` in the
-   returned buffer.
-5. **FDA probe: the without-FDA case could not be run; with-FDA is not
-   determined, pending a human grant.** The measuring process evidently
-   already held Full Disk Access (inherited from its host app):
-   `~/Library/Mail`, `~/Library/Messages` and `~/Library/Safari` all opened
-   or listed successfully, so `EPERM` could not be provoked. Findings
+   `diskutil`'s Volume Used Space (826,586,357,760 B). `SPACEFREE` tracks
+   container-wide free space: it read 137,225,666,560 B against
+   `diskutil`'s Container Free Space of 137,225,658,368 B in the same
+   minute (an 8 KB difference). `ATTR_VOL_FILECOUNT` / `DIRCOUNT` read
+   5,328,862 / 837,861, which sit about 4% **under** the scan's own
+   ~5.56M non-directory entries and 1.3% over its ~0.83M directories (the
+   scan could not open ~250). They are **not a reliable total** and are not
+   a progress denominator; §7 holds, progress is not a percentage.
+   **Reconciliation:** the scan's allocated sum, ~795.1 GiB, is ~25 GiB (3%)
+   **over** `SPACEUSED`'s 769.83 GiB. That is the direction §7's clone
+   over-counting and §9's negative residual predict (the scan counts shared
+   blocks once per path). The spike did not isolate the cause, and the
+   ~250 unreadable directories and any snapshots would pull the other way,
+   but the over-count is measured evidence for the signed-residual design,
+   not an unexplained discrepancy. Packing-order gotcha: see §9 (`SPACEUSED`
+   packs before `FILECOUNT`/`DIRCOUNT`, contrary to the header's bit order).
+5. **FDA probe: with-FDA was observed; the without-FDA case is
+   unmeasured.** The measuring process already held Full Disk Access
+   (inherited from its host app): `~/Library/Mail`, `~/Library/Messages`
+   and `~/Library/Safari` all opened or listed successfully, so `EPERM`
+   could not be provoked and no without-FDA behaviour was seen. Findings
    that do hold: **`~/Library/Application Support/com.apple.TCC/TCC.db`
    does not exist on this macOS 27.2 install** (`open` gives `ENOENT`,
    errno 2; the `com.apple.TCC` directory is absent), so the former §11
@@ -1130,7 +1175,11 @@ cache needs root (`purge`) and was not attempted.
    example a fresh launchd job) to settle the without-FDA behaviour.
 6. **Cold-cache throughput: unresolved, an explicit open item.** The only
    cold-ish observation is one run (n=1) at 89.0 s, ~72K entries/s, 14 s per
-   1M entries, confounded by machine load and one `ETIMEDOUT`. A true cold
+   1M entries, confounded by machine load and one `ETIMEDOUT`. It also
+   shows an anomaly: CPU time was ~87 s over 89 s wall with 8 threads, so
+   it used only about one core of parallelism (warm 8-thread runs use
+   4 to 5), which makes it less obviously a cache effect than a stall,
+   contention or load artefact. A true cold
    cache needs root (`purge`), which the spike did not have. This is a
    **prerequisite for Phase 3's index decision (§3), not for Phase 1.**
    Needed: repeated cold runs after `purge` on a quiet machine, plus a
@@ -1146,11 +1195,15 @@ CPU was ~2 s against ~100 to 150 s system CPU. Size the pool at 4 to 8, not
 at twice the logical CPU count.
 
 **Gate (>= 100K entries/s, the throughput form of "10 s per 1M files").**
-Warm: **passes**, median 234K entries/s (best 304K) over 6.39M entries. The
-one cold-ish run, 72K entries/s, is below the line but is a single
-confounded observation. The stateless design (§3) stands on the warm
-evidence; the cold result is open item 6 and makes §3's stateless decision
-provisional, not a reopening of §5.
+**PASS warm / FAIL cold (n=1, confounded); proceeding provisionally on the
+warm evidence, with §3 gated on cold-cache data.** Warm: median 234K
+entries/s (best 304K) over 6.39M entries. Cold-ish: 72K entries/s, one
+run. The single-thread runs (about 69K entries/s, n=2) are likewise below
+the line, though a single thread is not a configuration the engine will
+use. Privileging the warm result is a **judgement, made by the plan's
+coordinator**, who confirmed that proceeding is intended; it is not
+something the data forces. The cold result is open item 6 and makes
+§3's stateless decision provisional, not a reopening of §5.
 
 ---
 
