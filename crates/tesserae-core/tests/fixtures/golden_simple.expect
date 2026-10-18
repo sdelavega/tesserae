@@ -1,0 +1,4 @@
+# name_hex	kind	ino	dev	nlink	logical	allocated
+# from lstat(2); nlink/logical/allocated are 0 for dirs
+612e62696e	reg	145121058	16777231	1	4096	4096
+64	dir	145121060	16777231	0	0	0
