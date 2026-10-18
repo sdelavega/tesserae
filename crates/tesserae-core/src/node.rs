@@ -74,8 +74,11 @@ const _: () = {
 ///
 /// A directory's children are `nodes[child_start .. child_start + child_count]`,
 /// sorted descending by `allocated`. A node with no children has
-/// `child_count == 0` and `child_start == 0`. The `0` is a convention that
-/// keeps the field in bounds for any consumer that checks it, not an index.
+/// `child_count == 0` and `child_start == 0`. That `0` is not an index and
+/// must not be read as one: `child_count == 0` is the guard. It is `0` rather
+/// than the next free position (which for the last leaves would equal the
+/// array length) so a consumer that checks `child_start < nodes.len()` never
+/// rejects a leaf.
 ///
 /// There are 4 bytes of padding after `child_count`, because the next field is
 /// 8-byte aligned. Consumers must not read them.

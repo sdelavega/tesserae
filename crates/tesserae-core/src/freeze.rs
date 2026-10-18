@@ -58,11 +58,37 @@
 //! this by construction (a parent is pushed before its children, and a node
 //! can only name a parent that was already issued an id). A violation means a
 //! bug in the walker, and is a panic here rather than a quietly wrong tree.
+//! See [`try_freeze`] for what each panic is bounded by.
 
 use crate::arena::{Arena, ScanId, ScanNode, CHUNK_NODES};
 use crate::node::{Snapshot, TessNode, FLAG_DIR, FLAG_SYMLINK, NODE_NONE};
 use crate::parse::ObjType;
 use crate::walk::WalkStats;
+
+/// Why [`try_freeze`] produced no snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreezeError {
+    /// The allocator refused one of the freeze's working arrays or the output.
+    /// Nothing was built; the arenas were consumed.
+    OutOfMemory,
+}
+
+/// Allocate room for exactly `n` elements, reporting failure. The only way
+/// this module obtains memory: every push after this stays within capacity,
+/// so none can reallocate and abort.
+fn reserved<T>(n: usize) -> Result<Vec<T>, FreezeError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n)
+        .map_err(|_| FreezeError::OutOfMemory)?;
+    Ok(v)
+}
+
+/// [`reserved`], then `n` copies of `value`.
+fn filled<T: Clone>(n: usize, value: T) -> Result<Vec<T>, FreezeError> {
+    let mut v = reserved(n)?;
+    v.resize(n, value);
+    Ok(v)
+}
 
 /// Freeze the arenas of one scan into a [`Snapshot`].
 ///
@@ -70,39 +96,82 @@ use crate::walk::WalkStats;
 /// worker. No arenas, or only empty ones, give a snapshot with no nodes and
 /// `root == NODE_NONE`.
 ///
-/// Allocation is not fallible here: the working set is a few dozen bytes per
-/// node on top of the arenas themselves, and a failed allocation aborts.
+/// This is [`try_freeze`] for callers with nowhere to report a failure. It
+/// panics where `try_freeze` returns [`FreezeError::OutOfMemory`], so a host
+/// that must survive a pathological volume calls `try_freeze` instead.
 ///
 /// # Panics
 ///
-/// If the arenas violate the preconditions in the module docs, or the scan is
-/// too large to index: `u32::MAX` nodes or more, or more than 4 GiB of names.
-/// Neither is reachable within the 25M-node budget at realistic name lengths.
+/// On [`FreezeError::OutOfMemory`], and as `try_freeze` documents.
 pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
+    match try_freeze(arenas, stats) {
+        Ok(snapshot) => snapshot,
+        Err(FreezeError::OutOfMemory) => panic!("freeze: out of memory building the snapshot"),
+    }
+}
+
+/// [`freeze`], with allocation failure reported instead of fatal.
+///
+/// Every allocation (about 40 bytes per node for the snapshot, and roughly as
+/// much again for working arrays while the arenas are still alive, so around
+/// 2 GB at the 25M-node budget) goes through `try_reserve_exact`.
+/// `tests/freeze_oom.rs` fails each allocation in turn to hold that to account.
+///
+/// # Panics
+///
+/// Malformed input and two representation limits panic rather than return an
+/// error, because they are not conditions of the machine. Each panic is
+/// bounded by a limit, not impossible:
+///
+/// * **Programmer errors a walk does not produce:** no root or more than one,
+///   a parent that no supplied arena holds, a parent cycle, or two non-empty
+///   arenas sharing a thread tag. A walk pushes a parent before its children
+///   and a node can only name an id already issued, so these need a walker
+///   bug or a caller who dropped an arena. A tree that rendered anyway would
+///   be wrong, which is worse than no tree.
+/// * **Names over 4 GiB**, because [`TessNode::name_off`] is 32 bits. Reaching
+///   that takes about 143M entries at ~30 bytes of name, against a node
+///   budget of 25M that trips about 5.7 times sooner; but the budget counts
+///   nodes and not bytes, and at the 255-byte maximum it takes only 16.8M
+///   entries, so a pathological volume of long names gets here first.
+/// * **`u32::MAX` nodes or more**, because indices are 32 bits. That is about
+///   170 times the node budget, and the budget is per arena until the parallel
+///   walker makes it global (see the walker's notes), so it is bounded by
+///   `workers * budget`, still far below.
+///
+/// The FFI boundary wraps calls in `catch_unwind` (release builds keep
+/// `panic = "unwind"`).
+pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, FreezeError> {
     // Pass 1: one dense index per node, across every arena.
-    let index = IdIndex::new(&arenas);
+    let index = IdIndex::new(&arenas)?;
     let n = index.total;
     if n == 0 {
-        return Snapshot {
+        return Ok(Snapshot {
             nodes: Vec::new(),
             names: Vec::new(),
             root: NODE_NONE,
             stats,
-        };
+        });
     }
-    let mut src: Vec<&ScanNode> = Vec::with_capacity(n);
-    let mut arena_of: Vec<u16> = Vec::with_capacity(n);
+    let mut src: Vec<&ScanNode> = reserved(n)?;
+    let mut arena_of: Vec<u16> = reserved(n)?;
+    let mut name_bytes = 0u64;
     for (a, arena) in arenas.iter().enumerate() {
         for (node_id, node) in arena.iter() {
             debug_assert_eq!(index.resolve(node_id), Some(src.len()));
             src.push(node);
             // At most 65_536 arenas: distinct non-empty thread tags.
             arena_of.push(a as u16);
+            name_bytes += u64::from(node.name.len);
         }
     }
+    let name_bytes = usize::try_from(name_bytes)
+        .ok()
+        .filter(|&b| u32::try_from(b).is_ok())
+        .expect("more than 4 GiB of names");
     let name_of = |v: usize| arenas[usize::from(arena_of[v])].name_bytes(src[v].name);
 
-    let mut parent: Vec<u32> = Vec::with_capacity(n);
+    let mut parent: Vec<u32> = reserved(n)?;
     let mut root = None;
     for (v, node) in src.iter().enumerate() {
         if node.parent == ScanId::NONE {
@@ -122,7 +191,7 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     // off[v + 1]` is v's range in `kids`; `off` has n + 1 entries so that the
     // last node's range has an end, and a node with no children has an empty
     // range (`off[v] == off[v + 1]`) rather than an invalid one.
-    let mut off = vec![0u32; n + 1];
+    let mut off = filled(n + 1, 0u32)?;
     for &p in &parent {
         if p != NODE_NONE {
             off[p as usize + 1] += 1;
@@ -134,8 +203,9 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     debug_assert_eq!(off[n] as usize, n - 1, "every node but the root is a child");
 
     // Pass 3: scatter each node into its parent's range.
-    let mut kids = vec![0u32; n - 1];
-    let mut next = off.clone();
+    let mut kids = filled(n - 1, 0u32)?;
+    let mut next = reserved(n + 1)?;
+    next.extend_from_slice(&off);
     for (v, &p) in parent.iter().enumerate() {
         if p != NODE_NONE {
             kids[next[p as usize] as usize] = v as u32;
@@ -149,14 +219,16 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     // children whatever order the arenas were supplied in, so its reverse
     // visits every child before its parent. A node not reached from the root
     // (an orphaned cycle) shows up as a short order.
-    let order = breadth_first(root, &kids, &range, n);
+    let order = breadth_first(root, &kids, &range, n)?;
     assert_eq!(
         order.len(),
         n,
         "freeze found nodes unreachable from the root (a parent cycle)"
     );
-    let mut logical: Vec<u64> = src.iter().map(|x| x.logical).collect();
-    let mut allocated: Vec<u64> = src.iter().map(|x| x.allocated).collect();
+    let mut logical: Vec<u64> = reserved(n)?;
+    logical.extend(src.iter().map(|x| x.logical));
+    let mut allocated: Vec<u64> = reserved(n)?;
+    allocated.extend(src.iter().map(|x| x.allocated));
     for &v in order.iter().rev() {
         let p = parent[v as usize];
         if p != NODE_NONE {
@@ -169,6 +241,7 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     // Pass 5: sort every sibling range, largest first. Sizes are final now,
     // so a directory sorts by what it contains. Ties go to the name and then
     // to the dense index, so equal sizes still give one deterministic order.
+    // An unstable sort works in place, so it allocates nothing.
     for v in 0..n {
         kids[range(v)].sort_unstable_by(|&a, &b| {
             let (a, b) = (a as usize, b as usize);
@@ -182,8 +255,8 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
     // Pass 6: lay the sorted tree out breadth-first. Each node's children are
     // appended together, so they are contiguous, and the position at which
     // they were appended is `child_start`.
-    let mut layout: Vec<u32> = Vec::with_capacity(n);
-    let mut child_start: Vec<u32> = Vec::with_capacity(n);
+    let mut layout: Vec<u32> = reserved(n)?;
+    let mut child_start: Vec<u32> = reserved(n)?;
     layout.push(root as u32);
     let mut at = 0;
     while at < layout.len() {
@@ -198,17 +271,18 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
         at += 1;
     }
     assert_eq!(layout.len(), n, "layout must place every node exactly once");
-    let mut final_of = vec![NODE_NONE; n];
+    let mut final_of = filled(n, NODE_NONE)?;
     for (i, &v) in layout.iter().enumerate() {
         final_of[v as usize] = i as u32;
     }
 
-    let mut names: Vec<u8> = Vec::new();
-    let mut nodes: Vec<TessNode> = Vec::with_capacity(n);
+    let mut names: Vec<u8> = reserved(name_bytes)?;
+    let mut nodes: Vec<TessNode> = reserved(n)?;
     for (i, &v) in layout.iter().enumerate() {
         let v = v as usize;
         let name = name_of(v);
-        let name_off = u32::try_from(names.len()).expect("more than 4 GiB of names");
+        // `names` holds exactly the summed lengths, checked to fit 32 bits.
+        let name_off = names.len() as u32;
         names.extend_from_slice(name);
         let mut flags = src[v].flags;
         match src[v].obj_type {
@@ -231,23 +305,25 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
             allocated: allocated[v],
         });
     }
-    Snapshot {
+    Ok(Snapshot {
         nodes,
         names,
         root: 0,
         stats,
-    }
+    })
 }
 
 /// Indices from `root` in breadth-first order, over the child lists `kids`
 /// with ranges given by `range`. Visits only what is reachable from `root`.
+/// Each node sits in at most one range, so `capacity` (the node count) holds
+/// the whole order and nothing reallocates.
 fn breadth_first(
     root: usize,
     kids: &[u32],
     range: &impl Fn(usize) -> std::ops::Range<usize>,
     capacity: usize,
-) -> Vec<u32> {
-    let mut order: Vec<u32> = Vec::with_capacity(capacity);
+) -> Result<Vec<u32>, FreezeError> {
+    let mut order: Vec<u32> = reserved(capacity)?;
     order.push(root as u32);
     let mut at = 0;
     while at < order.len() {
@@ -255,7 +331,7 @@ fn breadth_first(
         order.extend_from_slice(&kids[range(v)]);
         at += 1;
     }
-    order
+    Ok(order)
 }
 
 /// Where each arena's nodes sit in the dense index.
@@ -278,8 +354,8 @@ struct ArenaSlot {
 }
 
 impl IdIndex {
-    fn new(arenas: &[Arena]) -> Self {
-        let mut slots = Vec::with_capacity(arenas.len());
+    fn new(arenas: &[Arena]) -> Result<Self, FreezeError> {
+        let mut slots = reserved(arenas.len())?;
         let mut total = 0usize;
         for arena in arenas {
             // The arena's own tag, read off an id it issued: an empty arena
@@ -299,12 +375,12 @@ impl IdIndex {
             u32::try_from(total).is_ok_and(|t| t < NODE_NONE),
             "too many nodes to index with 32 bits"
         );
-        slots.sort_by_key(|s| s.thread);
+        slots.sort_unstable_by_key(|s| s.thread);
         assert!(
             slots.windows(2).all(|w| w[0].thread != w[1].thread),
             "two arenas share thread tag, so their ids are ambiguous"
         );
-        IdIndex { slots, total }
+        Ok(IdIndex { slots, total })
     }
 
     /// The dense index of the node `id` names, or `None` if no supplied arena
@@ -435,6 +511,22 @@ mod tests {
         assert_eq!((s.nodes[0].logical, s.nodes[0].allocated), (0, 0));
         assert_eq!(s.nodes[0].flags, FLAG_DIR);
         assert_eq!(name_of(&s, &s.nodes[0]), b"root");
+    }
+
+    #[test]
+    fn allocation_helpers_report_failure_and_try_freeze_agrees_with_freeze() {
+        // usize::MAX elements overflows the layout, so this is a Result, not
+        // an abort. The injected-failure sweep is `tests/freeze_oom.rs`.
+        assert_eq!(
+            reserved::<u64>(usize::MAX).err(),
+            Some(FreezeError::OutOfMemory)
+        );
+        assert_eq!(
+            filled::<u8>(usize::MAX, 0).err(),
+            Some(FreezeError::OutOfMemory)
+        );
+        let s = try_freeze(vec![empty_arena_with_root()], WalkStats::default()).unwrap();
+        assert_eq!((s.nodes.len(), s.root), (1, 0));
     }
 
     #[test]
