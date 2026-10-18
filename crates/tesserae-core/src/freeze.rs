@@ -1333,6 +1333,7 @@ mod tests {
         let strat = arb_tree();
         let (mut unsorted, mut multi, mut child_before_parent, mut deep, mut ties) =
             (0, 0, 0, 0, 0);
+        let mut cross_arena_ties = 0;
         let samples = 400;
         for _ in 0..samples {
             let t = strat.new_tree(&mut runner).expect("sample").current();
@@ -1352,6 +1353,27 @@ mod tests {
                 s.windows(2).any(|w| w[0] == w[1])
             }) {
                 ties += 1;
+            }
+            // The seventh property's precondition: two siblings whose rolled-up
+            // sizes are equal (what the sort compares) and which were pushed
+            // into different arenas. Ties within one arena keep push order
+            // whatever order the arenas arrive in, so only this conjunction
+            // makes the tie-break matter.
+            let rolled = t.expected_totals();
+            let mut kids: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (i, n) in t.nodes.iter().enumerate() {
+                if let Some(p) = n.parent {
+                    kids.entry(p).or_default().push(i);
+                }
+            }
+            if kids.values().any(|g| {
+                g.iter().any(|&i| {
+                    g.iter().any(|&j| {
+                        i < j && rolled[i].1 == rolled[j].1 && t.nodes[i].arena != t.nodes[j].arena
+                    })
+                })
+            }) {
+                cross_arena_ties += 1;
             }
             let used: HashSet<usize> = t.nodes.iter().map(|n| n.arena).collect();
             if used.len() > 1 {
@@ -1377,10 +1399,18 @@ mod tests {
                 deep += 1;
             }
         }
+        // Floors sit well under the rates this deterministic run measures, so
+        // a partial regression is noticed and ordinary change is not:
+        // unsorted 92%, ties 93%, multi-arena 75%, child-arena-first 72%,
+        // deep 90%, cross-arena ties 57%.
         let floor = samples / 4;
         assert!(unsorted > floor, "unsorted sibling groups: {unsorted}");
         assert!(ties > samples / 10, "sibling ties: {ties}");
-        assert!(multi > floor, "multi-arena trees: {multi}");
+        assert!(multi > samples * 3 / 5, "multi-arena trees: {multi}");
+        assert!(
+            cross_arena_ties > samples * 2 / 5,
+            "cross-arena sibling ties: {cross_arena_ties}"
+        );
         assert!(
             child_before_parent > samples / 10,
             "child arena first: {child_before_parent}"
