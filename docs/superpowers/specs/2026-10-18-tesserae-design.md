@@ -991,27 +991,108 @@ those tests take.
 
 ---
 
-## 13. Open questions for the spike
+## 13. Spike results
 
-Everything downstream assumes scan speed. **A short throwaway Rust spike
-runs before implementation:** `getattrlistbulk` plus a work-stealing pool
-over a real volume, printing wall time and file count. No UI, no tree.
+Everything downstream assumes scan speed. A throwaway Rust spike ran before
+implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread
+pool over a real volume, printing wall time and file count. No UI, no tree.
+The spike code has been deleted; these numbers are its only product.
 
-Five things to measure rather than assume:
+**Conditions.** Apple M5, 10 logical CPUs (`hw.ncpu`), macOS 27.2 (build
+26B5112a), internal APFS NVMe, 926 GiB volume at 86% full. Rust 1.99.1
+`--release`, `MACOSX_DEPLOYMENT_TARGET=13.0`. Scan root
+`/System/Volumes/Data`, not crossing devices (25 mount points skipped).
 
-1. **Actual scan wall time** for 1–2M files. If it is 30 seconds rather
-   than 5, the correct architecture is a different one — persistent index,
-   background scanning — and that must be known before a UI is built on
-   the wrong assumption.
-2. **Buffer size knee** — 64 KB vs 256 KB vs 1 MB.
-3. **Marginal cost of `ATTR_FILE_RSRCALLOCSIZE`**, which decides whether
-   compressed-file accounting can be unconditional.
-4. **Direction of `SPACEAVAIL` vs `SPACEFREE`** on APFS, and whether the
-   gap really corresponds to purgeable space.
-5. **FDA probe behaviour** — that reading `TCC.db` returns `EPERM` without
-   FDA and succeeds with it, and that the probe itself triggers no prompt.
+**Tree measured.** About **6.39M entries**: ~5.56M non-directory entries
+plus ~0.83M directories (the tree drifts by ~0.1% between runs because the
+machine was live). 795 GiB allocated, 3.6 TiB logical (sparse files).
+**Rates below are entries per second over that 6.39M**, and "per 1M" figures
+are scaled from it. Unreadable: 57 directories `EPERM`, 194 `EACCES`, plus
+one `EACCES` from `getattrlistbulk` itself (about 250 directories, <0.03%).
+The measuring process appears to have had Full Disk Access already (see
+item 5), so a no-FDA scan would skip substantially more.
 
-Where thread count stops helping falls out of (1).
+**Hygiene.** The machine was in normal use throughout (load average 3 to 12,
+a Time Machine helper seen running once), so single runs vary by roughly 30%.
+Warm figures are the median and best of repeated, interleaved runs. Only one
+cold-ish run exists (the first scan after the binary was built); a true cold
+cache needs root (`purge`) and was not attempted.
+
+1. **Actual scan wall time: 3 to 4 s per 1M entries warm, 14 s per 1M cold.**
+   Warm, 8 threads, 256 KB buffer, 14 runs over 6.39M entries: best
+   **21.1 s** (~300K entries/s), median **27.3 s** (~234K entries/s), worst
+   42.9 s. That is 3.3 s per 1M at best and 4.3 s per 1M at the median, so
+   the 1 to 2M-file target of §1 is met warm (about 3 to 9 s). The single
+   cold-ish run took **89.0 s** (~72K entries/s, 14 s per 1M; it also hit
+   one `ETIMEDOUT` from `getattrlistbulk`), which would be 14 to 28 s for 1
+   to 2M entries. **The cold figure is n=1 and confounded; re-measure it
+   before relying on it.** The persistent-index alternative is not
+   triggered by the warm numbers, but the UI must stream progress, because
+   a cold scan of a large volume can take over a minute.
+2. **Buffer size knee: none between 64 KB and 1 MB.** 8 threads, rsrc on,
+   median wall: 64 KB **27.6 s** (best 20.1, n=7), 256 KB **27.3 s** (best
+   21.1, n=14), 1 MB **27.6 s** (best 21.2, n=7). The differences are
+   inside run-to-run noise. The syscall count is ~1.61M at every size,
+   about two per directory, because nearly every directory fits in one 64 KB
+   buffer and the second call only returns the end-of-directory marker.
+   Buffer size is not a lever; 256 KB is fine for headroom on huge
+   directories (not measured).
+3. **Marginal cost of `ATTR_FILE_RSRCALLOCSIZE`: about 1%, indistinguishable
+   from noise.** 8 threads, 256 KB, 14 interleaved runs each: median
+   **27.3 s** with vs **27.0 s** without (+1.1%); best 21.1 s vs 21.7 s
+   (-3%). Cheap enough to leave on unconditionally. Separately, across the
+   **3.36M `UF_COMPRESSED` files** (about 60% of all non-directory
+   entries) the resource-fork allocation summed to **0.05 GiB**, and
+   `ATTR_FILE_ALLOCSIZE` alone reported 12,288 B for a 5 MB compressed test
+   file, equal to `st_blocks * 512`. On this APFS volume the compressed-file
+   under-reporting trap in "Size semantics" did not appear in
+   `ATTR_FILE_ALLOCSIZE`; keep the attribute, but do not expect it to move
+   totals.
+4. **`SPACEAVAIL` vs `SPACEFREE`: they are equal.** Both read
+   **137,216,397,312 B** (127.79 GiB) on the Data volume, and the same on
+   `/`. There is no gap, so the §9 premise that the gap is the system's
+   reclaimable-on-demand estimate does **not** hold. Purgeable space does
+   exist: `volumeAvailableCapacityForImportantUsage` read 176,749,443,260 B
+   against 137,179,013,120 B available moments later, so ~39.6 GB (36.9
+   GiB) purgeable, visible only through Foundation. §9 must source
+   purgeable space from there, not from the `getattrlist` pair.
+   `ATTR_VOL_SPACEUSED` was 826,595,618,816 B (769.83 GiB), matching
+   `diskutil`'s Volume Used Space (826,586,357,760 B); `SPACEFREE` tracks
+   container-wide free space. `ATTR_VOL_FILECOUNT` / `DIRCOUNT` read
+   5,328,862 / 837,861, usable as a progress denominator. Packing-order
+   gotcha: `SPACEUSED` comes **before** `FILECOUNT`/`DIRCOUNT` in the
+   returned buffer.
+5. **FDA probe: the without-FDA case could not be run; with-FDA is not
+   determined, pending a human grant.** The measuring process evidently
+   already held Full Disk Access (inherited from its host app):
+   `~/Library/Mail`, `~/Library/Messages` and `~/Library/Safari` all opened
+   or listed successfully, so `EPERM` could not be provoked. Findings
+   that do hold: **`~/Library/Application Support/com.apple.TCC/TCC.db`
+   does not exist on this macOS 27.2 install** (`open` gives `ENOENT`,
+   errno 2; the `com.apple.TCC` directory is absent), so the §11 primary
+   probe returns `ENOENT`, not `EPERM`, here. The system-level
+   `/Library/Application Support/com.apple.TCC/TCC.db` opened successfully
+   (mode 0644, root-owned, so it proves nothing about FDA while the process
+   already has it). No system prompt was observed, but no screen capture
+   was taken, so that is unconfirmed. Re-run from a process with no FDA
+   (for example a fresh launchd job) before settling the probe design;
+   until then treat `ENOENT` as indeterminate and fall back to
+   `~/Library/Mail` as a probe.
+
+Where thread count stops helping falls out of (1): **about 4 to 8
+threads.** Over 6.39M entries, rsrc on, 256 KB: 1 thread **90.6 s and
+95.5 s** (~69K entries/s, n=2); 4 threads median **28.5 s** (~224K/s, n=3);
+8 threads median **27.3 s** (~234K/s, n=14); 16 threads median **25.7 s**
+(~249K/s, n=3). One to four threads is a 3.2x gain; beyond that the gain is
+under 1.3x and within noise. The scan is kernel-bound: with 8 threads user
+CPU was ~2 s against ~100 to 150 s system CPU. Size the pool at 4 to 8, not
+at twice the logical CPU count.
+
+**Gate (>= 100K entries/s, the throughput form of "10 s per 1M files").**
+Warm: **passes**, median 234K entries/s (best 304K) over 6.39M entries. The
+one cold-ish run, 72K entries/s, is below the line but is a single
+confounded observation. The stateless design (§3) stands on the warm
+evidence; the cold result is an open item, not a reopening of §5.
 
 ---
 
