@@ -134,7 +134,7 @@ mod tests {
     use crate::parse::ObjType;
     use crate::walk::{walk_serial_with_inodes, OpenAt, WalkOptions, WalkStats};
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
     use tesserae_testutil::Fixture;
 
     const MIB: u64 = 1 << 20;
@@ -211,11 +211,26 @@ mod tests {
         const KEYS: u64 = 2_000;
         const THREADS: usize = 8;
         let set = Arc::new(InodeSet::new(16));
+        // Without a common start each thread's ~2000 uncontended lock
+        // operations finish in less time than a thread takes to spawn, so the
+        // early threads could be done before the late ones begin and nothing
+        // would be contended. The barrier releases every thread at once, and
+        // all of them walk the same keys in the same order so that they
+        // arrive at each key together: that is the window a non-atomic
+        // check-then-insert would lose in. (A per-thread rotation of the key
+        // order was tried and made the test weaker: it spreads the threads
+        // across different keys, so a split check-then-insert was caught 0
+        // times in 20 runs against 20 of 20 for this form.)
+        let start = Arc::new(Barrier::new(THREADS));
         let wins: Vec<u64> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..THREADS)
                 .map(|_| {
                     let set = Arc::clone(&set);
-                    scope.spawn(move || (0..KEYS).filter(|&i| set.claim(7, i)).count() as u64)
+                    let start = Arc::clone(&start);
+                    scope.spawn(move || {
+                        start.wait();
+                        (0..KEYS).filter(|&k| set.claim(7, k)).count() as u64
+                    })
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
