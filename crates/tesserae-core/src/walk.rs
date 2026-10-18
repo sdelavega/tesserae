@@ -147,14 +147,17 @@
 //!
 //! A worker descends depth-first through [`Frame`]s, as the serial walk does,
 //! and the directories it does *not* descend immediately are offered to the
-//! pool through [`Share`]. Those carry an absolute path, because the
-//! descriptor chain that `openat` needs belongs to the thread that built it.
-//! A path longer than `PATH_MAX` cannot be reopened that way, so such a
+//! pool through [`Share`]. Those carry a path *relative to the scan root*,
+//! because the descriptor chain that `openat` needs belongs to the frame that
+//! built it. Whoever takes one reopens it beneath the root's descriptor, which
+//! stays open for the whole walk, with [`open_beneath`]: a symlink in any
+//! component of that path fails the open rather than redirecting the walk. A
+//! relative path longer than `PATH_MAX` cannot be reopened that way, so such a
 //! directory is kept and descended locally instead; nothing is dropped.
 
 use std::ffi::{CStr, CString, OsStr};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -182,7 +185,14 @@ const MIN_BUFFER_BYTES: usize = 2048;
 /// Longest string that can be handed to `openat` without allocating: either a
 /// single entry name or a whole path. `PATH_MAX` is 1024 including the NUL, so
 /// anything longer is already unopenable.
-const MAX_PATH_BYTES: usize = 1023;
+pub(crate) const MAX_PATH_BYTES: usize = 1023;
+
+/// Times `Walker::offer` kept a directory because its relative path was too
+/// long to publish. Test-only, so a test can assert the branch it means to
+/// cover actually ran. Global, so a test reads the change across its own walk;
+/// only a fixture with a path over `MAX_PATH_BYTES` moves it.
+#[cfg(test)]
+pub(crate) static KEPT_TOO_LONG: AtomicU64 = AtomicU64::new(0);
 /// Nodes a worker draws from the shared [`NodeBudget`] at a time. One atomic
 /// per node would put every worker on the same cache line for the whole scan;
 /// one per thousand is invisible. The cost is that a worker can hold up to
@@ -425,15 +435,17 @@ pub(crate) trait Share {
     /// itself with `openat`.
     fn wants_work(&self) -> bool;
 
-    /// Offer `node`, the directory at `path` and at absolute depth `depth`, to
-    /// any worker. The implementation must count the task before it can be
-    /// seen, or the termination protocol could observe an empty pool while
-    /// this directory is still unwalked.
-    fn publish(&self, path: Arc<Path>, node: ScanId, depth: u16);
+    /// Offer `node`, the directory at `rel` (relative to the scan root) and at
+    /// absolute depth `depth`, to any worker. The implementation must count
+    /// the task before it can be seen, or the termination protocol could
+    /// observe an empty pool while this directory is still unwalked.
+    fn publish(&self, rel: Arc<Path>, node: ScanId, depth: u16);
 
     /// Set `flags` on `node`, which belongs to another worker's arena and so
-    /// cannot be touched until the workers have joined.
-    fn flag_foreign(&self, node: ScanId, flags: u16);
+    /// cannot be touched until the workers have joined. Returns `false` if the
+    /// flag could not be recorded (no memory for it), so the caller can say
+    /// the result is short.
+    fn flag_foreign(&self, node: ScanId, flags: u16) -> bool;
 }
 
 /// How the walker opens a child directory. The one seam in the descent path.
@@ -448,11 +460,73 @@ pub(crate) trait Share {
 /// `cfg(test)` thread-local: a thread-local seam would be invisible to the
 /// worker threads.
 pub(crate) trait DirOpener: Sync {
-    /// Open the directory `name` relative to the directory open as `parent`.
-    /// `parent` may be [`libc::AT_FDCWD`], in which case `name` is a path
-    /// resolved from the process's working directory; the parallel walker
-    /// reopens a stolen directory that way. Returns the errno on failure.
+    /// Open the directory `name`, a single entry name, relative to the
+    /// directory open as `parent`. Returns the errno on failure.
     fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int>;
+
+    /// Reopen a directory the parallel walker published: `rel` is a path of
+    /// one or more components relative to `root`, the scan root's descriptor.
+    ///
+    /// The default is [`open_beneath`], which refuses a symlink in *any*
+    /// component. A test opener that intercepts only [`open_dir_at`] gets the
+    /// real reopen; one that wants to reach this window overrides this too.
+    ///
+    /// [`open_dir_at`]: DirOpener::open_dir_at
+    fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+        open_beneath(root, rel)
+    }
+}
+
+/// Flags for every directory the walk opens below the root.
+const DIR_FLAGS: c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+
+/// `openat(2)` with `EINTR` retried and the descriptor owned.
+fn openat_retrying(parent: RawFd, name: &CStr, flags: c_int) -> Result<OwnedFd, c_int> {
+    loop {
+        // SAFETY: `name` is a live NUL-terminated string.
+        let fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
+        if fd >= 0 {
+            // SAFETY: `openat` just returned this descriptor and nothing else
+            // owns it.
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+        match errno() {
+            libc::EINTR => continue,
+            e => return Err(e),
+        }
+    }
+}
+
+/// Open the directory at `rel` beneath `root` without following a symlink in
+/// any component of `rel`.
+///
+/// # The guarantee, as measured
+///
+/// `O_NOFOLLOW` covers only the final component, so a reopen by path with it
+/// alone could be redirected by an ancestor swapped for a symlink between
+/// enumeration and reopen — exactly the race the serial walker's
+/// descriptor-relative descent exists to close. `O_NOFOLLOW_ANY` (macOS 11+;
+/// the deployment target is 13.0) refuses a symlink anywhere in `rel`.
+/// Probed on this machine (macOS 27.2), relative to a directory descriptor:
+///
+/// * no symlink in `rel`: opens;
+/// * an intermediate component is a symlink, including an ancestor swapped
+///   for one after the root was opened: fails with `ELOOP` where plain
+///   `O_NOFOLLOW` follows it and opens the redirect target;
+/// * the final component is a symlink: `ELOOP` (plain `O_NOFOLLOW` with
+///   `O_DIRECTORY` gives `ENOTDIR`);
+/// * symlinks in the path that was used to open `root` itself (fixtures live
+///   under `/var`, a symlink to `private/var`) do not matter: `root` is a
+///   descriptor, so nothing above it is resolved again;
+/// * `..` is still permitted. `rel` is built only from names the kernel
+///   returned for directory entries, which are never `.`, `..` or contain a
+///   `/`, so it cannot climb out of the root.
+///
+/// Either errno lands in [`WalkStats::errors`], as every other open failure
+/// that is neither a denial nor a resource shortfall does: the directory is
+/// recorded but not entered.
+pub(crate) fn open_beneath(root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+    openat_retrying(root, rel, DIR_FLAGS | libc::O_NOFOLLOW_ANY)
 }
 
 /// The real thing: `openat(2)` that refuses to follow a symlink and refuses
@@ -461,20 +535,7 @@ pub(crate) struct OpenAt;
 
 impl DirOpener for OpenAt {
     fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        loop {
-            // SAFETY: `name` is a live NUL-terminated string.
-            let fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
-            if fd >= 0 {
-                // SAFETY: `openat` just returned this descriptor and nothing
-                // else owns it.
-                return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
-            }
-            match errno() {
-                libc::EINTR => continue,
-                e => return Err(e),
-            }
-        }
+        openat_retrying(parent, name, DIR_FLAGS | libc::O_NOFOLLOW)
     }
 }
 
@@ -528,11 +589,15 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
         budget: &budget,
         halt: &halt,
         root_volume,
+        root_path: &opts.root,
+        // Nothing is ever reopened by path in a serial walk, so the root's
+        // descriptor can belong to the root frame and close with it.
+        root_dir: None,
     };
     let mut walker = Walker::new(&ctx, None, opts, 0)?;
     // `run_root` records the reason in the stats; a serial walk has no other
     // worker to tell.
-    let _ = walker.run_root(&opts.root, root_fd);
+    let _ = walker.run_root(root_fd);
     Ok(walker.finish())
 }
 
@@ -606,6 +671,13 @@ pub(crate) struct WalkerCtx<'a, O> {
     /// The volume the scan root lives on. Every directory opened is compared
     /// with it; see `Walker::admit`.
     pub root_volume: VolumeId,
+    /// The scan root as the caller named it. Reported paths are this joined
+    /// with a path relative to the root; it is never opened again.
+    pub root_path: &'a Path,
+    /// The scan root, open for the whole walk: every published directory is
+    /// reopened relative to it with [`open_beneath`]. `None` in a serial walk,
+    /// which never reopens anything.
+    pub root_dir: Option<BorrowedFd<'a>>,
 }
 
 /// One thread walking. A serial walk has one; the pool has one per worker,
@@ -625,14 +697,16 @@ pub(crate) struct Walker<'a, O> {
     max_depth: u16,
     root_volume: VolumeId,
     include_non_local: bool,
+    root_path: &'a Path,
+    root_dir: Option<BorrowedFd<'a>>,
     /// The node this worker's current task is rooted at, and that directory's
-    /// absolute path. A path is rebuilt by climbing the parent chain only as
-    /// far as `task_root`, then joining the result onto `base`, because above
-    /// the task root the chain may leave this arena. A serial walk sets
-    /// `ScanId::NONE` and an empty base, so it climbs the whole way, as it
-    /// always did.
+    /// path *relative to the scan root*. A path is rebuilt by climbing the
+    /// parent chain only as far as `task_root`, then joining the result onto
+    /// `task_rel`, because above the task root the chain may leave this arena.
+    /// For the root task `task_root` is the root node itself and `task_rel` is
+    /// empty, so the climb stops just below the root.
     task_root: ScanId,
-    base: Arc<Path>,
+    task_rel: Arc<Path>,
     arena: Arena,
     stats: WalkStats,
 }
@@ -678,8 +752,10 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             max_depth: opts.max_depth,
             root_volume: ctx.root_volume,
             include_non_local: opts.include_non_local,
+            root_path: ctx.root_path,
+            root_dir: ctx.root_dir,
             task_root: ScanId::NONE,
-            base: Arc::from(Path::new("")),
+            task_rel: Arc::from(Path::new("")),
             arena: Arena::new(thread, arena_cap),
             stats: WalkStats::default(),
         })
@@ -690,16 +766,15 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     }
 
     /// Walk the scan root, whose node has not been pushed yet and whose
-    /// descriptor is already open.
-    pub(crate) fn run_root(
-        &mut self,
-        root_path: &Path,
-        root_fd: OwnedFd,
-    ) -> Result<(), Incomplete> {
+    /// descriptor is already open. The root node's name is the root path as
+    /// the caller gave it.
+    pub(crate) fn run_root(&mut self, root_fd: OwnedFd) -> Result<(), Incomplete> {
         self.task_root = ScanId::NONE;
-        self.base = Arc::from(Path::new(""));
+        self.task_rel = Arc::from(Path::new(""));
+        let root_name = self.root_path.as_os_str().as_bytes();
         self.guard(|w| {
-            let root = w.push(root_path.as_os_str().as_bytes(), ScanId::NONE, None)?;
+            let root = w.push(root_name, ScanId::NONE, None)?;
+            w.task_root = root;
             if w.max_depth == 0 {
                 w.stats.depth_capped += 1;
                 return Ok(());
@@ -708,20 +783,20 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         })
     }
 
-    /// Walk a directory another worker enumerated and offered: `node` is
-    /// already recorded (in whichever arena pushed it), `path` is where it
-    /// lives and `depth` is its absolute depth.
+    /// Walk a directory a worker enumerated and published: `node` is already
+    /// recorded (in whichever arena pushed it), `rel` is where it lives
+    /// relative to the scan root, and `depth` is its absolute depth.
     pub(crate) fn run_dir(
         &mut self,
-        path: Arc<Path>,
+        rel: Arc<Path>,
         node: ScanId,
         depth: u16,
     ) -> Result<(), Incomplete> {
         self.task_root = node;
-        self.base = path;
+        self.task_rel = rel;
         self.guard(|w| {
-            let path = Arc::clone(&w.base);
-            match w.open_path(&path) {
+            let rel = Arc::clone(&w.task_rel);
+            match w.reopen(&rel) {
                 Ok(fd) => {
                     if w.admit(node, &fd)? {
                         w.subtree(fd, node, depth)?;
@@ -828,7 +903,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         else {
             return Ok(true);
         };
-        let path = self.path_of(id)?;
+        let path = self.report_path_of(id)?;
         self.stats
             .skipped_mounts
             .try_reserve(1)
@@ -866,9 +941,9 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     ///
     /// Nothing is published before the frame has been enumerated to
     /// exhaustion, and `frame.next` is still 0, so taking children off the
-    /// back cannot skip one. A subdirectory whose absolute path would exceed
-    /// `PATH_MAX` is kept: it could not be reopened by path, and losing it
-    /// would lose its bytes.
+    /// back cannot skip one. A subdirectory whose path relative to the scan
+    /// root would exceed `PATH_MAX` is kept: it could not be reopened by that
+    /// path, and losing it would lose its bytes.
     fn offer(&mut self, frame: &mut Frame, dir: ScanId) -> Result<(), Incomplete> {
         debug_assert_eq!(frame.next, 0, "offer runs before any descent");
         let Some(share) = self.share else {
@@ -877,21 +952,27 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         if frame.children.len() < 2 || !share.wants_work() {
             return Ok(());
         }
-        let dir_path = self.path_of(dir)?;
+        let dir_rel = self.rel_of(dir)?;
         let depth = frame.depth + 1;
         while frame.children.len() > 1 && share.wants_work() {
             let &id = frame.children.last().expect("len > 1");
-            let Some(path) = self.child_path(&dir_path, id) else {
+            let Some(rel) = self.child_rel(&dir_rel, id) else {
+                // Too long to hand to `openat`: kept, and descended here with
+                // a single-name `openat` from this frame's descriptor.
+                #[cfg(test)]
+                KEPT_TOO_LONG.fetch_add(1, Ordering::Relaxed);
                 break;
             };
             frame.children.pop();
-            share.publish(path, id, depth);
+            share.publish(rel, id, depth);
         }
         Ok(())
     }
 
-    /// `dir`'s child `id` as an absolute path, or `None` if it would not fit
-    /// `PATH_MAX`.
+    /// `dir`'s child `id` as a path relative to the scan root, or `None` if it
+    /// would not fit in the `PATH_MAX` an `openat` beneath the root accepts.
+    /// The limit applies to the relative path, because that is the string the
+    /// reopen hands the kernel; the root's own absolute path does not count.
     ///
     /// # The one infallible allocation on the hot path
     ///
@@ -907,21 +988,44 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     /// 100-byte request can be refused after a megabyte chunk succeeded — so
     /// this is a residual risk, accepted because there is no fallible
     /// alternative, not one argued away.
-    fn child_path(&self, dir: &Path, id: ScanId) -> Option<Arc<Path>> {
+    fn child_rel(&self, dir: &Path, id: ScanId) -> Option<Arc<Path>> {
         let node = self.arena.get(id)?;
         let name = self.arena.name_bytes(node.name);
-        if dir.as_os_str().as_bytes().len() + 1 + name.len() > MAX_PATH_BYTES {
+        let dir_len = dir.as_os_str().as_bytes().len();
+        let len = if dir_len == 0 { 0 } else { dir_len + 1 } + name.len();
+        if len > MAX_PATH_BYTES {
             return None;
         }
-        let mut path = dir.to_path_buf();
-        path.push(OsStr::from_bytes(name));
-        Some(Arc::from(path))
+        let mut rel = dir.to_path_buf();
+        rel.push(OsStr::from_bytes(name));
+        Some(Arc::from(rel))
     }
 
-    /// The absolute path of `id`, which must be the current task's root or a
-    /// node below it.
-    fn path_of(&self, id: ScanId) -> Result<PathBuf, Incomplete> {
-        node_path(&self.arena, id, &self.base, self.task_root)
+    /// The path of `id` relative to the scan root; empty for the root. `id`
+    /// must be the current task's root or a node below it.
+    fn rel_of(&self, id: ScanId) -> Result<PathBuf, Incomplete> {
+        node_path(&self.arena, id, &self.task_rel, self.task_root)
+    }
+
+    /// The path of `id` as a user reads it: the scan root as the caller named
+    /// it, joined with [`Walker::rel_of`]. What `unreadable` and
+    /// `skipped_mounts` record.
+    fn report_path_of(&self, id: ScanId) -> Result<PathBuf, Incomplete> {
+        let rel = self.rel_of(id)?;
+        let root = self.root_path.as_os_str().as_bytes();
+        let rel = rel.as_os_str().as_bytes();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes
+            .try_reserve_exact(root.len() + 1 + rel.len())
+            .map_err(|_| Incomplete::OutOfMemory)?;
+        bytes.extend_from_slice(root);
+        if !rel.is_empty() {
+            if !bytes.is_empty() && bytes.last() != Some(&b'/') {
+                bytes.push(b'/');
+            }
+            bytes.extend_from_slice(rel);
+        }
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
     }
 
     /// Drain one directory: call `getattrlistbulk` until it reports no more.
@@ -1103,14 +1207,22 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         with_cstr(name, |c| self.opener.open_dir_at(parent_fd, c))
     }
 
-    /// Open a directory by absolute path, for a task whose descriptor chain
-    /// belongs to another thread. `O_NOFOLLOW` still refuses a symlink in the
-    /// final position, so the swap a stolen directory is exposed to is the
-    /// same one `openat` guards against; the components above it are resolved
-    /// afresh, which is the cost of crossing threads.
-    fn open_path(&self, path: &Path) -> Result<OwnedFd, c_int> {
-        with_cstr(path.as_os_str().as_bytes(), |c| {
-            self.opener.open_dir_at(libc::AT_FDCWD, c)
+    /// Reopen a published directory, `rel` beneath the scan root's
+    /// descriptor, for a task whose descriptor chain was another frame's.
+    ///
+    /// Every component of `rel` is resolved afresh, which is the cost of
+    /// crossing frames, but none of them may be a symlink: [`open_beneath`]
+    /// refuses one anywhere, so an ancestor swapped for a symlink between
+    /// enumeration and reopen fails the open (`ELOOP`, counted in `errors`)
+    /// rather than redirecting the walk. Nothing is resolved from the process's
+    /// working directory, so a relative `opts.root` cannot drift either.
+    fn reopen(&self, rel: &Path) -> Result<OwnedFd, c_int> {
+        let Some(root) = self.root_dir else {
+            // Only the pool publishes, and it always provides the root.
+            return Err(libc::EBADF);
+        };
+        with_cstr(rel.as_os_str().as_bytes(), |c| {
+            self.opener.reopen_dir_beneath(root.as_raw_fd(), c)
         })
     }
 
@@ -1118,7 +1230,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     fn note_error(&mut self, id: ScanId, errno: c_int) -> Result<(), Incomplete> {
         match errno {
             libc::EPERM | libc::EACCES => {
-                let path = self.path_of(id)?;
+                let path = self.report_path_of(id)?;
                 self.stats
                     .unreadable
                     .try_reserve(1)
@@ -1131,8 +1243,12 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                 } else if let Some(share) = self.share {
                     // A stolen directory: its node belongs to the worker that
                     // enumerated the parent, so the flag is recorded and
-                    // applied once the workers have joined.
-                    share.flag_foreign(id, FLAG_PERM_DENIED);
+                    // applied once the workers have joined. If even that one
+                    // slot cannot be had, the node will render as an empty
+                    // folder rather than a locked one, and the result says so.
+                    if !share.flag_foreign(id, FLAG_PERM_DENIED) {
+                        self.stats.incomplete.get_or_insert(Incomplete::OutOfMemory);
+                    }
                 }
             }
             libc::ENOMEM => {
@@ -1171,12 +1287,13 @@ fn with_cstr<R>(bytes: &[u8], f: impl FnOnce(&CStr) -> Result<R, c_int>) -> Resu
 /// The path of node `id`: the names from `id` up to but not including `stop`,
 /// appended to `base`.
 ///
-/// A serial walk passes `ScanId::NONE` and an empty base, so the climb runs to
-/// the root, whose stored name is the whole root path, and the result is
-/// absolute. A worker of the parallel walk passes its task's root and that
-/// directory's absolute path, because above the task root the parent chain can
-/// leave this arena — `Arena::get` would stop there anyway, but stopping
-/// deliberately is what makes the two halves line up.
+/// Every walker passes its task's root as `stop` and that directory's path
+/// relative to the scan root as `base`, so the result is relative to the scan
+/// root (the root task's root is the root node, with an empty base). Stopping
+/// at the task root is deliberate, not a consequence of `Arena::get` failing:
+/// a worker that pops back a directory it published itself holds that task's
+/// root, and its ancestors, in its *own* arena, so a climb that stopped only
+/// where the arena ends would repeat part of the path.
 fn node_path(arena: &Arena, id: ScanId, base: &Path, stop: ScanId) -> Result<PathBuf, Incomplete> {
     let mut parts: Vec<&[u8]> = Vec::new();
     let mut cur = id;
@@ -1582,6 +1699,8 @@ mod tests {
             budget: &budget,
             halt: &halt,
             root_volume: VolumeId::new(0, 0),
+            root_path: fx.path(),
+            root_dir: None,
         };
         let mut w = Walker::new(&ctx, None, &opts(fx.path()), 0).unwrap();
         let root = w.push(b"root", ScanId::NONE, None).unwrap();
@@ -1856,9 +1975,11 @@ mod tests {
     /// Half of "one worker's failure stops the others": a worker that sees the
     /// halt raised stops at its very next push, whatever it was doing.
     ///
-    /// `pool::tests::one_workers_arena_failure_stops_every_worker` runs the
-    /// whole thing through real threads, where the timing is a race by
-    /// definition. This is the same property with the race taken out.
+    /// Through real threads the timing is a race by definition, so no pool
+    /// test bounds how much the other workers store before they notice (see
+    /// `pool::tests::one_workers_arena_failure_is_the_whole_walks_failure`
+    /// for why). This is the property with the race taken out; with
+    /// `a_terminal_failure_raises_the_halt` it is the whole mechanism.
     #[test]
     fn a_raised_halt_stops_a_push_dead() {
         let fx = Fixture::new().unwrap();
@@ -1871,6 +1992,8 @@ mod tests {
             budget: &budget,
             halt: &halt,
             root_volume: VolumeId::new(0, 0),
+            root_path: fx.path(),
+            root_dir: None,
         };
         let mut w = halted_walker(&ctx, &opts(fx.path()));
 
@@ -1913,11 +2036,13 @@ mod tests {
             budget: &budget,
             halt: &halt,
             root_volume: root_volume_of(&opts(fx.path()), &root_fd).unwrap(),
+            root_path: fx.path(),
+            root_dir: None,
         };
         let mut w = halted_walker(&ctx, &opts(fx.path()));
 
         assert_eq!(halt.reason(), None, "nothing has failed yet");
-        let outcome = w.run_root(fx.path(), root_fd);
+        let outcome = w.run_root(root_fd);
 
         assert_eq!(outcome, Err(Incomplete::NodeBudget));
         assert_eq!(

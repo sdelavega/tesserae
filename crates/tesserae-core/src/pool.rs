@@ -36,7 +36,10 @@
 //! not by the number of directories it has seen. What it hands to the pool is
 //! breadth: the siblings it is not about to enter. Those cannot carry a
 //! descriptor, because the chain that reached them belongs to this thread, so
-//! they carry an `Arc<Path>` and the worker that takes one reopens it.
+//! they carry an `Arc<Path>` relative to the scan root, and the worker that
+//! takes one reopens it beneath the root's descriptor with
+//! `walk::open_beneath`, which refuses a symlink in any component. The root
+//! stays open for the whole walk for exactly that purpose.
 //!
 //! # Termination
 //!
@@ -100,7 +103,7 @@ use crate::walk::{
     check_options, open_root, root_volume_of, Halt, Incomplete, NodeBudget, OpenAt, Share,
     WalkOptions, WalkStats, Walker, WalkerCtx,
 };
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 /// Soft `RLIMIT_NOFILE` the walk asks for.
 const NOFILE_TARGET: u64 = 4096;
@@ -125,13 +128,13 @@ const INODE_SHARDS_PER_WORKER: usize = 8;
 
 /// One directory to walk.
 enum Task {
-    /// The scan root. Its node has not been pushed yet, and its descriptor is
-    /// already open because the volume had to be read off it.
+    /// The scan root. Its node has not been pushed yet, and this is a
+    /// duplicate of the root's descriptor for the root frame to own and close.
     Root(OwnedFd),
     /// A directory already recorded as `node` in some worker's arena, at
-    /// absolute depth `depth`.
+    /// `rel` beneath the scan root and at absolute depth `depth`.
     Dir {
-        path: Arc<Path>,
+        rel: Arc<Path>,
         node: ScanId,
         depth: u16,
     },
@@ -182,22 +185,25 @@ impl Share for Hand<'_> {
         self.local.len() < PUBLISH_TARGET
     }
 
-    fn publish(&self, path: Arc<Path>, node: ScanId, depth: u16) {
+    fn publish(&self, rel: Arc<Path>, node: ScanId, depth: u16) {
         // Counted before it is pushed. The other order would let a worker see
         // every deque empty and `pending == 0` while this directory was
         // unwalked, and the scan would come back short.
         self.pool.pending.fetch_add(1, Ordering::Relaxed);
-        self.local.push(Task::Dir { path, node, depth });
+        self.local.push(Task::Dir { rel, node, depth });
     }
 
-    fn flag_foreign(&self, node: ScanId, flags: u16) {
+    fn flag_foreign(&self, node: ScanId, flags: u16) -> bool {
         let mut queue = self.pool.foreign.lock().unwrap_or_else(|e| e.into_inner());
-        // Dropped if the one slot cannot be reserved. That costs a directory
-        // its "locked" rendering and nothing else: the walk could not read it
-        // either way, so no bytes go missing and there is nothing to report.
-        if queue.try_reserve(1).is_ok() {
-            queue.push((node, flags));
+        // If the one slot cannot be reserved the flag is lost and the caller
+        // records `OutOfMemory`, as every other reserve failure in the walk
+        // does: the directory would otherwise render as an empty folder
+        // rather than a locked one, with nothing to say so.
+        if queue.try_reserve(1).is_err() {
+            return false;
         }
+        queue.push((node, flags));
+        true
     }
 }
 
@@ -261,6 +267,15 @@ pub(crate) fn walk_with<O: crate::walk::DirOpener>(
     // cannot be read, there is no walk to parallelise.
     let root_fd = open_root(opts)?;
     let root_volume = root_volume_of(opts, &root_fd)?;
+    // The root stays open for the whole walk: every published directory is
+    // reopened beneath it with `open_beneath`, so nothing above it is ever
+    // resolved again and nothing depends on the working directory. The root
+    // frame gets a duplicate it can own and close. The two share a file
+    // offset, which only the root frame's `getattrlistbulk` moves; `openat`
+    // relative to a directory descriptor does not read it.
+    let root_task_fd = root_fd
+        .try_clone()
+        .map_err(|e| io::Error::new(e.kind(), format!("dup {}: {e}", opts.root.display())))?;
 
     let inodes = InodeSet::new(workers * INODE_SHARDS_PER_WORKER);
     let budget = NodeBudget::new(opts.node_budget);
@@ -271,6 +286,8 @@ pub(crate) fn walk_with<O: crate::walk::DirOpener>(
         budget: &budget,
         halt: &halt,
         root_volume,
+        root_path: &opts.root,
+        root_dir: Some(root_fd.as_fd()),
     };
 
     let deques: Vec<Worker<Task>> = (0..workers).map(|_| Worker::new_lifo()).collect();
@@ -282,7 +299,7 @@ pub(crate) fn walk_with<O: crate::walk::DirOpener>(
         halt: &halt,
         foreign: Mutex::new(Vec::new()),
     };
-    pool.injector.push(Task::Root(root_fd));
+    pool.injector.push(Task::Root(root_task_fd));
 
     let results = std::thread::scope(|scope| {
         let threads: Vec<_> = deques
@@ -355,8 +372,8 @@ fn run_worker<O: crate::walk::DirOpener>(
             Some(task) => {
                 idle = 0;
                 let outcome = match task {
-                    Task::Root(fd) => walker.run_root(&opts.root, fd),
-                    Task::Dir { path, node, depth } => walker.run_dir(path, node, depth),
+                    Task::Root(fd) => walker.run_root(fd),
+                    Task::Dir { rel, node, depth } => walker.run_dir(rel, node, depth),
                 };
                 // After the task is finished, and so after every directory it
                 // published was counted. This is the half of the protocol that
@@ -704,7 +721,7 @@ mod tests {
 
     /// The paths a user reads ("12 locations unreadable") are rebuilt
     /// separately from the node structure: by climbing the parent chain as far
-    /// as the task's root and joining onto that task's absolute path. A climb
+    /// as the task's root and joining onto that task's own path. A climb
     /// that ran past the task root — which it would if it stopped only where
     /// `Arena::get` fails, since a worker that pops back a directory it
     /// published itself holds the task root in its own arena — would repeat
@@ -757,6 +774,10 @@ mod tests {
 
         let (first, first_stats) = walk(&opts(fx.path())).unwrap();
         let (second, second_stats) = walk(&opts(fx.path())).unwrap();
+        // Both walks must really have been shared, or "deterministic" would
+        // only mean that one worker walks the same way twice.
+        assert!(busy(&first) > 1, "first walk: nothing was stolen");
+        assert!(busy(&second) > 1, "second walk: nothing was stolen");
         let first = snapshot(first, first_stats);
         let second = snapshot(second, second_stats);
 
@@ -819,8 +840,14 @@ mod tests {
     /// `walk::tests::a_terminal_failure_raises_the_halt` (a failure raises the
     /// shared halt) and `walk::tests::a_raised_halt_stops_a_push_dead` (a
     /// worker whose halt is raised refuses its very next push and stores
-    /// nothing). Those two compose to the property; this test is what shows
-    /// the pool really does give every worker the same halt.
+    /// nothing). Those two compose to the property.
+    ///
+    /// Nor does this test show that every worker shares one halt: if each had
+    /// its own, worker 0's stats would still carry `NodeBudget` and the walk
+    /// would still come back short, so both assertions here would pass. That
+    /// the halt is shared is structural — `walk_with` builds one `Halt` and
+    /// hands every worker the same `WalkerCtx` — and is checked by reading,
+    /// not by this test.
     #[test]
     fn one_workers_arena_failure_is_the_whole_walks_failure() {
         const CAP: u64 = 1;
@@ -872,6 +899,10 @@ mod tests {
         fn open_dir_at(&self, _parent: RawFd, _name: &CStr) -> Result<OwnedFd, c_int> {
             Err(libc::EMFILE)
         }
+
+        fn reopen_dir_beneath(&self, _root: RawFd, _rel: &CStr) -> Result<OwnedFd, c_int> {
+            Err(libc::EMFILE)
+        }
     }
 
     /// Descriptor exhaustion is not terminal, so the walk finishes and the
@@ -915,6 +946,120 @@ mod tests {
         assert_eq!(flagged, 3);
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.incomplete, None);
+    }
+
+    /// Before the first reopen of anything below `victim/`, replaces `victim`
+    /// — an *ancestor* of the directory being reopened, below the root — with
+    /// a symlink to `decoy`, a different subtree on the same volume. The real
+    /// `victim` is moved out of the walked tree entirely.
+    ///
+    /// Only reopens are intercepted, so the swap can only fire on the path
+    /// that resolves more than one component; `fd`-relative child opens go
+    /// straight to the real `openat`.
+    struct SwapAncestorBeforeReopen {
+        root: std::path::PathBuf,
+        stash: std::path::PathBuf,
+        fired: std::sync::atomic::AtomicU32,
+        /// Reopens of a path under `victim/`, the swapping one included.
+        reopened_under_victim: std::sync::atomic::AtomicU32,
+        gate: Mutex<()>,
+    }
+
+    impl crate::walk::DirOpener for SwapAncestorBeforeReopen {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            OpenAt.open_dir_at(parent, name)
+        }
+
+        fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+            if rel.to_bytes().starts_with(b"victim/") {
+                self.reopened_under_victim.fetch_add(1, Ordering::Relaxed);
+                let _one_at_a_time = self.gate.lock().unwrap();
+                if self.fired.load(Ordering::Relaxed) == 0 {
+                    std::fs::rename(self.root.join("victim"), &self.stash).unwrap();
+                    // Relative, and its target is inside the fixture root.
+                    std::os::unix::fs::symlink("decoy", self.root.join("victim")).unwrap();
+                    self.fired.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            crate::walk::open_beneath(root, rel)
+        }
+    }
+
+    /// A published directory is reopened by path, so every component of that
+    /// path is resolved again — and an ancestor swapped for a symlink between
+    /// enumeration and reopen must not redirect the walk into another subtree.
+    /// The serial walker never resolves more than one name at a time; this is
+    /// the pool's equivalent of `walk::tests::directory_replaced_by_symlink_is_not_followed`,
+    /// one level up.
+    ///
+    /// Each reopen through the swapped ancestor must fail (`ELOOP`, filed in
+    /// `errors` per the walker's taxonomy) and `decoy`'s files must be counted
+    /// exactly once, under `decoy`. With only `O_NOFOLLOW` the kernel follows
+    /// the symlinked ancestor and walks `decoy/sN` again as `victim/sN`.
+    /// Three rounds, each on a fresh tree, sixteen workers.
+    #[test]
+    fn a_swapped_ancestor_does_not_redirect_a_reopened_directory() {
+        const SUBDIRS: usize = 6;
+        const FILES: usize = 5;
+        for round in 0..3 {
+            let fx = Fixture::new().unwrap();
+            let elsewhere = Fixture::new().unwrap();
+            for k in 0..SUBDIRS {
+                for f in 0..FILES {
+                    fx.file(&format!("victim/s{k}/real{f}.bin"), 64).unwrap();
+                    fx.file(&format!("decoy/s{k}/decoy{f}.bin"), 64).unwrap();
+                }
+            }
+            let opener = SwapAncestorBeforeReopen {
+                root: fx.path().to_path_buf(),
+                stash: elsewhere.path().join("victim"),
+                fired: std::sync::atomic::AtomicU32::new(0),
+                reopened_under_victim: std::sync::atomic::AtomicU32::new(0),
+                gate: Mutex::new(()),
+            };
+            let mut o = opts(fx.path());
+            o.workers = 16;
+
+            let (arenas, stats) = walk_with(&o, &opener, &[]).unwrap();
+
+            // The precondition: the swap really fired, and it fired inside a
+            // reopen-by-path, which is the only place this opener swaps.
+            let reopened = opener.reopened_under_victim.load(Ordering::Relaxed);
+            assert_eq!(
+                opener.fired.load(Ordering::Relaxed),
+                1,
+                "round {round}: no swap"
+            );
+            assert!(
+                reopened >= 1,
+                "round {round}: nothing under victim/ was reopened"
+            );
+            assert!(fx.path().join("victim").is_symlink());
+
+            let named = |prefix: &[u8]| {
+                arenas
+                    .iter()
+                    .flat_map(|a| a.iter().map(move |(_, n)| a.name_bytes(n.name)))
+                    .filter(|name| name.starts_with(prefix))
+                    .count()
+            };
+            assert_eq!(
+                named(b"decoy"),
+                1 + SUBDIRS * FILES,
+                "round {round}: decoy's contents were counted again under the \
+                 swapped ancestor"
+            );
+            // Every reopen through the symlinked ancestor failed and was filed
+            // as an ordinary error: nothing else in this tree can fail.
+            assert_eq!(
+                stats.errors,
+                u64::from(reopened),
+                "round {round}: {reopened} reopens went through the swapped ancestor"
+            );
+            assert_eq!(stats.incomplete, None, "round {round}");
+            assert!(stats.unreadable.is_empty() && stats.skipped_mounts.is_empty());
+            drop(elsewhere);
+        }
     }
 
     #[test]
@@ -1038,17 +1183,22 @@ mod tests {
         assert_eq!((stats.dirs, stats.files, stats.depth_capped), (1, 0, 1));
     }
 
-    /// A chain of directories whose absolute path runs past `PATH_MAX`, built
-    /// with `mkdirat` because `std::fs` cannot address one. Removes itself,
-    /// so the fixture's own cleanup never has to look at a path it could not
-    /// name.
+    /// A chain of directories built with `mkdirat` (because `std::fs` cannot
+    /// address a path past `PATH_MAX`), with sibling leaf directories at the
+    /// bottom, each holding one file. Removes itself, so the fixture's own
+    /// cleanup never has to look at a path it could not name.
     struct DeepChain {
-        /// One descriptor per level, outermost first.
+        /// One descriptor per level, outermost first: `levels[0]` is where
+        /// the chain was built.
         levels: Vec<OwnedFd>,
         name: std::ffi::CString,
-        /// Length of the deepest directory's absolute path.
-        path_len: usize,
+        /// Length of the deepest chain directory's path relative to `at`.
+        rel_len: usize,
+        /// Leaf directories under the deepest level, each holding `f.bin`.
+        leaves: Vec<std::ffi::CString>,
     }
+
+    const LEAF_FILE: &str = "f.bin";
 
     impl DeepChain {
         fn build(at: &Path, levels: usize, name_len: usize) -> DeepChain {
@@ -1057,7 +1207,8 @@ mod tests {
             let mut chain = DeepChain {
                 levels: vec![OwnedFd::from(std::fs::File::open(at).unwrap())],
                 name,
-                path_len: at.as_os_str().len(),
+                rel_len: 0,
+                leaves: Vec::new(),
             };
             for level in 0..levels {
                 let parent = chain.levels.last().unwrap().as_raw_fd();
@@ -1079,25 +1230,37 @@ mod tests {
                 assert!(fd >= 0, "openat at level {level}");
                 // SAFETY: `openat` just returned this descriptor.
                 chain.levels.push(unsafe { OwnedFd::from_raw_fd(fd) });
-                chain.path_len += 1 + name_len;
+                chain.rel_len += if level == 0 { name_len } else { 1 + name_len };
             }
             chain
         }
 
-        /// Put a file at the bottom, so there is something to lose.
-        fn add_file(&self, name: &str, bytes: usize) {
-            use std::os::fd::AsRawFd;
-            let c = std::ffi::CString::new(name).unwrap();
-            // SAFETY: the parent is an open directory and `c` is live.
+        /// A leaf directory `leaf` under the deepest level, holding one file of
+        /// exactly `bytes` bytes. Returns the leaf's path length relative to
+        /// where the chain was built.
+        fn add_leaf(&mut self, leaf: &str, bytes: usize) -> usize {
+            use std::os::fd::{AsRawFd, FromRawFd};
+            let deepest = self.levels.last().unwrap().as_raw_fd();
+            let c = std::ffi::CString::new(leaf).unwrap();
+            // SAFETY: an open directory and a live name.
+            assert_eq!(unsafe { libc::mkdirat(deepest, c.as_ptr(), 0o755) }, 0);
+            // SAFETY: same, and the directory was just created.
+            let dir =
+                unsafe { libc::openat(deepest, c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY) };
+            assert!(dir >= 0, "openat {leaf}");
+            // SAFETY: `openat` just returned it.
+            let dir = unsafe { OwnedFd::from_raw_fd(dir) };
+            let f = std::ffi::CString::new(LEAF_FILE).unwrap();
+            // SAFETY: an open directory and a live name.
             let fd = unsafe {
                 libc::openat(
-                    self.levels.last().unwrap().as_raw_fd(),
-                    c.as_ptr(),
+                    dir.as_raw_fd(),
+                    f.as_ptr(),
                     libc::O_CREAT | libc::O_WRONLY | libc::O_CLOEXEC,
                     0o644 as libc::c_uint,
                 )
             };
-            assert!(fd >= 0, "openat O_CREAT {name}");
+            assert!(fd >= 0, "create {leaf}/{LEAF_FILE}");
             let data = vec![7u8; bytes];
             // SAFETY: `fd` is an open writable file and `data` is live.
             assert_eq!(
@@ -1106,17 +1269,29 @@ mod tests {
             );
             // SAFETY: `fd` was opened above and is not used again.
             unsafe { libc::close(fd) };
+            self.leaves.push(c);
+            self.rel_len + 1 + leaf.len()
         }
     }
 
     impl Drop for DeepChain {
         fn drop(&mut self) {
-            use std::os::fd::AsRawFd;
+            use std::os::fd::{AsRawFd, FromRawFd};
             // Bottom up, each removal relative to its parent's descriptor.
-            let bottom = std::ffi::CString::new("bottom.bin").unwrap();
+            let file = std::ffi::CString::new(LEAF_FILE).unwrap();
             if let Some(deepest) = self.levels.last() {
-                // SAFETY: an open directory and a live name.
-                unsafe { libc::unlinkat(deepest.as_raw_fd(), bottom.as_ptr(), 0) };
+                let deepest = deepest.as_raw_fd();
+                for leaf in &self.leaves {
+                    // SAFETY: an open directory and live names throughout.
+                    unsafe {
+                        let dir = libc::openat(deepest, leaf.as_ptr(), libc::O_RDONLY);
+                        if dir >= 0 {
+                            let dir = OwnedFd::from_raw_fd(dir);
+                            libc::unlinkat(dir.as_raw_fd(), file.as_ptr(), 0);
+                        }
+                        libc::unlinkat(deepest, leaf.as_ptr(), libc::AT_REMOVEDIR);
+                    }
+                }
             }
             while self.levels.len() > 1 {
                 self.levels.pop();
@@ -1128,36 +1303,61 @@ mod tests {
         }
     }
 
-    /// A directory too deep to name in `PATH_MAX` cannot be republished for
-    /// another worker, because a stolen task is reopened by absolute path.
-    /// `Walker::offer` keeps such a directory and descends it with `openat`
-    /// instead, so it is walked by whoever enumerated its parent — not
-    /// dropped, and not charged to `errors`. Losing it would lose its bytes,
-    /// which is the one failure direction nothing downstream can detect.
+    /// A directory whose path *relative to the scan root* exceeds what `openat`
+    /// accepts cannot be published, because a published directory is reopened
+    /// beneath the root by that relative path. `Walker::offer` keeps it and
+    /// descends it locally with a single-name `openat` from its parent's
+    /// descriptor instead — not dropped, and not charged to `errors`. Losing
+    /// it would lose its bytes, the one failure direction nothing downstream
+    /// can detect.
+    ///
+    /// The over-limit level has **two** sibling directories, because `offer`
+    /// publishes nothing from a directory with fewer than two subdirectories;
+    /// a one-child chain would never reach the branch under test. That the
+    /// branch ran is asserted through `walk::KEPT_TOO_LONG`.
     #[test]
     fn a_directory_too_deep_to_name_is_kept_rather_than_lost() {
-        let fx = wide_fixture();
-        // 20 levels of 100-byte names: over 2000 bytes, twice `PATH_MAX`.
-        let chain = DeepChain::build(&fx.path().join("t0"), 20, 100);
-        chain.add_file("bottom.bin", 4096);
+        const LEFT: usize = 4096;
+        const RIGHT: usize = 8192;
+        let fx = Fixture::new().unwrap();
+        // 11 levels of 100-byte names: 1110 bytes relative to the root, so
+        // each leaf below is past the 1023 an `openat` path may be.
+        let mut chain = DeepChain::build(fx.path(), 11, 100);
+        let left = chain.add_leaf("s0", LEFT);
+        let right = chain.add_leaf("s1", RIGHT);
         assert!(
-            chain.path_len > MAX_PATH_BYTES_FOR_TEST,
-            "the chain is only {} bytes deep, so nothing is being tested",
-            chain.path_len
+            left > crate::walk::MAX_PATH_BYTES && right > crate::walk::MAX_PATH_BYTES,
+            "the leaves are {left} and {right} bytes below the root, which fits: \
+             nothing is being tested"
         );
+        let mut o = opts(fx.path());
+        o.workers = 8;
 
-        let (serial, s) = walk_serial(&opts(fx.path())).unwrap();
-        let (parallel, p) = walk(&opts(fx.path())).unwrap();
+        let (serial, s) = walk_serial(&o).unwrap();
+        let kept_before = crate::walk::KEPT_TOO_LONG.load(Ordering::Relaxed);
+        let (parallel, p) = walk(&o).unwrap();
+        let kept = crate::walk::KEPT_TOO_LONG.load(Ordering::Relaxed) - kept_before;
 
-        assert_eq!(s.files, 3001, "the fixture plus the buried file");
+        // Completeness first, so a regression reports what it lost.
+        let want_logical = (LEFT + RIGHT) as u64;
+        assert_eq!(s.files, 2);
+        assert_eq!(totals(std::slice::from_ref(&serial)).1, want_logical);
+        assert_eq!((p.errors, p.incomplete), (0, None), "a leaf was lost");
         assert_eq!((p.dirs, p.files), (s.dirs, s.files));
-        assert_eq!((p.errors, p.incomplete), (0, None));
+        assert_eq!(
+            totals(&parallel).1,
+            want_logical,
+            "a leaf's bytes are missing"
+        );
         assert_eq!(totals(std::slice::from_ref(&serial)), totals(&parallel));
+        // Then the precondition: the keep branch is what made it complete.
+        assert!(
+            kept >= 1,
+            "`offer` never declined a too-long directory, so this test did not \
+             exercise the branch it is named for"
+        );
+        drop(chain);
     }
-
-    /// `walk::MAX_PATH_BYTES` is private; this is the same figure, and the
-    /// assertion above only needs a floor.
-    const MAX_PATH_BYTES_FOR_TEST: usize = 1023;
 
     #[test]
     fn a_depth_cap_matches_the_serial_walk() {
@@ -1242,13 +1442,13 @@ mod tests {
 
         // The raise at entry asks for 4096. A hard limit of 64 refuses it, and
         // `worker_count` then has to fit 16 workers into what is left.
-        let mut limit = libc::rlimit {
+        let mut original = libc::rlimit {
             rlim_cur: 0,
             rlim_max: 0,
         };
-        // SAFETY: `limit` is a live, correctly sized `rlimit`.
+        // SAFETY: `original` is a live, correctly sized `rlimit`.
         assert_eq!(
-            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut original) },
             0
         );
         let squeezed = libc::rlimit {
@@ -1271,14 +1471,15 @@ mod tests {
         o.workers = 16;
         let outcome = walk(&o);
 
-        // Restore the soft limit before asserting. The hard limit stays where
-        // it is: a process cannot raise its own.
-        let back = libc::rlimit {
-            rlim_cur: 64,
-            rlim_max: 64,
-        };
-        // SAFETY: `back` is a live, correctly sized `rlimit`.
-        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &back) };
+        // Put back the limits captured before the test changed them, before
+        // asserting. This cannot fully succeed and is not asserted: an
+        // unprivileged process may lower its hard limit but never raise it, so
+        // restoring the original is refused (measured: `EPERM`), and so is
+        // raising only the soft limit above the new hard one (`EINVAL`). The
+        // process is left at 64/64, which is why this test is `#[ignore]`d and
+        // runs in a process of its own.
+        // SAFETY: `original` is a live, correctly sized `rlimit`.
+        let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) };
 
         let (arenas, stats) = outcome.expect("the walk must succeed, not fail");
         assert_eq!(
