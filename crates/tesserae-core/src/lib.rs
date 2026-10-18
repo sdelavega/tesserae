@@ -21,6 +21,7 @@ pub mod dedup;
 pub mod freeze;
 pub mod node;
 pub mod parse;
+pub mod pool;
 pub mod walk;
 
 #[cfg(test)]

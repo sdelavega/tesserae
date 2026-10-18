@@ -16,9 +16,12 @@
 
 //! Single-threaded, fd-relative directory walker.
 //!
-//! This is the reference implementation. The parallel walker that follows it
-//! must produce the same totals, so correctness and legibility are the goals
-//! here, not speed.
+//! This is the reference implementation, and it stays one: it is what
+//! [`crate::pool::walk`] is compared against, so correctness and legibility
+//! are the goals here, not speed. The pieces the parallel walker needs — the
+//! shared [`NodeBudget`], the shared [`Halt`], the [`Share`] seam and
+//! [`Walker`] itself — live here too, so that there is one walk and not
+//! two.
 //!
 //! # Shape of the walk
 //!
@@ -114,18 +117,49 @@
 //! reached first, only the *total* is invariant, not which node holds the
 //! bytes; see [`crate::dedup`].
 //!
-//! # Per-arena budget
+//! # The node budget is shared, not per arena
 //!
-//! The node budget belongs to the [`Arena`], so it is per thread. That is
-//! harmless here with one arena, and it is the parallel walker's job to turn
-//! it into a global limit.
+//! [`Arena`] can enforce a ceiling of its own, but the walk does not use it:
+//! with one arena per worker a per-arena ceiling would multiply by the worker
+//! count, turning a 25M-node limit into 400M nodes and about 16 GB. The limit
+//! lives in a [`NodeBudget`], one shared atomic counter every worker draws
+//! from, and each arena is created with no ceiling of its own. A serial walk
+//! builds a [`NodeBudget`] of its own, which nothing else draws on, so its
+//! behaviour is unchanged.
+//!
+//! The budget is *not* divided evenly between workers: an unbalanced tree is
+//! the normal case, so a worker given a sixteenth of the budget would stop
+//! while the others still had room.
+//!
+//! # Any terminal failure stops every worker
+//!
+//! A failed `push_node` is terminal for the whole walk, not just the worker
+//! that saw it, and [`Halt`] is how that is arranged. The reason is
+//! [`InodeSet`]: `try_claim` records an inode *before* the node is pushed, so
+//! if one worker's push failed while the others carried on against the same
+//! set, that inode would be claimed by a node that was never stored and its
+//! bytes would be lost. Every other failure path here is arranged to
+//! over-count, because the residual is signed and an over-count is
+//! representable; bytes that vanish are the one direction nothing downstream
+//! can detect.
+//!
+//! # Sharing work
+//!
+//! A worker descends depth-first through [`Frame`]s, as the serial walk does,
+//! and the directories it does *not* descend immediately are offered to the
+//! pool through [`Share`]. Those carry an absolute path, because the
+//! descriptor chain that `openat` needs belongs to the thread that built it.
+//! A path longer than `PATH_MAX` cannot be reopened that way, so such a
+//! directory is kept and descended locally instead; nothing is dropped.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 
 use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
@@ -145,9 +179,16 @@ const DEFAULT_BUFFER_BYTES: usize = 256 * 1024;
 /// and an entry is ~72 bytes of fixed fields plus its name, which can run to
 /// `PATH_MAX`.
 const MIN_BUFFER_BYTES: usize = 2048;
-/// Longest name that can be handed to `openat` without allocating. A name
-/// this long is already invalid (`PATH_MAX` is 1024 including the NUL).
-const MAX_NAME_BYTES: usize = 1023;
+/// Longest string that can be handed to `openat` without allocating: either a
+/// single entry name or a whole path. `PATH_MAX` is 1024 including the NUL, so
+/// anything longer is already unopenable.
+const MAX_PATH_BYTES: usize = 1023;
+/// Nodes a worker draws from the shared [`NodeBudget`] at a time. One atomic
+/// per node would put every worker on the same cache line for the whole scan;
+/// one per thousand is invisible. The cost is that a worker can hold up to
+/// this many unused units when the budget runs out, which at the 25M default
+/// is under a tenth of a percent.
+const BUDGET_CHUNK: u64 = 1024;
 
 #[derive(Debug, Clone)]
 pub struct WalkOptions {
@@ -156,7 +197,8 @@ pub struct WalkOptions {
     /// is recorded but not entered, so nothing deeper exists. The root is
     /// depth 0.
     pub max_depth: u16,
-    /// Most nodes the arena will hold. Per arena, so per walker thread.
+    /// Most nodes the whole walk may store, however many workers it runs.
+    /// Enforced by a shared counter, not by the arenas; see the module note.
     pub node_budget: u64,
     /// Size of the `getattrlistbulk` output buffer.
     pub buffer_bytes: usize,
@@ -164,8 +206,8 @@ pub struct WalkOptions {
     /// another *local* volume is never entered, whatever this says; see
     /// [`crate::boundary`].
     pub include_non_local: bool,
-    /// Worker thread count. Read only by the parallel walker; the serial
-    /// walker ignores it.
+    /// Worker thread count. Read only by [`crate::pool::walk`], which may
+    /// reduce it to fit the descriptor limit; the serial walker ignores it.
     pub workers: usize,
 }
 
@@ -252,15 +294,164 @@ impl From<ArenaError> for Incomplete {
     }
 }
 
+impl Incomplete {
+    /// A nonzero code for [`Halt`]. The match is exhaustive, so a new variant
+    /// is a compile error here rather than a reason that silently stops
+    /// travelling between workers.
+    fn code(self) -> u8 {
+        match self {
+            Incomplete::Cancelled => 1,
+            Incomplete::NodeBudget => 2,
+            Incomplete::OutOfMemory => 3,
+            Incomplete::Stalled => 4,
+            Incomplete::FdExhausted => 5,
+            Incomplete::MalformedBatch => 6,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Incomplete> {
+        [
+            Incomplete::Cancelled,
+            Incomplete::NodeBudget,
+            Incomplete::OutOfMemory,
+            Incomplete::Stalled,
+            Incomplete::FdExhausted,
+            Incomplete::MalformedBatch,
+        ]
+        .into_iter()
+        .find(|i| i.code() == code)
+    }
+
+    /// How strongly this reason describes what *stopped* the walk.
+    ///
+    /// [`Incomplete::FdExhausted`] and [`Incomplete::MalformedBatch`] are
+    /// noticed and walked past, so a reason that ended the walk outranks them.
+    /// This is the precedence a serial walk already has — a terminal reason
+    /// overwrites whatever the walk had flagged — expressed so that merging
+    /// several workers' stats can follow it too.
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            Incomplete::FdExhausted | Incomplete::MalformedBatch => 1,
+            Incomplete::Cancelled
+            | Incomplete::NodeBudget
+            | Incomplete::OutOfMemory
+            | Incomplete::Stalled => 2,
+        }
+    }
+}
+
+/// The reason the walk is over, or none yet: one terminal failure in any
+/// worker ends the whole walk.
+///
+/// Only the first reason is kept, and a worker that sees one stops where it is
+/// and reports it. See the module's note on why a push failure cannot be
+/// local.
+pub(crate) struct Halt {
+    /// `0` for "still walking"; otherwise an [`Incomplete::code`].
+    code: AtomicU8,
+}
+
+impl Halt {
+    pub(crate) fn new() -> Self {
+        Halt {
+            code: AtomicU8::new(0),
+        }
+    }
+
+    /// Record `why` unless a reason is already recorded. First writer wins.
+    pub(crate) fn raise(&self, why: Incomplete) {
+        // Release so that whatever the failing worker had written is visible
+        // to a worker that reads the reason; Relaxed on the failure path
+        // because the value is then discarded.
+        let _ = self
+            .code
+            .compare_exchange(0, why.code(), Ordering::Release, Ordering::Relaxed);
+    }
+
+    pub(crate) fn reason(&self) -> Option<Incomplete> {
+        match self.code.load(Ordering::Acquire) {
+            0 => None,
+            code => Incomplete::from_code(code),
+        }
+    }
+}
+
+/// The whole walk's node ceiling.
+///
+/// One counter for every worker, so the limit means what it says however many
+/// threads are drawing on it. A worker takes [`BUDGET_CHUNK`] units at a time
+/// into a local allowance and spends them one node at a time.
+pub(crate) struct NodeBudget {
+    remaining: AtomicU64,
+}
+
+impl NodeBudget {
+    pub(crate) fn new(total: u64) -> Self {
+        NodeBudget {
+            remaining: AtomicU64::new(total),
+        }
+    }
+
+    /// Hand out up to `want` units and return how many were granted, which is
+    /// `0` once the budget is spent. Relaxed throughout: the counter publishes
+    /// no data, and its own modification order is all the accounting needs.
+    fn take(&self, want: u64) -> u64 {
+        let mut now = self.remaining.load(Ordering::Relaxed);
+        loop {
+            let grant = now.min(want);
+            if grant == 0 {
+                return 0;
+            }
+            match self.remaining.compare_exchange_weak(
+                now,
+                now - grant,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return grant,
+                Err(seen) => now = seen,
+            }
+        }
+    }
+}
+
+/// How a worker hands directories to the rest of the pool, and how it reports
+/// a fact about a node another worker's arena holds.
+///
+/// A serial walk has none of this and passes `None`.
+pub(crate) trait Share {
+    /// Whether the pool has room for more stealable directories. A worker that
+    /// is told `false` keeps its remaining subdirectories and descends them
+    /// itself with `openat`.
+    fn wants_work(&self) -> bool;
+
+    /// Offer `node`, the directory at `path` and at absolute depth `depth`, to
+    /// any worker. The implementation must count the task before it can be
+    /// seen, or the termination protocol could observe an empty pool while
+    /// this directory is still unwalked.
+    fn publish(&self, path: Arc<Path>, node: ScanId, depth: u16);
+
+    /// Set `flags` on `node`, which belongs to another worker's arena and so
+    /// cannot be touched until the workers have joined.
+    fn flag_foreign(&self, node: ScanId, flags: u16);
+}
+
 /// How the walker opens a child directory. The one seam in the descent path.
 ///
 /// Production uses [`OpenAt`]. Tests substitute an opener that mutates the
 /// tree immediately before delegating to the real one, which is the only
 /// deterministic way to reach the window between a directory being enumerated
 /// and being opened.
-pub(crate) trait DirOpener {
+///
+/// `Sync` is a supertrait so that one opener can be handed to every worker of
+/// the parallel walk. That is the whole reason this is a trait rather than a
+/// `cfg(test)` thread-local: a thread-local seam would be invisible to the
+/// worker threads.
+pub(crate) trait DirOpener: Sync {
     /// Open the directory `name` relative to the directory open as `parent`.
-    /// Returns the errno on failure.
+    /// `parent` may be [`libc::AT_FDCWD`], in which case `name` is a path
+    /// resolved from the process's working directory; the parallel walker
+    /// reopens a stolen directory that way. Returns the errno on failure.
     fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int>;
 }
 
@@ -324,6 +515,30 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     opener: &O,
     inodes: &InodeSet,
 ) -> io::Result<(Arena, WalkStats)> {
+    check_options(opts)?;
+    let root_fd = open_root(opts)?;
+    let root_volume = root_volume_of(opts, &root_fd)?;
+    // A budget and a halt for one walker: nothing else draws on the counter,
+    // and nothing is ever there to raise the halt.
+    let budget = NodeBudget::new(opts.node_budget);
+    let halt = Halt::new();
+    let ctx = WalkerCtx {
+        opener,
+        inodes,
+        budget: &budget,
+        halt: &halt,
+        root_volume,
+    };
+    let mut walker = Walker::new(&ctx, None, opts, 0)?;
+    // `run_root` records the reason in the stats; a serial walk has no other
+    // worker to tell.
+    let _ = walker.run_root(&opts.root, root_fd);
+    Ok(walker.finish())
+}
+
+/// Reject options no walk can honour. Separate so the parallel walker fails
+/// the same way, before it raises limits or spawns anything.
+pub(crate) fn check_options(opts: &WalkOptions) -> io::Result<()> {
     if opts.buffer_bytes < MIN_BUFFER_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -333,34 +548,18 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
             ),
         ));
     }
-    let root_fd = open_root(opts)?;
-    let root_volume = volume_of(root_fd.as_raw_fd())
-        .map_err(|e| io::Error::new(e.kind(), format!("fstatfs {}: {e}", opts.root.display())))?;
-    let mut buf = Vec::new();
-    buf.try_reserve_exact(opts.buffer_bytes)
-        .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
-    buf.resize(opts.buffer_bytes, 0);
+    Ok(())
+}
 
-    let mut walker = Walker {
-        opener,
-        inodes,
-        buf,
-        attrlist: scan_attrlist(),
-        max_depth: opts.max_depth,
-        root_volume,
-        include_non_local: opts.include_non_local,
-        arena: Arena::new(0, opts.node_budget),
-        stats: WalkStats::default(),
-    };
-    if let Err(why) = walker.run(&opts.root, root_fd) {
-        walker.stats.incomplete = Some(why);
-    }
-    Ok((walker.arena, walker.stats))
+/// The volume the scan root is on, with the root's path in the error.
+pub(crate) fn root_volume_of(opts: &WalkOptions, root_fd: &OwnedFd) -> io::Result<VolumeId> {
+    volume_of(root_fd.as_raw_fd())
+        .map_err(|e| io::Error::new(e.kind(), format!("fstatfs {}: {e}", opts.root.display())))
 }
 
 /// Open the root by path. Unlike every other directory this one may be reached
 /// through a symlink: the caller named it, so resolving it is what they meant.
-fn open_root(opts: &WalkOptions) -> io::Result<OwnedFd> {
+pub(crate) fn open_root(opts: &WalkOptions) -> io::Result<OwnedFd> {
     let path = CString::new(opts.root.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "root path contains NUL"))?;
     loop {
@@ -396,32 +595,167 @@ struct Frame {
     next: usize,
 }
 
-struct Walker<'a, O> {
+/// What every worker of one walk has in common.
+pub(crate) struct WalkerCtx<'a, O> {
+    pub opener: &'a O,
+    /// Inodes already seen with more than one link. One instance for the whole
+    /// walk, however many workers.
+    pub inodes: &'a InodeSet,
+    pub budget: &'a NodeBudget,
+    pub halt: &'a Halt,
+    /// The volume the scan root lives on. Every directory opened is compared
+    /// with it; see `Walker::admit`.
+    pub root_volume: VolumeId,
+}
+
+/// One thread walking. A serial walk has one; the pool has one per worker,
+/// each with its own arena, stats and read buffer.
+pub(crate) struct Walker<'a, O> {
     opener: &'a O,
-    /// Inodes already seen with more than one link. Shared by reference:
-    /// the walker never owns it.
     inodes: &'a InodeSet,
+    budget: &'a NodeBudget,
+    halt: &'a Halt,
+    /// `None` in a serial walk; the pool's handle otherwise.
+    share: Option<&'a (dyn Share + 'a)>,
+    /// Units drawn from `budget` and not yet spent.
+    allowance: u64,
     /// The `getattrlistbulk` output buffer, reused for every directory.
     buf: Vec<u8>,
     attrlist: libc::attrlist,
     max_depth: u16,
-    /// The volume the scan root lives on. Every directory opened is compared
-    /// with it; see `Walker::admit`.
     root_volume: VolumeId,
     include_non_local: bool,
+    /// The node this worker's current task is rooted at, and that directory's
+    /// absolute path. A path is rebuilt by climbing the parent chain only as
+    /// far as `task_root`, then joining the result onto `base`, because above
+    /// the task root the chain may leave this arena. A serial walk sets
+    /// `ScanId::NONE` and an empty base, so it climbs the whole way, as it
+    /// always did.
+    task_root: ScanId,
+    base: Arc<Path>,
     arena: Arena,
     stats: WalkStats,
 }
 
-impl<O: DirOpener> Walker<'_, O> {
-    fn run(&mut self, root_path: &std::path::Path, root_fd: OwnedFd) -> Result<(), Incomplete> {
-        let root = self.push(root_path.as_os_str().as_bytes(), ScanId::NONE, None)?;
-        if self.max_depth == 0 {
-            self.stats.depth_capped += 1;
-            return Ok(());
+impl<'a, O: DirOpener> Walker<'a, O> {
+    /// A worker with its own arena tagged `thread` and its own read buffer.
+    /// The arena is given no ceiling of its own: the limit is `ctx.budget`,
+    /// shared with every other worker.
+    pub(crate) fn new(
+        ctx: &WalkerCtx<'a, O>,
+        share: Option<&'a (dyn Share + 'a)>,
+        opts: &WalkOptions,
+        thread: u16,
+    ) -> io::Result<Self> {
+        Walker::with_arena_cap(ctx, share, opts, thread, u64::MAX)
+    }
+
+    /// [`Walker::new`] with a ceiling on this worker's arena, which exists so
+    /// that a test can make one worker's push fail while the shared budget
+    /// and every other worker still have room. Production has no such
+    /// ceiling and calls [`Walker::new`].
+    pub(crate) fn with_arena_cap(
+        ctx: &WalkerCtx<'a, O>,
+        share: Option<&'a (dyn Share + 'a)>,
+        opts: &WalkOptions,
+        thread: u16,
+        arena_cap: u64,
+    ) -> io::Result<Self> {
+        check_options(opts)?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(opts.buffer_bytes)
+            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+        buf.resize(opts.buffer_bytes, 0);
+        Ok(Walker {
+            opener: ctx.opener,
+            inodes: ctx.inodes,
+            budget: ctx.budget,
+            halt: ctx.halt,
+            share,
+            allowance: 0,
+            buf,
+            attrlist: scan_attrlist(),
+            max_depth: opts.max_depth,
+            root_volume: ctx.root_volume,
+            include_non_local: opts.include_non_local,
+            task_root: ScanId::NONE,
+            base: Arc::from(Path::new("")),
+            arena: Arena::new(thread, arena_cap),
+            stats: WalkStats::default(),
+        })
+    }
+
+    pub(crate) fn finish(self) -> (Arena, WalkStats) {
+        (self.arena, self.stats)
+    }
+
+    /// Walk the scan root, whose node has not been pushed yet and whose
+    /// descriptor is already open.
+    pub(crate) fn run_root(
+        &mut self,
+        root_path: &Path,
+        root_fd: OwnedFd,
+    ) -> Result<(), Incomplete> {
+        self.task_root = ScanId::NONE;
+        self.base = Arc::from(Path::new(""));
+        self.guard(|w| {
+            let root = w.push(root_path.as_os_str().as_bytes(), ScanId::NONE, None)?;
+            if w.max_depth == 0 {
+                w.stats.depth_capped += 1;
+                return Ok(());
+            }
+            w.subtree(root_fd, root, 0)
+        })
+    }
+
+    /// Walk a directory another worker enumerated and offered: `node` is
+    /// already recorded (in whichever arena pushed it), `path` is where it
+    /// lives and `depth` is its absolute depth.
+    pub(crate) fn run_dir(
+        &mut self,
+        path: Arc<Path>,
+        node: ScanId,
+        depth: u16,
+    ) -> Result<(), Incomplete> {
+        self.task_root = node;
+        self.base = path;
+        self.guard(|w| {
+            let path = Arc::clone(&w.base);
+            match w.open_path(&path) {
+                Ok(fd) => {
+                    if w.admit(node, &fd)? {
+                        w.subtree(fd, node, depth)?;
+                    }
+                    Ok(())
+                }
+                Err(e) => w.note_error(node, e),
+            }
+        })
+    }
+
+    /// Run a task, recording a terminal reason in this worker's stats and
+    /// telling every other worker to stop.
+    ///
+    /// Overwriting `incomplete` rather than inserting is deliberate and is
+    /// what the serial walk has always done: the field names what *stopped*
+    /// the walk, so a terminal reason outranks anything that was flagged and
+    /// walked past.
+    fn guard(
+        &mut self,
+        task: impl FnOnce(&mut Self) -> Result<(), Incomplete>,
+    ) -> Result<(), Incomplete> {
+        let outcome = task(self);
+        if let Err(why) = outcome {
+            self.stats.incomplete = Some(why);
+            self.halt.raise(why);
         }
+        outcome
+    }
+
+    /// Depth-first over an explicit stack, from `id` (open as `fd`) down.
+    fn subtree(&mut self, fd: OwnedFd, id: ScanId, depth: u16) -> Result<(), Incomplete> {
         let mut stack: Vec<Frame> = Vec::new();
-        self.enter(&mut stack, root_fd, root, 0)?;
+        self.enter(&mut stack, fd, id, depth)?;
 
         while let Some(top) = stack.last_mut() {
             let Some(&child) = top.children.get(top.next) else {
@@ -494,7 +828,7 @@ impl<O: DirOpener> Walker<'_, O> {
         else {
             return Ok(true);
         };
-        let path = node_path(&self.arena, id)?;
+        let path = self.path_of(id)?;
         self.stats
             .skipped_mounts
             .try_reserve(1)
@@ -503,7 +837,8 @@ impl<O: DirOpener> Walker<'_, O> {
         Ok(false)
     }
 
-    /// Enumerate `id`'s directory, then push it as a frame to be descended.
+    /// Enumerate `id`'s directory, offer what the pool wants of it, then push
+    /// it as a frame to be descended.
     fn enter(
         &mut self,
         stack: &mut Vec<Frame>,
@@ -518,9 +853,60 @@ impl<O: DirOpener> Walker<'_, O> {
             next: 0,
         };
         self.enumerate(&mut frame, id)?;
+        self.offer(&mut frame, id)?;
         stack.try_reserve(1).map_err(|_| Incomplete::OutOfMemory)?;
         stack.push(frame);
         Ok(())
+    }
+
+    /// Hand this directory's subdirectories beyond the first to the pool,
+    /// while it wants more. Breadth is what is shared; the one kept is what
+    /// this worker descends next, so its open descriptors stay a chain down
+    /// the tree rather than a fan across it.
+    ///
+    /// Nothing is published before the frame has been enumerated to
+    /// exhaustion, and `frame.next` is still 0, so taking children off the
+    /// back cannot skip one. A subdirectory whose absolute path would exceed
+    /// `PATH_MAX` is kept: it could not be reopened by path, and losing it
+    /// would lose its bytes.
+    fn offer(&mut self, frame: &mut Frame, dir: ScanId) -> Result<(), Incomplete> {
+        debug_assert_eq!(frame.next, 0, "offer runs before any descent");
+        let Some(share) = self.share else {
+            return Ok(());
+        };
+        if frame.children.len() < 2 || !share.wants_work() {
+            return Ok(());
+        }
+        let dir_path = self.path_of(dir)?;
+        let depth = frame.depth + 1;
+        while frame.children.len() > 1 && share.wants_work() {
+            let &id = frame.children.last().expect("len > 1");
+            let Some(path) = self.child_path(&dir_path, id) else {
+                break;
+            };
+            frame.children.pop();
+            share.publish(path, id, depth);
+        }
+        Ok(())
+    }
+
+    /// `dir`'s child `id` as an absolute path, or `None` if it would not fit
+    /// `PATH_MAX`.
+    fn child_path(&self, dir: &Path, id: ScanId) -> Option<Arc<Path>> {
+        let node = self.arena.get(id)?;
+        let name = self.arena.name_bytes(node.name);
+        if dir.as_os_str().as_bytes().len() + 1 + name.len() > MAX_PATH_BYTES {
+            return None;
+        }
+        let mut path = dir.to_path_buf();
+        path.push(OsStr::from_bytes(name));
+        Some(Arc::from(path))
+    }
+
+    /// The absolute path of `id`, which must be the current task's root or a
+    /// node below it.
+    fn path_of(&self, id: ScanId) -> Result<PathBuf, Incomplete> {
+        node_path(&self.arena, id, &self.base, self.task_root)
     }
 
     /// Drain one directory: call `getattrlistbulk` until it reports no more.
@@ -621,6 +1007,13 @@ impl<O: DirOpener> Walker<'_, O> {
         parent: ScanId,
         entry: Option<&RawEntry<'_>>,
     ) -> Result<ScanId, Incomplete> {
+        // The one place every worker passes often enough to notice another
+        // worker's terminal failure promptly. Without it a worker inside a
+        // large subtree would keep claiming inodes against the shared set
+        // after the walk had already been stopped.
+        if let Some(why) = self.halt.reason() {
+            return Err(why);
+        }
         let name = self.arena.push_name(name)?;
         let mut dup = false;
         let node = match entry {
@@ -658,7 +1051,7 @@ impl<O: DirOpener> Walker<'_, O> {
             },
         };
         let is_dir = node.obj_type == ObjType::Dir;
-        let id = self.arena.push_node(node)?;
+        let id = self.push_node(node)?;
         if is_dir {
             self.stats.dirs += 1;
         } else {
@@ -670,26 +1063,47 @@ impl<O: DirOpener> Walker<'_, O> {
         Ok(id)
     }
 
+    /// Draw one unit from the shared budget, then store the node.
+    ///
+    /// Taking the unit here rather than before `push_name` keeps a serial
+    /// walk's behaviour exactly: a budget failure leaves the name bytes
+    /// already stored, which is why it is terminal. The unit is spent only on
+    /// a successful push, so an arena failure does not consume budget other
+    /// workers could have used.
+    fn push_node(&mut self, node: ScanNode) -> Result<ScanId, Incomplete> {
+        if self.allowance == 0 {
+            self.allowance = self.budget.take(BUDGET_CHUNK);
+            if self.allowance == 0 {
+                return Err(Incomplete::NodeBudget);
+            }
+        }
+        let id = self.arena.push_node(node)?;
+        self.allowance -= 1;
+        Ok(id)
+    }
+
     fn open_child(&self, parent_fd: RawFd, child: ScanId) -> Result<OwnedFd, c_int> {
         let node = self.arena.get(child).ok_or(libc::EINVAL)?;
         let name = self.arena.name_bytes(node.name);
-        // Copy the name onto the stack to NUL-terminate it: a heap-allocated
-        // `CString` per directory would be an allocation on the walk's hot
-        // path that can fail.
-        let mut z = [0u8; MAX_NAME_BYTES + 1];
-        if name.len() > MAX_NAME_BYTES {
-            return Err(libc::ENAMETOOLONG);
-        }
-        z[..name.len()].copy_from_slice(name);
-        let c = CStr::from_bytes_with_nul(&z[..=name.len()]).map_err(|_| libc::EINVAL)?;
-        self.opener.open_dir_at(parent_fd, c)
+        with_cstr(name, |c| self.opener.open_dir_at(parent_fd, c))
+    }
+
+    /// Open a directory by absolute path, for a task whose descriptor chain
+    /// belongs to another thread. `O_NOFOLLOW` still refuses a symlink in the
+    /// final position, so the swap a stolen directory is exposed to is the
+    /// same one `openat` guards against; the components above it are resolved
+    /// afresh, which is the cost of crossing threads.
+    fn open_path(&self, path: &Path) -> Result<OwnedFd, c_int> {
+        with_cstr(path.as_os_str().as_bytes(), |c| {
+            self.opener.open_dir_at(libc::AT_FDCWD, c)
+        })
     }
 
     /// Account for a failure on directory `id`.
     fn note_error(&mut self, id: ScanId, errno: c_int) -> Result<(), Incomplete> {
         match errno {
             libc::EPERM | libc::EACCES => {
-                let path = node_path(&self.arena, id)?;
+                let path = self.path_of(id)?;
                 self.stats
                     .unreadable
                     .try_reserve(1)
@@ -699,6 +1113,11 @@ impl<O: DirOpener> Walker<'_, O> {
                 // node itself render as locked instead of as an empty folder.
                 if let Some(node) = self.arena.get_mut(id) {
                     node.flags |= FLAG_PERM_DENIED;
+                } else if let Some(share) = self.share {
+                    // A stolen directory: its node belongs to the worker that
+                    // enumerated the parent, so the flag is recorded and
+                    // applied once the workers have joined.
+                    share.flag_foreign(id, FLAG_PERM_DENIED);
                 }
             }
             libc::ENOMEM => {
@@ -718,21 +1137,47 @@ impl<O: DirOpener> Walker<'_, O> {
     }
 }
 
-/// The full path of node `id`, rebuilt from the names up the parent chain. The
-/// root's stored name is the whole root path.
-fn node_path(arena: &Arena, id: ScanId) -> Result<PathBuf, Incomplete> {
+/// Call `f` with `bytes` NUL-terminated on the stack.
+///
+/// A heap-allocated `CString` per directory would be an allocation on the
+/// walk's hot path that can fail. Anything longer than `MAX_PATH_BYTES` could
+/// not be opened anyway, so it is `ENAMETOOLONG` here rather than in the
+/// kernel.
+fn with_cstr<R>(bytes: &[u8], f: impl FnOnce(&CStr) -> Result<R, c_int>) -> Result<R, c_int> {
+    if bytes.len() > MAX_PATH_BYTES {
+        return Err(libc::ENAMETOOLONG);
+    }
+    let mut z = [0u8; MAX_PATH_BYTES + 1];
+    z[..bytes.len()].copy_from_slice(bytes);
+    let c = CStr::from_bytes_with_nul(&z[..=bytes.len()]).map_err(|_| libc::EINVAL)?;
+    f(c)
+}
+
+/// The path of node `id`: the names from `id` up to but not including `stop`,
+/// appended to `base`.
+///
+/// A serial walk passes `ScanId::NONE` and an empty base, so the climb runs to
+/// the root, whose stored name is the whole root path, and the result is
+/// absolute. A worker of the parallel walk passes its task's root and that
+/// directory's absolute path, because above the task root the parent chain can
+/// leave this arena — `Arena::get` would stop there anyway, but stopping
+/// deliberately is what makes the two halves line up.
+fn node_path(arena: &Arena, id: ScanId, base: &Path, stop: ScanId) -> Result<PathBuf, Incomplete> {
     let mut parts: Vec<&[u8]> = Vec::new();
     let mut cur = id;
-    while let Some(n) = arena.get(cur) {
+    while cur != stop {
+        let Some(n) = arena.get(cur) else { break };
         parts.try_reserve(1).map_err(|_| Incomplete::OutOfMemory)?;
         parts.push(arena.name_bytes(n.name));
         cur = n.parent;
     }
-    let len = parts.iter().map(|p| p.len() + 1).sum::<usize>();
+    let base = base.as_os_str().as_bytes();
+    let len = base.len() + parts.iter().map(|p| p.len() + 1).sum::<usize>();
     let mut bytes: Vec<u8> = Vec::new();
     bytes
         .try_reserve_exact(len)
         .map_err(|_| Incomplete::OutOfMemory)?;
+    bytes.extend_from_slice(base);
     for part in parts.iter().rev() {
         if !bytes.is_empty() && bytes.last() != Some(&b'/') {
             bytes.push(b'/');
@@ -745,9 +1190,9 @@ fn node_path(arena: &Arena, id: ScanId) -> Result<PathBuf, Incomplete> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
     use std::fs::{self, File};
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, AtomicU32};
     use tesserae_testutil::{DiskImage, Fixture};
 
     fn opts(root: &Path) -> WalkOptions {
@@ -787,22 +1232,26 @@ mod tests {
     /// `victim` with a regular file or a symlink, exactly once. The kernel then produces
     /// the `ENOTDIR` itself, so this exercises the real syscall rather than a
     /// faked errno.
+    /// `DirOpener` is `Sync`, so these counters are atomics rather than
+    /// `Cell`s: the same opener has to be shareable with every worker of a
+    /// parallel walk, even though these particular openers only ever drive a
+    /// serial one.
     struct SwapBeforeOpen {
         victim: std::path::PathBuf,
         /// `None` swaps in a regular file; `Some(target)` swaps in a symlink.
         symlink_to: Option<&'static str>,
-        fired: Cell<u32>,
+        fired: AtomicU32,
     }
 
     impl DirOpener for SwapBeforeOpen {
         fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if name.to_bytes() == b"victim" && self.fired.get() == 0 {
+            if name.to_bytes() == b"victim" && self.fired.load(Ordering::Relaxed) == 0 {
                 fs::remove_dir_all(&self.victim).unwrap();
                 match self.symlink_to {
                     None => drop(File::create(&self.victim).unwrap()),
                     Some(t) => std::os::unix::fs::symlink(t, &self.victim).unwrap(),
                 }
-                self.fired.set(self.fired.get() + 1);
+                self.fired.fetch_add(1, Ordering::Relaxed);
             }
             OpenAt.open_dir_at(parent, name)
         }
@@ -810,12 +1259,12 @@ mod tests {
 
     /// Counts descents without changing them.
     struct CountingOpener {
-        opens: Cell<u32>,
+        opens: AtomicU32,
     }
 
     impl DirOpener for CountingOpener {
         fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            self.opens.set(self.opens.get() + 1);
+            self.opens.fetch_add(1, Ordering::Relaxed);
             OpenAt.open_dir_at(parent, name)
         }
     }
@@ -933,12 +1382,16 @@ mod tests {
         let opener = SwapBeforeOpen {
             victim: fx.path().join("victim"),
             symlink_to: None,
-            fired: Cell::new(0),
+            fired: AtomicU32::new(0),
         };
 
         let (arena, stats) = walk_serial_with(&opts(fx.path()), &opener).unwrap();
 
-        assert_eq!(opener.fired.get(), 1, "the swap must actually have run");
+        assert_eq!(
+            opener.fired.load(Ordering::Relaxed),
+            1,
+            "the swap must actually have run"
+        );
         assert!(fx.path().join("victim").is_file());
         assert_eq!(stats.errors, 1);
         assert!(stats.unreadable.is_empty());
@@ -959,12 +1412,12 @@ mod tests {
         let opener = SwapBeforeOpen {
             victim: fx.path().join("victim"),
             symlink_to: Some("other"),
-            fired: Cell::new(0),
+            fired: AtomicU32::new(0),
         };
 
         let (_, stats) = walk_serial_with(&opts(fx.path()), &opener).unwrap();
 
-        assert_eq!(opener.fired.get(), 1);
+        assert_eq!(opener.fired.load(Ordering::Relaxed), 1);
         assert!(fx.path().join("victim").is_symlink());
         assert_eq!(stats.errors, 1);
         assert_eq!(stats.files, 1, "other/f.bin once, not again via victim");
@@ -1006,12 +1459,12 @@ mod tests {
     /// Fails the first directory it is asked to open with `EMFILE`, whichever
     /// that is, and opens every later one for real.
     struct FailFirstOpen {
-        failed: Cell<bool>,
+        failed: AtomicBool,
     }
 
     impl DirOpener for FailFirstOpen {
         fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if !self.failed.replace(true) {
+            if !self.failed.swap(true, Ordering::Relaxed) {
                 return Err(libc::EMFILE);
             }
             OpenAt.open_dir_at(parent, name)
@@ -1032,12 +1485,15 @@ mod tests {
         let mut o = opts(fx.path());
         o.node_budget = 5;
         let opener = FailFirstOpen {
-            failed: Cell::new(false),
+            failed: AtomicBool::new(false),
         };
 
         let (arena, stats) = walk_serial_with(&o, &opener).unwrap();
 
-        assert!(opener.failed.get(), "the EMFILE must actually have fired");
+        assert!(
+            opener.failed.load(Ordering::Relaxed),
+            "the EMFILE must actually have fired"
+        );
         assert_eq!(arena.len(), 5);
         assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
     }
@@ -1103,17 +1559,16 @@ mod tests {
         buf[first_len..first_len + 4].copy_from_slice(&0u32.to_le_bytes());
 
         let inodes = InodeSet::new(1);
-        let mut w = Walker {
+        let budget = NodeBudget::new(u64::MAX);
+        let halt = Halt::new();
+        let ctx = WalkerCtx {
             opener: &OpenAt,
             inodes: &inodes,
-            buf: Vec::new(),
-            attrlist: scan_attrlist(),
-            max_depth: 512,
+            budget: &budget,
+            halt: &halt,
             root_volume: VolumeId::new(0, 0),
-            include_non_local: false,
-            arena: Arena::new(0, u64::MAX),
-            stats: WalkStats::default(),
         };
+        let mut w = Walker::new(&ctx, None, &opts(fx.path()), 0).unwrap();
         let root = w.push(b"root", ScanId::NONE, None).unwrap();
         let mut frame = Frame {
             fd: OwnedFd::from(File::open(fx.path()).unwrap()),
@@ -1343,7 +1798,7 @@ mod tests {
         let mut o = opts(fx.path());
         o.node_budget = 3;
         let opener = CountingOpener {
-            opens: Cell::new(0),
+            opens: AtomicU32::new(0),
         };
 
         let (arena, stats) = walk_serial_with(&o, &opener).unwrap();
@@ -1351,7 +1806,7 @@ mod tests {
         assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
         assert_eq!(arena.len(), 3);
         assert_eq!(
-            opener.opens.get(),
+            opener.opens.load(Ordering::Relaxed),
             0,
             "the walk stopped, it did not carry on"
         );
@@ -1376,6 +1831,88 @@ mod tests {
             .err()
             .expect("walk must fail");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// A walker with a halt and a budget of its own, for the two tests below.
+    fn halted_walker<'a>(ctx: &WalkerCtx<'a, OpenAt>, opts: &WalkOptions) -> Walker<'a, OpenAt> {
+        Walker::new(ctx, None, opts, 0).unwrap()
+    }
+
+    /// Half of "one worker's failure stops the others": a worker that sees the
+    /// halt raised stops at its very next push, whatever it was doing.
+    ///
+    /// `pool::tests::one_workers_arena_failure_stops_every_worker` runs the
+    /// whole thing through real threads, where the timing is a race by
+    /// definition. This is the same property with the race taken out.
+    #[test]
+    fn a_raised_halt_stops_a_push_dead() {
+        let fx = Fixture::new().unwrap();
+        let inodes = InodeSet::new(1);
+        let budget = NodeBudget::new(u64::MAX);
+        let halt = Halt::new();
+        let ctx = WalkerCtx {
+            opener: &OpenAt,
+            inodes: &inodes,
+            budget: &budget,
+            halt: &halt,
+            root_volume: VolumeId::new(0, 0),
+        };
+        let mut w = halted_walker(&ctx, &opts(fx.path()));
+
+        // Before: a push works and the budget is nowhere near spent.
+        w.push(b"before", ScanId::NONE, None).expect("push works");
+        assert_eq!(w.arena.len(), 1);
+
+        // Another worker fails.
+        halt.raise(Incomplete::OutOfMemory);
+
+        // After: this worker stops, with the other's reason, and stores
+        // nothing — not even the name bytes, since the halt is checked first.
+        assert_eq!(
+            w.push(b"after", ScanId::NONE, None),
+            Err(Incomplete::OutOfMemory)
+        );
+        assert_eq!(w.arena.len(), 1, "a node was stored after the halt");
+
+        // First reason wins, so a later failure cannot rewrite history.
+        halt.raise(Incomplete::NodeBudget);
+        assert_eq!(halt.reason(), Some(Incomplete::OutOfMemory));
+    }
+
+    /// The other half: a terminal failure in this worker raises the halt, so
+    /// there is something for every other worker to see.
+    #[test]
+    fn a_terminal_failure_raises_the_halt() {
+        let fx = Fixture::new().unwrap();
+        for i in 0..10 {
+            fx.file(&format!("f{i}.bin"), 1).unwrap();
+        }
+        let inodes = InodeSet::new(1);
+        // Room for the root and two files, then the walk is over.
+        let budget = NodeBudget::new(3);
+        let halt = Halt::new();
+        let root_fd = open_root(&opts(fx.path())).unwrap();
+        let ctx = WalkerCtx {
+            opener: &OpenAt,
+            inodes: &inodes,
+            budget: &budget,
+            halt: &halt,
+            root_volume: root_volume_of(&opts(fx.path()), &root_fd).unwrap(),
+        };
+        let mut w = halted_walker(&ctx, &opts(fx.path()));
+
+        assert_eq!(halt.reason(), None, "nothing has failed yet");
+        let outcome = w.run_root(fx.path(), root_fd);
+
+        assert_eq!(outcome, Err(Incomplete::NodeBudget));
+        assert_eq!(
+            halt.reason(),
+            Some(Incomplete::NodeBudget),
+            "the failure was not announced, so no other worker would stop"
+        );
+        let (arena, stats) = w.finish();
+        assert_eq!(arena.len(), 3);
+        assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
     }
 
     #[test]

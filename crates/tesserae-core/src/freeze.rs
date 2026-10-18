@@ -168,9 +168,9 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 ///   a sum is never saturated, since a clamped size would be a silently
 ///   wrong one.
 /// * **`u32::MAX` nodes or more**, because indices are 32 bits. That is about
-///   170 times the node budget, and the budget is per arena until the parallel
-///   walker makes it global (see the walker's notes), so it is bounded by
-///   `workers * budget`, still far below.
+///   170 times the node budget, which is a ceiling on the whole walk however
+///   many arenas it was gathered into (`walk::NodeBudget`), so it is far
+///   below.
 ///
 /// The FFI boundary wraps calls in `catch_unwind` (release builds keep
 /// `panic = "unwind"`).

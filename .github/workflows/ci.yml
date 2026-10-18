@@ -38,6 +38,17 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # `pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers` is
+      # `#[ignore]`d because `setrlimit` is process-wide and cargo runs a
+      # binary's tests as threads in one process: un-ignored it would corrupt
+      # every test beside it, and the hard limit it lowers cannot be restored.
+      # So it gets a process of its own, one thread, nothing else running.
+      - name: Test (descriptor limit, serialized)
+        run: >
+          cargo test -p tesserae-core --lib --
+          --ignored --exact --test-threads=1
+          pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
+
       - name: Licences
         run: cargo deny check licenses
 
