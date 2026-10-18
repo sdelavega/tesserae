@@ -169,15 +169,20 @@ impl Arena {
         }
         let chunk_idx = self.names.len() - 1;
         let chunk = &mut self.names[chunk_idx];
-        // Within capacity: `len + bytes.len() <= NAME_CHUNK_BYTES <= capacity`.
-        let off = chunk.len();
+        debug_assert!(chunk.capacity() >= NAME_CHUNK_BYTES);
+        // Everything fallible happens before the append, so an `Err` never
+        // leaves bytes behind. Within capacity:
+        // `len + bytes.len() <= NAME_CHUNK_BYTES <= capacity`.
+        //
+        // Both conversions are unreachable in practice: a name chunk index
+        // past `u32::MAX` would take 4 PiB of names, and `off` is bounded by
+        // `NAME_CHUNK_BYTES` (1 MiB).
+        let chunk_ref = u32::try_from(chunk_idx).map_err(|_| ArenaError::OutOfMemory)?;
+        let off = u32::try_from(chunk.len()).map_err(|_| ArenaError::OutOfMemory)?;
         chunk.extend_from_slice(bytes);
         Ok(NameRef {
-            // Same shape as above: a name chunk index past `u32::MAX` would
-            // take 4 PiB of names, and `off` is bounded by `NAME_CHUNK_BYTES`
-            // (1 MiB), so neither conversion can fail in practice.
-            chunk: u32::try_from(chunk_idx).map_err(|_| ArenaError::OutOfMemory)?,
-            off: u32::try_from(off).map_err(|_| ArenaError::OutOfMemory)?,
+            chunk: chunk_ref,
+            off,
             len,
         })
     }
@@ -301,18 +306,57 @@ mod tests {
     }
 
     #[test]
-    fn node_addresses_are_stable_across_outer_list_growth() {
-        // The id round-trip above cannot tell a moved node from a stable one.
-        // The address can: it must not change while the outer chunk list
-        // reallocates (it holds 4 chunk headers before its first regrowth,
-        // then 8; nine chunks forces both).
+    fn node_chunks_never_reallocate() {
+        // The invariant itself, not allocator behaviour: every chunk is
+        // created at exactly CHUNK_NODES capacity and never exceeds it (a
+        // growing push would at least double the capacity), and its buffer
+        // pointer never changes while the outer list regrows (it holds 4
+        // chunk headers before its first regrowth, then 8; nine chunks
+        // forces both).
         let mut arena = Arena::new(0, u64::MAX);
         let id0 = arena.push_node(node(1)).unwrap();
         let addr0 = arena.get(id0).unwrap() as *const ScanNode;
+        let mut seen: Vec<*const ScanNode> = Vec::new();
         for i in 0..(9 * CHUNK_NODES as u64) {
             arena.push_node(node(i)).unwrap();
+            // Record each chunk's pointer the moment it exists.
+            while seen.len() < arena.nodes.len() {
+                seen.push(arena.nodes[seen.len()].as_ptr());
+            }
+            if (i as usize).is_multiple_of(CHUNK_NODES / 4) {
+                for (c, p) in arena.nodes.iter().zip(&seen) {
+                    assert_eq!(c.as_ptr(), *p);
+                }
+            }
         }
+        assert_eq!(seen.len(), arena.nodes.len());
+        assert!(arena.nodes.len() >= 9);
+        for (idx, (c, p)) in arena.nodes.iter().zip(&seen).enumerate() {
+            assert_eq!(c.capacity(), CHUNK_NODES, "node chunk {idx} capacity");
+            assert_eq!(c.as_ptr(), *p, "node chunk {idx} moved");
+        }
+        // Redundant with the above, but it is the property callers rely on.
         assert_eq!(arena.get(id0).unwrap() as *const ScanNode, addr0);
+    }
+
+    #[test]
+    fn name_chunks_never_reallocate() {
+        let mut arena = Arena::new(0, 10);
+        let name = [b'n'; 255];
+        let mut seen: Vec<*const u8> = Vec::new();
+        for _ in 0..(5 * NAME_CHUNK_BYTES / name.len()) {
+            arena.push_name(&name).unwrap();
+            while seen.len() < arena.names.len() {
+                seen.push(arena.names[seen.len()].as_ptr());
+            }
+        }
+        assert_eq!(seen.len(), arena.names.len());
+        assert!(arena.names.len() >= 5);
+        for (idx, (c, p)) in arena.names.iter().zip(&seen).enumerate() {
+            assert_eq!(c.capacity(), NAME_CHUNK_BYTES, "name chunk {idx} capacity");
+            assert_eq!(c.as_ptr(), *p, "name chunk {idx} moved");
+            assert!(c.len() <= NAME_CHUNK_BYTES);
+        }
     }
 
     #[test]
