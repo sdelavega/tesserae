@@ -27,7 +27,7 @@ use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use tempfile::TempDir;
 
@@ -265,8 +265,37 @@ fn cstring(bytes: &[u8]) -> io::Result<CString> {
     CString::new(bytes).map_err(|_| invalid("path contains NUL"))
 }
 
+/// Serialises everything in this crate that allocates meaningful disk space
+/// against any measurement of free space.
+///
+/// Free space is a shared global resource, and the only observable that tells
+/// a real APFS clone from a full copy is the change in a volume's free space
+/// (`clone_consumes_no_new_space`; a clone and a copy have identical
+/// `st_blocks`). Any allocation that lands inside that measurement window is
+/// indistinguishable from the copy it is looking for, and the test's tolerance
+/// is the same order as what a disk image allocates, so an overlap is a
+/// predictable failure rather than noise.
+///
+/// So: code that writes real data ([`write_dense`], [`crate::DiskImage`]
+/// creation) holds this lock while it does, and a test that measures free space
+/// holds it across the whole measurement. The lock is not reentrant: do not
+/// call either of those while holding it. Cloning, `sparse` (an `ftruncate`,
+/// no blocks), links and directories allocate nothing worth guarding and
+/// do not take it.
+///
+/// It only serialises threads of one test binary, which is the only place they
+/// can overlap: cargo runs test binaries one after another.
+static ALLOCATION: Mutex<()> = Mutex::new(());
+
+/// Hold the allocation lock; see `ALLOCATION`. A panic in another test while
+/// holding it must not wedge every later one, so poisoning is ignored.
+pub fn allocation_lock() -> MutexGuard<'static, ()> {
+    ALLOCATION.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Write `len` bytes of non-zero data so every block is really allocated.
 fn write_dense(mut file: File, len: u64) -> io::Result<()> {
+    let _alloc = allocation_lock();
     let chunk = [0xA5u8; 64 * 1024];
     let mut left = len;
     while left > 0 {
@@ -330,6 +359,9 @@ mod tests {
         const LEN: u64 = 64 << 20;
         let fx = Fixture::new().unwrap();
         fx.file("big.bin", LEN).unwrap();
+        // Nothing else in this binary may allocate between the two readings;
+        // see `allocation_lock`. `clone_of` does not take it, so no deadlock.
+        let _quiet = super::allocation_lock();
         let before = free_bytes(fx.path());
         fx.clone_of("big.bin", "clone.bin").unwrap();
         let used = before.saturating_sub(free_bytes(fx.path()));
@@ -337,6 +369,31 @@ mod tests {
             used < LEN / 4,
             "clone consumed {used} bytes; not a real clone"
         );
+    }
+
+    #[test]
+    fn dense_writes_wait_for_a_free_space_measurement() {
+        // The property `clone_consumes_no_new_space` depends on, tested
+        // directly instead of through a race: while the allocation lock is
+        // held, a concurrent write must not make progress.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+        let fx = Fixture::new().unwrap();
+        let wrote = AtomicBool::new(false);
+        let quiet = super::allocation_lock();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                fx.file("blocked.bin", 1 << 20).unwrap();
+                wrote.store(true, Ordering::SeqCst);
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(
+                !wrote.load(Ordering::SeqCst),
+                "a dense write ran while free space was being measured"
+            );
+            drop(quiet);
+        });
+        assert!(wrote.load(Ordering::SeqCst), "and it completes afterwards");
     }
 
     #[test]

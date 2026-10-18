@@ -24,4 +24,4 @@ pub mod diskimage;
 pub mod tree;
 
 pub use diskimage::DiskImage;
-pub use tree::Fixture;
+pub use tree::{allocation_lock, Fixture};

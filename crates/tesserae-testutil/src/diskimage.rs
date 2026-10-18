@@ -66,6 +66,9 @@ impl DiskImage {
             .ok_or_else(|| invalid("mountpoint has no parent"))?;
         let dir = TempDir::new()?;
         let dmg = dir.path().join("image.dmg");
+        // Creating the image writes `size_mib` MiB; keep that out of any
+        // free-space measurement running in another test. See `allocation_lock`.
+        let _alloc = crate::allocation_lock();
 
         run(Command::new("hdiutil")
             .args(["create", "-size", &format!("{size_mib}m")])
@@ -209,6 +212,36 @@ mod tests {
             Some("deliberate, to unwind with the image attached")
         );
         assert!(!is_mounted(&mnt), "the guard must detach on unwind");
+    }
+
+    #[test]
+    fn creating_an_image_waits_for_a_free_space_measurement() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let attached = AtomicBool::new(false);
+        let quiet = crate::allocation_lock();
+        let image = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let image = DiskImage::attach(&mnt, 16).unwrap();
+                attached.store(true, Ordering::SeqCst);
+                image
+            });
+            // Longer than an unobstructed create + attach takes (about a
+            // second), so an attach that ignored the lock would be done by now.
+            // One-sided: a slow machine can only make this pass, never fail.
+            std::thread::sleep(Duration::from_millis(2500));
+            assert!(
+                !attached.load(Ordering::SeqCst),
+                "an image was written while free space was being measured"
+            );
+            drop(quiet);
+            handle.join().unwrap()
+        });
+        assert!(is_mounted(&mnt));
+        drop(image);
     }
 
     #[test]
