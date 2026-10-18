@@ -9,4 +9,5 @@ publish = false
 libc = "0.2"
 
 [dev-dependencies]
+proptest = "1.12.0"
 tesserae-testutil = { path = "../tesserae-testutil" }
