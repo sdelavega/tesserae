@@ -49,10 +49,15 @@ verbatim from the spec.
 Input classes the spec implies but does not state, most likely to bite
 first. Each has a test pinned to the task that owns the code.
 
-1. **Non-UTF-8 filenames.** macOS filenames are arbitrary bytes.
-   `ATTR_CMN_NAME` can return invalid UTF-8, and a real disk has such
-   names. Nothing may panic, and bytes must round-trip through the name
-   arena unchanged. → Tasks 4 and 6.
+1. **Non-UTF-8 filenames.** The parser's input is a byte buffer and must
+   never assume UTF-8: nothing may panic, and name bytes must round-trip
+   through the name arena unchanged. Such names are unreachable through
+   any local fixture, because macOS rejects invalid UTF-8 at the syscall
+   boundary (measured: APFS `EILSEQ` (92), exFAT `EINVAL` (22)). They
+   remain reachable only via removable media or network mounts written by
+   another OS. The property is therefore tested synthetically, with a
+   buffer fed straight to the parser (Task 4), not via a fixture file.
+   → Tasks 4 and 6.
 2. **`ATTR_CMN_RETURNED_ATTRS` reporting an absent attribute.** The parser
    must substitute a default, not read garbage at a shifted offset. A
    silent misread here produces plausible wrong sizes. → Task 4.
