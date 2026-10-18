@@ -15,6 +15,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #[cfg(test)]
+pub mod testutil;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn suite_does_not_run_as_root() {
