@@ -274,12 +274,12 @@ fn cstring(bytes: &[u8]) -> io::Result<CString> {
 /// `st_blocks`). Any allocation that lands inside that measurement window is
 /// indistinguishable from the copy it is looking for, and the test's tolerance
 /// is the same order as what a disk image allocates, so an overlap is a
-/// predictable failure rather than noise.
+/// predictable failure rather than noise. (Accounting is synchronous with
+/// `write(2)`, measured, so holding the lock across the write is enough.)
 ///
 /// So: code that writes real data ([`write_dense`], [`crate::DiskImage`]
 /// creation) holds this lock while it does, and a test that measures free space
-/// holds it across the whole measurement. The lock is not reentrant: do not
-/// call either of those while holding it. Cloning, `sparse` (an `ftruncate`,
+/// holds it across the whole measurement. Cloning, `sparse` (an `ftruncate`,
 /// no blocks), links and directories allocate nothing worth guarding and
 /// do not take it.
 ///
@@ -287,15 +287,61 @@ fn cstring(bytes: &[u8]) -> io::Result<CString> {
 /// can overlap: cargo runs test binaries one after another.
 static ALLOCATION: Mutex<()> = Mutex::new(());
 
+thread_local! {
+    /// Whether this thread holds [`ALLOCATION`]. Lets an allocating site
+    /// *assert* that it is covered, so deleting the lock from it fails
+    /// deterministically on a plain single-threaded call instead of depending
+    /// on a race or a clock.
+    static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Proof that the allocation lock is held; releases it when dropped.
+#[must_use = "the lock is released as soon as this is dropped"]
+pub struct AllocationGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
 /// Hold the allocation lock; see `ALLOCATION`. A panic in another test while
 /// holding it must not wedge every later one, so poisoning is ignored.
-pub fn allocation_lock() -> MutexGuard<'static, ()> {
-    ALLOCATION.lock().unwrap_or_else(|e| e.into_inner())
+///
+/// Not reentrant: taking it twice on one thread would deadlock, so it panics
+/// with a message instead.
+pub fn allocation_lock() -> AllocationGuard {
+    assert!(
+        !HELD.with(|h| h.get()),
+        "allocation_lock is not reentrant: this thread already holds it \
+         (a measuring test must not call code that takes the lock)"
+    );
+    let lock = ALLOCATION.lock().unwrap_or_else(|e| e.into_inner());
+    HELD.with(|h| h.set(true));
+    AllocationGuard { _lock: lock }
+}
+
+impl Drop for AllocationGuard {
+    fn drop(&mut self) {
+        HELD.with(|h| h.set(false));
+    }
+}
+
+#[cfg(test)]
+fn assert_allocation_lock_held_is_false_here() {
+    assert!(!HELD.with(|h| h.get()), "the lock must not be held here");
+}
+
+/// Panic unless the calling thread holds the allocation lock. Called by every
+/// site that writes real data, immediately before it does.
+pub fn assert_allocation_lock_held() {
+    assert!(
+        HELD.with(|h| h.get()),
+        "this writes real disk space and must hold `allocation_lock()` so it \
+         cannot land inside a free-space measurement"
+    );
 }
 
 /// Write `len` bytes of non-zero data so every block is really allocated.
 fn write_dense(mut file: File, len: u64) -> io::Result<()> {
     let _alloc = allocation_lock();
+    assert_allocation_lock_held();
     let chunk = [0xA5u8; 64 * 1024];
     let mut left = len;
     while left > 0 {
@@ -372,28 +418,25 @@ mod tests {
     }
 
     #[test]
-    fn dense_writes_wait_for_a_free_space_measurement() {
-        // The property `clone_consumes_no_new_space` depends on, tested
-        // directly instead of through a race: while the allocation lock is
-        // held, a concurrent write must not make progress.
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::Duration;
-        let fx = Fixture::new().unwrap();
-        let wrote = AtomicBool::new(false);
-        let quiet = super::allocation_lock();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                fx.file("blocked.bin", 1 << 20).unwrap();
-                wrote.store(true, Ordering::SeqCst);
-            });
-            std::thread::sleep(Duration::from_millis(300));
-            assert!(
-                !wrote.load(Ordering::SeqCst),
-                "a dense write ran while free space was being measured"
-            );
-            drop(quiet);
-        });
-        assert!(wrote.load(Ordering::SeqCst), "and it completes afterwards");
+    fn the_allocation_lock_marks_the_thread_while_held() {
+        super::assert_allocation_lock_held_is_false_here();
+        let guard = super::allocation_lock();
+        super::assert_allocation_lock_held();
+        drop(guard);
+        super::assert_allocation_lock_held_is_false_here();
+    }
+
+    #[test]
+    #[should_panic(expected = "not reentrant")]
+    fn the_allocation_lock_refuses_to_deadlock_on_reentry() {
+        let _outer = super::allocation_lock();
+        let _inner = super::allocation_lock();
+    }
+
+    #[test]
+    #[should_panic(expected = "must hold `allocation_lock()`")]
+    fn the_held_assertion_fires_without_the_lock() {
+        super::assert_allocation_lock_held();
     }
 
     #[test]

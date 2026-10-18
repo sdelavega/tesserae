@@ -111,7 +111,7 @@ use std::path::PathBuf;
 
 use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_PERM_DENIED};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
-use crate::boundary::{should_descend, volume_of};
+use crate::boundary::{should_descend, volume_of, SkipReason, VolumeId};
 use crate::parse::{entries, ObjType, RawEntry};
 
 /// The default scan root: the user-visible data volume on modern macOS.
@@ -185,8 +185,11 @@ pub struct WalkStats {
     /// point or a non-local mount the caller did not opt into. Each is still a
     /// directory node (`dirs` counts it), holding no children and no bytes.
     /// This is policy, not failure: it is not in `errors` and does not set
-    /// `incomplete`.
-    pub skipped_mounts: Vec<PathBuf>,
+    /// `incomplete`. The reason says what the user could do about it: an
+    /// [`SkipReason::OtherVolume`] is another local disk (scan it separately),
+    /// a [`SkipReason::NonLocalMount`] is a network or other non-local mount
+    /// (opt in with `include_non_local`).
+    pub skipped_mounts: Vec<(PathBuf, SkipReason)>,
     /// Directories recorded at `max_depth` and therefore not entered.
     pub depth_capped: u64,
     /// Entries the kernel returned that the parser rejected or never reached
@@ -365,7 +368,7 @@ struct Walker<'a, O> {
     max_depth: u16,
     /// The volume the scan root lives on. Every directory opened is compared
     /// with it; see `Walker::admit`.
-    root_volume: i32,
+    root_volume: VolumeId,
     include_non_local: bool,
     arena: Arena,
     stats: WalkStats,
@@ -448,15 +451,16 @@ impl<O: DirOpener> Walker<'_, O> {
         if volume == self.root_volume {
             return Ok(true);
         }
-        if should_descend(self.root_volume, volume, raw, self.include_non_local).is_ok() {
+        let Err(reason) = should_descend(self.root_volume, volume, raw, self.include_non_local)
+        else {
             return Ok(true);
-        }
+        };
         let path = node_path(&self.arena, id)?;
         self.stats
             .skipped_mounts
             .try_reserve(1)
             .map_err(|_| Incomplete::OutOfMemory)?;
-        self.stats.skipped_mounts.push(path);
+        self.stats.skipped_mounts.push((path, reason));
         Ok(false)
     }
 
@@ -1044,7 +1048,7 @@ mod tests {
             buf: Vec::new(),
             attrlist: scan_attrlist(),
             max_depth: 512,
-            root_volume: 0,
+            root_volume: VolumeId::new(0, 0),
             include_non_local: false,
             arena: Arena::new(0, u64::MAX),
             stats: WalkStats::default(),
@@ -1071,7 +1075,7 @@ mod tests {
     }
 
     /// The volume `p` is on, as the boundary sees it.
-    fn volume_at(p: &Path) -> i32 {
+    fn volume_at(p: &Path) -> VolumeId {
         volume_of(File::open(p).unwrap().as_raw_fd()).unwrap()
     }
 
@@ -1107,6 +1111,8 @@ mod tests {
         );
 
         // `include_non_local` must not open this: the image is a local volume.
+        // This loop proves only that negative. The positive half (the flag
+        // does open a non-local mount) is `a_non_local_mount_is_skipped_unless_opted_in`.
         for include_non_local in [false, true] {
             let mut o = opts(fx.path());
             o.include_non_local = include_non_local;
@@ -1114,7 +1120,11 @@ mod tests {
             let (arena, stats) = walk_serial(&o).unwrap();
 
             let ctx = format!("include_non_local {include_non_local}");
-            assert_eq!(stats.skipped_mounts, vec![mnt.clone()], "{ctx}");
+            assert_eq!(
+                stats.skipped_mounts,
+                vec![(mnt.clone(), SkipReason::OtherVolume)],
+                "{ctx}"
+            );
             assert!(find(&arena, b"on_image.bin").is_empty(), "{ctx}");
             assert!(find(&arena, b"sub").is_empty(), "{ctx}");
             assert!(find(&arena, b"deep.bin").is_empty(), "{ctx}");
@@ -1154,16 +1164,27 @@ mod tests {
 
         let (arena, stats) = walk_serial_with(&opts(fx.path()), &NonLocalForVictim).unwrap();
 
-        assert_eq!(stats.skipped_mounts, vec![fx.path().join("victim")]);
+        assert_eq!(
+            stats.skipped_mounts,
+            vec![(fx.path().join("victim"), SkipReason::NonLocalMount)]
+        );
         assert_eq!(stats.files, 1, "other/f.bin was still reached");
         assert_eq!(stats.dirs, 3, "root, victim and other");
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.incomplete, None);
         assert_eq!(arena.len(), 4);
 
-        // Opted in: nothing else may be what stops it. The stand-in directory
-        // is empty, so entering it is invisible in the node counts; what is
-        // observable is that it is no longer recorded as skipped.
+        // Opted in. This half is partly inferred, and that is an environment
+        // limit, not an oversight: the only non-local mount an unprivileged
+        // test can open (the automounter's `/home`) is empty, so entering it
+        // changes no node count. What is observed is that it is no longer
+        // recorded in `skipped_mounts`, and the walk finished cleanly. It does
+        // not, on its own, rule out an `admit` that returned `Ok(false)`
+        // without recording. The skip half above fails if the policy
+        // misclassifies the mount, and `boundary::the_policy_table` and
+        // `refuses_non_local_mount_unless_opted_in` cover the opt-in decision
+        // itself; only "and then it was actually read" needs a non-local mount
+        // with content, which cannot be made without a server.
         let mut o = opts(fx.path());
         o.include_non_local = true;
         let (arena, stats) = walk_serial_with(&o, &NonLocalForVictim).unwrap();

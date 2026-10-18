@@ -39,11 +39,14 @@
 //! report the same `st_dev`, so a walk of `/` would sail across the firmlinks
 //! into the data volume. `fstatfs`'s `f_fsid` does differ, and it also carries
 //! the `MNT_LOCAL` flag, so one `fstatfs` on the open descriptor answers both
-//! questions. [`volume_of`] returns the first word of `f_fsid`; that is the
-//! identity compared against the root's.
+//! questions. [`volume_of`] returns the whole of `f_fsid` (both words) as a
+//! [`VolumeId`]; that is the identity compared against the root's. Comparing
+//! both words rather than the first alone costs nothing and removes an
+//! assumption this check cannot verify: that a network filesystem which sets
+//! its own `f_fsid` makes the first word unique.
 //!
 //! So the walker opens the child, takes [`volume_of`] from the open descriptor,
-//! and passes it as `entry_dev` to [`should_descend`]. Everything is read on the
+//! and passes it as `entry_volume` to [`should_descend`]. Everything is read on the
 //! descriptor the walker already holds, never on a path: a path would be
 //! resolved a second time, costing a lookup and opening a window in which the
 //! directory could be swapped between the check and the descent.
@@ -91,20 +94,31 @@ pub fn is_local_mount(fd: c_int) -> io::Result<bool> {
     Ok(fstatfs(fd)?.f_flags & libc::MNT_LOCAL as u32 != 0)
 }
 
-/// The volume the directory open as `fd` lives on: the first word of
-/// `f_fsid` from `fstatfs`. Compare it with the root's.
+/// A volume's identity: the kernel's `f_fsid`, both words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeId([i32; 2]);
+
+impl VolumeId {
+    pub const fn new(first: i32, second: i32) -> Self {
+        VolumeId([first, second])
+    }
+}
+
+/// The volume the directory open as `fd` lives on, from `fstatfs`'s `f_fsid`.
+/// Compare it with the root's.
 ///
 /// Read from the open descriptor, because that is the only place a mount
 /// point's own volume shows up, and from `f_fsid` rather than `st_dev` because
 /// only `f_fsid` tells the sealed system volume from the data volume. See the
 /// module documentation.
-pub fn volume_of(fd: c_int) -> io::Result<i32> {
+pub fn volume_of(fd: c_int) -> io::Result<VolumeId> {
     let fsid = fstatfs(fd)?.f_fsid;
     // SAFETY: `fsid_t` is `struct { int32_t val[2]; }` (`<sys/mount.h>`), the
     // same size and layout as `[i32; 2]`; `transmute` checks the sizes agree at
     // compile time. The `libc` crate does not expose the field.
-    let [volume, _] = unsafe { std::mem::transmute::<libc::fsid_t, [i32; 2]>(fsid) };
-    Ok(volume)
+    Ok(VolumeId(unsafe {
+        std::mem::transmute::<libc::fsid_t, [i32; 2]>(fsid)
+    }))
 }
 
 fn fstatfs(fd: c_int) -> io::Result<libc::statfs> {
@@ -124,17 +138,17 @@ fn fstatfs(fd: c_int) -> io::Result<libc::statfs> {
 
 /// Decide whether the directory open as `fd` may be entered.
 ///
-/// `root_dev` is the scan root's volume and `entry_dev` is the volume of `fd`
-/// itself, both from [`volume_of`] (not the entry's `ATTR_CMN_DEVID`, which is
-/// the parent's for a mount point). See the module documentation for the policy
-/// table.
+/// `root_volume` is the scan root's volume and `entry_volume` is the volume of
+/// `fd` itself, both from [`volume_of`] (not the entry's `ATTR_CMN_DEVID`,
+/// which is the parent's for a mount point). See the module documentation for
+/// the policy table.
 pub fn should_descend(
-    root_dev: i32,
-    entry_dev: i32,
+    root_volume: VolumeId,
+    entry_volume: VolumeId,
     fd: c_int,
     include_non_local: bool,
 ) -> Result<(), SkipReason> {
-    decide(root_dev, entry_dev, include_non_local, || {
+    decide(root_volume, entry_volume, include_non_local, || {
         is_local_mount(fd)
     })
 }
@@ -142,22 +156,22 @@ pub fn should_descend(
 /// [`should_descend`] with the locality question injected, so the whole table
 /// can be exercised without needing a mount of each kind.
 fn decide(
-    root_dev: i32,
-    entry_dev: i32,
+    root_volume: VolumeId,
+    entry_volume: VolumeId,
     include_non_local: bool,
     is_local: impl FnOnce() -> io::Result<bool>,
 ) -> Result<(), SkipReason> {
-    let same_device = root_dev == entry_dev;
+    let same_volume = root_volume == entry_volume;
     match is_local() {
-        Ok(true) if same_device => Ok(()),
+        Ok(true) if same_volume => Ok(()),
         Ok(true) => Err(SkipReason::OtherVolume),
         Ok(false) if include_non_local => Ok(()),
         Ok(false) => Err(SkipReason::NonLocalMount),
-        // Unknown. On the same device the root's own filesystem is the one
+        // Unknown. On the same volume the root's own filesystem is the one
         // being scanned, so only the opt-in decides. Off it, fail closed:
         // never cross onto an unidentified volume.
-        Err(_) if same_device && include_non_local => Ok(()),
-        Err(_) if same_device => Err(SkipReason::NonLocalMount),
+        Err(_) if same_volume && include_non_local => Ok(()),
+        Err(_) if same_volume => Err(SkipReason::NonLocalMount),
         Err(_) => Err(SkipReason::OtherVolume),
     }
 }
@@ -189,18 +203,51 @@ mod tests {
         dir
     }
 
+    const ROOT: VolumeId = VolumeId::new(1, 1);
+    const OTHER: VolumeId = VolumeId::new(2, 2);
+
     #[test]
-    fn refuses_descent_into_a_different_device() {
+    fn refuses_descent_into_a_different_volume() {
+        // A real descriptor, known local, on a volume other than the root's.
+        let dir = local_dir();
         assert_eq!(
-            should_descend(1, 2, -1, false),
+            should_descend(ROOT, OTHER, dir.as_raw_fd(), false),
             Err(SkipReason::OtherVolume)
         );
     }
 
     #[test]
-    fn allows_descent_within_the_same_device() {
+    fn an_unclassifiable_descriptor_on_another_volume_fails_closed() {
+        // `fstatfs(-1)` fails, so locality is unknown and nothing says this
+        // volume may be crossed into. Not the "different volume, known local"
+        // row: `refuses_descent_into_a_different_volume` and the policy table
+        // cover that.
+        for include_non_local in [false, true] {
+            assert_eq!(
+                should_descend(ROOT, OTHER, -1, include_non_local),
+                Err(SkipReason::OtherVolume)
+            );
+        }
+    }
+
+    #[test]
+    fn volumes_differing_in_only_the_second_fsid_word_are_different() {
         let dir = local_dir();
-        assert!(should_descend(1, 1, dir.as_raw_fd(), false).is_ok());
+        assert_eq!(
+            should_descend(
+                VolumeId::new(7, 1),
+                VolumeId::new(7, 2),
+                dir.as_raw_fd(),
+                false
+            ),
+            Err(SkipReason::OtherVolume)
+        );
+    }
+
+    #[test]
+    fn allows_descent_within_the_same_volume() {
+        let dir = local_dir();
+        assert!(should_descend(ROOT, ROOT, dir.as_raw_fd(), false).is_ok());
     }
 
     #[test]
@@ -249,20 +296,20 @@ mod tests {
         let remote = || Ok(false);
         let unknown = || Err(io::Error::from_raw_os_error(libc::EBADF));
         // (same device?, locality, include_non_local) -> verdict
-        assert_eq!(decide(1, 1, false, local), Ok(()));
-        assert_eq!(decide(1, 1, true, local), Ok(()));
-        assert_eq!(decide(1, 1, false, remote), Err(NonLocalMount));
-        assert_eq!(decide(1, 1, true, remote), Ok(()));
-        assert_eq!(decide(1, 2, false, local), Err(OtherVolume));
+        assert_eq!(decide(ROOT, ROOT, false, local), Ok(()));
+        assert_eq!(decide(ROOT, ROOT, true, local), Ok(()));
+        assert_eq!(decide(ROOT, ROOT, false, remote), Err(NonLocalMount));
+        assert_eq!(decide(ROOT, ROOT, true, remote), Ok(()));
+        assert_eq!(decide(ROOT, OTHER, false, local), Err(OtherVolume));
         // Opting in to network mounts does not open another local volume.
-        assert_eq!(decide(1, 2, true, local), Err(OtherVolume));
-        assert_eq!(decide(1, 2, false, remote), Err(NonLocalMount));
-        assert_eq!(decide(1, 2, true, remote), Ok(()));
+        assert_eq!(decide(ROOT, OTHER, true, local), Err(OtherVolume));
+        assert_eq!(decide(ROOT, OTHER, false, remote), Err(NonLocalMount));
+        assert_eq!(decide(ROOT, OTHER, true, remote), Ok(()));
         // Locality unknown: never cross onto an unidentified volume.
-        assert_eq!(decide(1, 2, false, unknown), Err(OtherVolume));
-        assert_eq!(decide(1, 2, true, unknown), Err(OtherVolume));
-        assert_eq!(decide(1, 1, false, unknown), Err(NonLocalMount));
-        assert_eq!(decide(1, 1, true, unknown), Ok(()));
+        assert_eq!(decide(ROOT, OTHER, false, unknown), Err(OtherVolume));
+        assert_eq!(decide(ROOT, OTHER, true, unknown), Err(OtherVolume));
+        assert_eq!(decide(ROOT, ROOT, false, unknown), Err(NonLocalMount));
+        assert_eq!(decide(ROOT, ROOT, true, unknown), Ok(()));
     }
 
     #[test]
@@ -270,9 +317,9 @@ mod tests {
         let dir = non_local_dir();
         let fd = dir.as_raw_fd();
         assert_eq!(
-            should_descend(1, 1, fd, false),
+            should_descend(ROOT, ROOT, fd, false),
             Err(SkipReason::NonLocalMount)
         );
-        assert!(should_descend(1, 1, fd, true).is_ok());
+        assert!(should_descend(ROOT, ROOT, fd, true).is_ok());
     }
 }

@@ -27,14 +27,23 @@
 //! (SIGKILL, a power cut); `hdiutil info` shows what is left and
 //! `hdiutil detach -force <mountpoint>` clears it.
 
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
 const VOLUME_NAME: &str = "TesseraeTest";
+
+/// Longest any single `hdiutil` call may take. A create or attach of a 16 MiB
+/// image takes about a second; a call that outlives this is hung, and
+/// `attach` holds the allocation lock across it, so a hang would stall every
+/// dense write in the test binary and look like a suite hang rather than a
+/// failure.
+const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A disk image attached at a chosen mountpoint, detached when dropped.
 ///
@@ -69,6 +78,7 @@ impl DiskImage {
         // Creating the image writes `size_mib` MiB; keep that out of any
         // free-space measurement running in another test. See `allocation_lock`.
         let _alloc = crate::allocation_lock();
+        crate::assert_allocation_lock_held();
 
         run(Command::new("hdiutil")
             .args(["create", "-size", &format!("{size_mib}m")])
@@ -141,18 +151,61 @@ impl Drop for DiskImage {
     }
 }
 
-/// Run a command, capturing its output, and turn a failure into an error that
-/// carries what `hdiutil` said.
+/// Run `hdiutil` (or anything) with the standard time limit.
 fn run(cmd: &mut Command) -> io::Result<()> {
-    let out = cmd.output()?;
-    if out.status.success() {
+    run_with_timeout(cmd, HDIUTIL_TIMEOUT)
+}
+
+/// Run a command, capturing its output, and turn a failure into an error that
+/// carries what it said. A command still running after `timeout` is killed and
+/// reported as [`io::ErrorKind::TimedOut`].
+fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> io::Result<()> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    // Drain both pipes on threads so a chatty child cannot block on a full
+    // pipe while this thread waits on it.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let _stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            // The drain threads are left to finish on their own: a helper
+            // process that inherited the pipes could keep them open.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "{:?} did not finish within {timeout:?} and was killed",
+                    cmd.get_program()
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    if status.success() {
         return Ok(());
     }
+    let stderr = stderr.join().unwrap_or_default();
     Err(io::Error::other(format!(
-        "{:?} failed ({}): {}",
+        "{:?} failed ({status}): {}",
         cmd.get_program(),
-        out.status,
-        String::from_utf8_lossy(&out.stderr).trim()
+        String::from_utf8_lossy(&stderr).trim()
     )))
 }
 
@@ -215,33 +268,22 @@ mod tests {
     }
 
     #[test]
-    fn creating_an_image_waits_for_a_free_space_measurement() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::Duration;
-        let fx = Fixture::new().unwrap();
-        fx.dir("mnt").unwrap();
-        let mnt = fx.path().join("mnt");
-        let attached = AtomicBool::new(false);
-        let quiet = crate::allocation_lock();
-        let image = std::thread::scope(|scope| {
-            let handle = scope.spawn(|| {
-                let image = DiskImage::attach(&mnt, 16).unwrap();
-                attached.store(true, Ordering::SeqCst);
-                image
-            });
-            // Longer than an unobstructed create + attach takes (about a
-            // second), so an attach that ignored the lock would be done by now.
-            // One-sided: a slow machine can only make this pass, never fail.
-            std::thread::sleep(Duration::from_millis(2500));
-            assert!(
-                !attached.load(Ordering::SeqCst),
-                "an image was written while free space was being measured"
-            );
-            drop(quiet);
-            handle.join().unwrap()
-        });
-        assert!(is_mounted(&mnt));
-        drop(image);
+    fn a_hung_command_is_killed_and_reported_not_waited_for() {
+        let started = Instant::now();
+        let err = run_with_timeout(Command::new("sleep").arg("30"), Duration::from_millis(200))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_failing_command_reports_what_it_said() {
+        let err = run_with_timeout(
+            Command::new("sh").args(["-c", "echo boom >&2; exit 3"]),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
     }
 
     #[test]
