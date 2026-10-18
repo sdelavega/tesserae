@@ -439,8 +439,10 @@ fn read_u64(buf: &[u8], off: usize, limit: usize) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::attrs::{COMMON_MASK, FILE_MASK};
-    use std::path::PathBuf;
 
+    // Shared synthetic-buffer builders. Everything in `synthetic` is pure over
+    // bytes it assembles itself -- no filesystem, no syscall -- which is what
+    // lets Miri run it. See `scripts/miri-parser.sh`.
     // -- synthetic buffers ------------------------------------------------
 
     /// Hand-assembles one entry in the measured layout, so a test can create
@@ -528,625 +530,694 @@ mod tests {
         }
     }
 
-    fn one(s: &Synth) -> RawEntry<'static> {
-        // Leaked so the borrow outlives the buffer the test built; the test
-        // process is short-lived and this keeps assertions readable.
-        let buf: &'static [u8] = Box::leak(s.build().into_boxed_slice());
+    /// Parse a buffer holding exactly one entry. The caller owns the buffer, so
+    /// nothing is leaked: Miri's leak check stays on for the whole module.
+    fn one(buf: &[u8]) -> RawEntry<'_> {
         let mut it = entries(buf, 1);
         let entry = it.next().expect("one entry").expect("parses");
         assert!(it.next().is_none(), "count 1 must yield exactly one entry");
         entry
     }
 
-    // -- golden corpus ----------------------------------------------------
-
-    fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(name)
-    }
-
-    /// The recorded `getattrlistbulk` bytes and the entry count the syscall
-    /// returned. See `tests/golden_capture.rs` for the format.
-    fn golden(name: &str) -> (Vec<u8>, u32) {
-        let raw = std::fs::read(fixture(&format!("golden_{name}.bin"))).unwrap();
-        assert_eq!(&raw[..8], b"TSRGOLD1", "bad golden magic in {name}");
-        let count = u32::from_le_bytes(raw[8..12].try_into().unwrap());
-        let len = u32::from_le_bytes(raw[12..16].try_into().unwrap()) as usize;
-        assert_eq!(raw.len(), 16 + len, "golden_{name}.bin length header wrong");
-        (raw[16..].to_vec(), count)
-    }
-
-    /// One row of the `lstat(2)`-derived expectation sidecar. Independent of
-    /// this parser, so a parser bug cannot be baked into both sides.
-    #[derive(Debug, PartialEq)]
-    struct Expect {
-        name: Vec<u8>,
-        kind: String,
-        ino: u64,
-        dev: i32,
-        nlink: u32,
-        logical: u64,
-        allocated: u64,
-    }
-
-    fn expectations(name: &str) -> Vec<Expect> {
-        let text = std::fs::read_to_string(fixture(&format!("golden_{name}.expect"))).unwrap();
-        let rows: Vec<Expect> = text
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-            .map(|l| {
-                let f: Vec<&str> = l.split('\t').collect();
-                assert_eq!(f.len(), 7, "bad expectation row: {l}");
-                Expect {
-                    name: (0..f[0].len() / 2)
-                        .map(|i| u8::from_str_radix(&f[0][i * 2..i * 2 + 2], 16).unwrap())
-                        .collect(),
-                    kind: f[1].to_string(),
-                    ino: f[2].parse().unwrap(),
-                    dev: f[3].parse().unwrap(),
-                    nlink: f[4].parse().unwrap(),
-                    logical: f[5].parse().unwrap(),
-                    allocated: f[6].parse().unwrap(),
-                }
-            })
-            .collect();
-        assert!(!rows.is_empty(), "golden_{name}.expect is empty");
-        rows
-    }
-
-    /// Parse a golden buffer and project it into the sidecar's shape, sorted
-    /// so the comparison does not depend on directory order.
-    fn parsed_as_expectations(name: &str) -> Vec<Expect> {
-        let (buf, count) = golden(name);
-        let mut rows: Vec<Expect> = entries(&buf, count)
-            .map(|e| {
-                let e = e.expect("golden buffer must parse");
-                Expect {
-                    name: e.name.to_vec(),
-                    kind: match e.obj_type {
-                        ObjType::Reg => "reg",
-                        ObjType::Dir => "dir",
-                        ObjType::Lnk => "lnk",
-                        ObjType::Other => "other",
-                    }
-                    .to_string(),
-                    ino: e.file_id,
-                    dev: e.dev_id,
-                    nlink: e.link_count,
-                    logical: e.logical,
-                    allocated: e.allocated,
-                }
-            })
-            .collect();
-        assert_eq!(rows.len(), count as usize, "iterator dropped entries");
-        rows.sort_by(|a, b| a.name.cmp(&b.name));
-        rows
-    }
-
-    // -- the brief's eight tests ------------------------------------------
-
-    #[test]
-    fn parses_golden_buffer_into_expected_entries() {
-        // golden_simple.bin: file("a.bin", 4096) + dir("d").
-        let rows = parsed_as_expectations("simple");
-
-        let names: Vec<&[u8]> = rows.iter().map(|r| r.name.as_slice()).collect();
-        assert_eq!(names, vec![&b"a.bin"[..], &b"d"[..]]);
-        let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
-        assert_eq!(kinds, vec!["reg", "dir"]);
-        // The file is dense, so one 4 KiB block is really allocated. The
-        // directory's entry carries no `fileattr` group at all, so its
-        // allocated size is the default -- not a misread of its name bytes.
-        assert_eq!(rows[0].allocated, 4096);
-        assert_eq!(rows[0].logical, 4096);
-        assert_eq!(rows[0].nlink, 1);
-        assert_eq!(rows[1].allocated, 0);
-        assert_eq!(rows[1].logical, 0);
-        assert_eq!(rows[1].nlink, 0);
-
-        // And every field agrees with `lstat(2)` on the same tree.
-        assert_eq!(rows, expectations("simple"));
-    }
-
-    #[test]
-    fn preserves_non_utf8_names_as_bytes() {
-        // Synthetic: macOS rejects invalid UTF-8 filenames at the syscall
-        // boundary, so no fixture on this platform can produce one.
-        const BAD: &[u8] = b"bad\xff\xfename";
-        let entry = one(&Synth {
-            name: BAD.to_vec(),
-            ..Default::default()
-        });
-        assert_eq!(entry.name, BAD);
-        // Asserted on what came out of the parser: these bytes are not UTF-8,
-        // so any `str` conversion on the way would have had to be lossy.
-        assert!(
-            std::str::from_utf8(entry.name).is_err(),
-            "the name must still be invalid UTF-8 after parsing"
-        );
-    }
-
-    #[test]
-    fn absent_attribute_yields_default_not_shifted_read() {
-        // The slot is present and holds a loud value, but the kernel says the
-        // attribute was not supplied. The value must be the default, and
-        // every field after it must still be read from its own offset.
-        let entry = one(&Synth {
-            returned_file: FILE_MASK & !libc::ATTR_FILE_ALLOCSIZE,
-            allocated: 0xDEAD_BEEF_DEAD_BEEF,
-            logical: 123_456,
-            link_count: 7,
-            ..Default::default()
-        });
-        assert_eq!(entry.allocated, 0, "unsupplied attribute must not be read");
-        assert_eq!(entry.logical, 123_456, "the next field must not shift");
-        assert_eq!(entry.link_count, 7, "the previous field must not shift");
-        assert_eq!(entry.name, b"synthetic.bin");
-    }
-
-    #[test]
-    fn rejects_entry_length_exceeding_buffer() {
-        assert_eq!(
-            entries(&[0xFF, 0xFF, 0xFF, 0x7F], 1).next(),
-            Some(Err(ParseError::BadLength))
-        );
-    }
-
-    #[test]
-    fn rejects_zero_entry_length() {
-        let buf = Synth {
-            entry_length: Some(0),
-            ..Default::default()
+    /// Walk `entries(b, n)` to exhaustion and require it never yields more
+    /// than `n` items. Reaching the end at all is the termination check: a
+    /// zero-length entry that was followed forever would hang here.
+    fn drain(b: &[u8], n: u32) {
+        let mut seen = 0usize;
+        for item in entries(b, n) {
+            let _ = item;
+            seen += 1;
+            assert!(seen <= n as usize, "iterator exceeded its count");
         }
-        .build();
-        // The classic infinite-loop input: advancing by zero would revisit the
-        // same bytes forever. Ask for far more entries than the buffer holds
-        // and require that iteration ends immediately.
-        let mut it = entries(&buf, u32::MAX);
-        assert_eq!(it.next(), Some(Err(ParseError::BadLength)));
-        for _ in 0..4 {
-            assert_eq!(it.next(), None, "iteration must end after an error");
-        }
-        // Independently: the whole iterator is finite even at u32::MAX.
-        assert_eq!(entries(&buf, u32::MAX).count(), 1);
     }
 
-    #[test]
-    fn rejects_name_reference_pointing_outside_entry() {
-        // Past the end of the entry.
-        let past = Synth {
-            name_offset: Some(1000),
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(
-            entries(&past, 1).next(),
-            Some(Err(ParseError::NameOutOfBounds))
-        );
-        // Backwards, out of the entry entirely.
-        let before = Synth {
-            name_offset: Some(-100),
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(
-            entries(&before, 1).next(),
-            Some(Err(ParseError::NameOutOfBounds))
-        );
-        // Backwards, into the fields this parser reads: still refused, so the
-        // name can never alias the header.
-        let aliasing = Synth {
-            name_offset: Some(-16),
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(
-            entries(&aliasing, 1).next(),
-            Some(Err(ParseError::NameOutOfBounds))
-        );
-        // Offset in range but length running off the end.
-        let overlong = Synth {
-            name_length: Some(u32::MAX),
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(
-            entries(&overlong, 1).next(),
-            Some(Err(ParseError::NameOutOfBounds))
-        );
-    }
-
-    #[test]
-    fn stops_at_count_even_if_buffer_has_more_bytes() {
-        let mut buf = Vec::new();
-        for n in ["one.bin", "two.bin", "three.bin"] {
-            buf.extend_from_slice(
-                &Synth {
-                    name: n.as_bytes().to_vec(),
-                    ..Default::default()
-                }
-                .build(),
-            );
-        }
-        let got: Vec<Vec<u8>> = entries(&buf, 2).map(|e| e.unwrap().name.to_vec()).collect();
-        assert_eq!(got, vec![b"one.bin".to_vec(), b"two.bin".to_vec()]);
-    }
-
-    #[test]
-    fn empty_buffer_yields_no_entries() {
-        assert!(entries(&[], 0).next().is_none());
-    }
-
-    // -- further coverage of the measured layout --------------------------
-
-    /// One entry of a golden buffer, split by hand so this test's decoding is
-    /// independent of `parse_entry`.
-    struct RawSlice<'a> {
-        bytes: &'a [u8],
-        len: usize,
-        returned_common: u32,
-        returned_file: u32,
-        /// Where the name begins, relative to the entry: the kernel's own
-        /// account of where the fixed-field region ends.
-        name_start: usize,
-        name: Vec<u8>,
-    }
-
-    /// Walk a golden buffer into its entries by length alone, decoding each by
-    /// hand. Deliberately duplicates the layout knowledge rather than calling
-    /// the parser: this is what keeps the layout test non-circular.
-    fn raw_entries(buf: &[u8]) -> Vec<RawSlice<'_>> {
-        let le32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-        let mut out = Vec::new();
-        let mut pos = 0usize;
-        while pos < buf.len() {
-            let e = &buf[pos..];
-            let len = le32(e, OFF_LENGTH) as usize;
-            let name_start = (OFF_NAME_REF as i64
-                + i64::from(i32::from_le_bytes(
-                    e[OFF_NAME_REF..OFF_NAME_REF + 4].try_into().unwrap(),
-                ))) as usize;
-            let name_len = le32(e, OFF_NAME_REF + 4) as usize;
-            let field = &e[name_start..name_start + name_len];
-            out.push(RawSlice {
-                bytes: &e[..len],
-                len,
-                returned_common: le32(e, OFF_RETURNED_COMMON),
-                returned_file: le32(e, OFF_RETURNED_FILE),
-                name_start,
-                name: field[..field.len() - 1].to_vec(),
-            });
-            pos += len;
-        }
-        out
-    }
-
-    /// Re-derives the layout from a captured buffer on every run, so the
-    /// constants above cannot drift away from the bytes they were measured
-    /// from without a test failing.
-    ///
-    /// Entries are found by name, not by position: `readdir` order is not
-    /// guaranteed, and a recapture in a different order must not make the
-    /// project's most important non-circular test fail spuriously.
-    #[test]
-    fn layout_matches_the_captured_golden_buffer() {
-        let (buf, count) = golden("simple");
-        assert_eq!(count, 2);
-        let raw = raw_entries(&buf);
-        assert_eq!(raw.len(), count as usize, "length walk lost an entry");
-        let find = |n: &[u8]| {
-            raw.iter()
-                .find(|r| r.name == n)
-                .unwrap_or_else(|| panic!("no entry named {}", String::from_utf8_lossy(n)))
+    /// Every single truncation and every single bit flip of `buf`, plus whole-
+    /// byte replacements at the length and name-reference words (where the
+    /// dangerous values live), each walked under several promised counts
+    /// including `u32::MAX`.
+    fn mutate_and_drain(buf: &[u8], count: u32) {
+        // Miri is ~1000x slower, so it walks only to completion (`u32::MAX`
+        // never stops early: the buffer's own end or an error does); the
+        // native run also covers the early-stop counts.
+        let counts: &[u32] = if cfg!(miri) {
+            &[u32::MAX]
+        } else {
+            &[0, 1, 2, 3, count, u32::MAX]
         };
-
-        // The regular file: full fixed region, name directly after it.
-        let file = find(b"a.bin");
-        assert_eq!(file.len, 80, "a.bin entry length");
-        assert_eq!(file.returned_common, COMMON_MASK);
-        assert_eq!(file.returned_file, FILE_MASK);
-        assert_eq!(
-            file.name_start,
-            OFF_DATALENGTH + 8,
-            "the name reference's own address is the base of its offset"
-        );
-
-        // The directory: no `fileattr` group, so the name starts where
-        // ATTR_FILE_LINKCOUNT would have been.
-        let dir = find(b"d");
-        assert_eq!(dir.len, 56, "directory entry length");
-        assert_eq!(
-            dir.returned_file, 0,
-            "a directory reports no fileattr at all"
-        );
-        assert_eq!(
-            dir.name_start, OFF_LINKCOUNT,
-            "the directory's fileattr slots are absent, not zero-filled"
-        );
-        // The decisive arithmetic: the fixed fields need 72 bytes and the
-        // entry is 56, so the three slots cannot be present at any offset.
-        assert!(dir.len < OFF_DATALENGTH + 8);
-        assert_eq!(dir.bytes.len(), 56);
-
-        // ATTR_CMN_NAME is set on every entry, which is why the unconditional
-        // read it guards is unreachable from a conforming kernel.
-        for r in &raw {
-            assert_ne!(r.returned_common & libc::ATTR_CMN_NAME, 0);
-        }
-    }
-
-    /// The gate that does the real work for directories: even if the returned
-    /// set claimed the `fileattr` attributes were supplied, the slots are not
-    /// in the fixed region, so they are never read out of the name bytes.
-    #[test]
-    fn absent_file_group_is_not_read_from_the_name_bytes() {
-        let entry = one(&Synth {
-            file_group: false,
-            // Deliberately inconsistent: the layout gate must still win.
-            returned_file: FILE_MASK,
-            obj_type: VDIR,
-            name: b"directory-name-long-enough-to-look-like-numbers".to_vec(),
-            ..Default::default()
-        });
-        assert_eq!(entry.obj_type, ObjType::Dir);
-        assert_eq!(
-            entry.name,
-            b"directory-name-long-enough-to-look-like-numbers"
-        );
-        assert_eq!(
-            (entry.link_count, entry.allocated, entry.logical),
-            (0, 0, 0)
-        );
-        // The common fields, which do fit, are still read correctly.
-        assert_eq!(entry.file_id, 0x0123_4567_89AB_CDEF);
-        assert_eq!(entry.dev_id, 0x0100_000F);
-    }
-
-    #[test]
-    fn parses_golden_mixed_buffer_into_expected_entries() {
-        let rows = parsed_as_expectations("mixed");
-        assert_eq!(rows, expectations("mixed"));
-
-        let by_name = |n: &[u8]| rows.iter().find(|r| r.name == n).expect("entry present");
-
-        // A multi-byte UTF-8 name survives byte for byte.
-        let cafe = by_name(b"caf\xc3\xa9 \xe2\x82\xac.bin");
-        assert_eq!(cafe.kind, "reg");
-
-        // A sparse file: a huge logical size with nothing allocated. Reading
-        // either field from the wrong offset would be obvious here.
-        let sparse = by_name(b"sparse.bin");
-        assert_eq!((sparse.logical, sparse.allocated), (1 << 30, 0));
-
-        // The hardlink pair: one inode, two names, link count 2.
-        let a = by_name(b"hardlink.bin");
-        let b = by_name(b"link-target.bin");
-        assert_eq!(a.ino, b.ino);
-        assert_eq!((a.nlink, b.nlink), (2, 2));
-
-        // The clone is a distinct inode that still accounts for its blocks.
-        let clone = by_name(b"clone.bin");
-        let dense = by_name(b"dense.bin");
-        assert_ne!(clone.ino, dense.ino);
-        assert_eq!((clone.logical, clone.allocated), (8192, 8192));
-
-        assert_eq!(by_name(b"dangling").kind, "lnk");
-        let subdir = by_name(b"subdir");
-        assert_eq!(subdir.kind, "dir");
-        assert_eq!((subdir.nlink, subdir.logical, subdir.allocated), (0, 0, 0));
-    }
-
-    /// `ObjType`'s discriminants are checked against `lstat(2)`, not against
-    /// recollection: the sidecar's `kind` column comes from `st_mode`.
-    #[test]
-    fn obj_type_discriminants_match_lstat() {
-        for corpus in ["simple", "mixed"] {
-            let parsed = parsed_as_expectations(corpus);
-            let expected = expectations(corpus);
-            let got: Vec<&str> = parsed.iter().map(|r| r.kind.as_str()).collect();
-            let want: Vec<&str> = expected.iter().map(|r| r.kind.as_str()).collect();
-            assert_eq!(got, want, "{corpus}");
-            assert!(want.contains(&"dir"), "{corpus} must exercise VDIR");
-        }
-        assert!(expectations("mixed").iter().any(|r| r.kind == "lnk"));
-    }
-
-    /// The gate bits are taken from the right `attrlist` group.
-    /// `ATTR_CMN_NAME` and `ATTR_FILE_LINKCOUNT` are both `0x1`.
-    #[test]
-    fn gate_bits_come_from_the_right_attribute_group() {
-        assert_eq!(libc::ATTR_CMN_NAME, 0x0000_0001);
-        assert_eq!(libc::ATTR_FILE_LINKCOUNT, 0x0000_0001);
-        assert_eq!(RET_LINKCOUNT.0, 0x0000_0001);
-        assert_eq!(RET_DEVID.0, 0x0000_0002);
-        assert_eq!(RET_OBJTYPE.0, 0x0000_0008);
-        assert_eq!(RET_FLAGS.0, 0x0004_0000);
-        assert_eq!(RET_FILEID.0, 0x0200_0000);
-        assert_eq!(RET_ALLOCSIZE.0, 0x0000_0004);
-        assert_eq!(RET_DATALENGTH.0, 0x0000_0200);
-
-        // A name whose bytes would decode as a plausible link count if the
-        // common and file words were confused.
-        let r = Returned {
-            common: COMMON_MASK,
-            file: 0,
-        };
-        assert!(r.has_common(RET_DEVID));
-        assert!(!r.has_file(RET_LINKCOUNT));
-    }
-
-    #[test]
-    fn truncated_buffer_reports_truncated() {
-        // The kernel promises an entry but fewer than four bytes remain, so
-        // there is not even a length field to check.
-        for buf in [&[][..], &[0x50], &[0x50, 0, 0]] {
-            assert_eq!(
-                entries(buf, 1).next(),
-                Some(Err(ParseError::Truncated)),
-                "{buf:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_entry_shorter_than_the_fixed_header() {
-        for len in [1u32, 4, 24, (MIN_ENTRY_LEN - 1) as u32] {
-            let mut buf = vec![0u8; 128];
-            buf[..4].copy_from_slice(&len.to_le_bytes());
-            assert_eq!(
-                entries(&buf, 1).next(),
-                Some(Err(ParseError::BadLength)),
-                "len {len}"
-            );
-        }
-    }
-
-    /// The accept side of the same boundary, and the only entry shape that can
-    /// be exactly `MIN_ENTRY_LEN` long: the name must then start at 32 with
-    /// `attr_length == 0`, so the field is empty and no attribute slot fits.
-    /// Every field is its default and nothing is read out of bounds.
-    #[test]
-    fn accepts_the_shortest_possible_entry_with_an_empty_name() {
-        let mut buf = vec![0u8; MIN_ENTRY_LEN];
-        buf[OFF_LENGTH..][..4].copy_from_slice(&(MIN_ENTRY_LEN as u32).to_le_bytes());
-        buf[OFF_RETURNED_COMMON..][..4].copy_from_slice(&COMMON_MASK.to_le_bytes());
-        buf[OFF_RETURNED_FILE..][..4].copy_from_slice(&FILE_MASK.to_le_bytes());
-        // attr_dataoffset 8 puts the name immediately after the reference;
-        // attr_length 0 leaves it empty.
-        buf[OFF_NAME_REF..][..4].copy_from_slice(&8i32.to_le_bytes());
-        buf[OFF_NAME_REF + 4..][..4].copy_from_slice(&0u32.to_le_bytes());
-
-        let mut it = entries(&buf, 1);
-        let entry = it.next().expect("one entry").expect("must parse");
-        assert_eq!(entry.name, b"");
-        assert_eq!(entry.obj_type, ObjType::Other);
-        assert_eq!(
-            (
-                entry.file_id,
-                entry.dev_id,
-                entry.flags,
-                entry.logical,
-                entry.allocated,
-                entry.link_count
-            ),
-            (0, 0, 0, 0, 0, 0),
-            "no attribute slot fits before the name, so all are defaults"
-        );
-        assert!(it.next().is_none());
-    }
-
-    /// The name reference is the one slot whose absence would shift every
-    /// other offset, so it is gated before it is read. Unreachable from a
-    /// conforming kernel -- `ATTR_CMN_NAME` is `ATTR_BULK_REQUIRED` -- and no
-    /// fuzzer can reach it, because clearing the bit in a fixed-layout buffer
-    /// produces neither a crash nor a value wrong relative to that buffer.
-    #[test]
-    fn rejects_an_unsupplied_name_reference() {
-        let buf = Synth {
-            returned_common: COMMON_MASK & !libc::ATTR_CMN_NAME,
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(
-            entries(&buf, 1).next(),
-            Some(Err(ParseError::NameOutOfBounds)),
-            "an absent name reference must end the entry, not shift the layout"
-        );
-        // Clearing any other common bit is a value gate, not a layout gate, so
-        // those entries still parse -- the name slot is genuinely special.
-        for bit in [
-            libc::ATTR_CMN_DEVID,
-            libc::ATTR_CMN_OBJTYPE,
-            libc::ATTR_CMN_FLAGS,
-            libc::ATTR_CMN_FILEID,
-        ] {
-            let buf = Synth {
-                returned_common: COMMON_MASK & !bit,
-                ..Default::default()
-            }
-            .build();
-            let entry = entries(&buf, 1)
-                .next()
-                .expect("one entry")
-                .unwrap_or_else(|e| panic!("bit {bit:#x} must still parse, got {e:?}"));
-            assert_eq!(entry.name, b"synthetic.bin");
-        }
-    }
-
-    #[test]
-    fn an_entry_never_reads_into_its_successor() {
-        // Two entries; the first's name reference points past its own length
-        // into the second entry's bytes. It must be refused, not followed.
-        let first = Synth {
-            name: b"first.bin".to_vec(),
-            ..Default::default()
-        }
-        .build();
-        let second = Synth {
-            name: b"second.bin".to_vec(),
-            ..Default::default()
-        }
-        .build();
-        let overrun = Synth {
-            name: b"first.bin".to_vec(),
-            name_offset: Some((first.len() - OFF_NAME_REF + 8) as i32),
-            ..Default::default()
-        }
-        .build();
-        assert_eq!(overrun.len(), first.len());
-        let mut buf = overrun;
-        buf.extend_from_slice(&second);
-        assert_eq!(
-            entries(&buf, 2).next(),
-            Some(Err(ParseError::NameOutOfBounds))
-        );
-    }
-
-    /// Task 5 brings `cargo-fuzz`, ASAN and Miri over this code. This is the
-    /// cheap standing version: mutate real kernel bytes every way a single
-    /// truncation or byte flip can, and require that nothing panics and that
-    /// iteration always terminates.
-    #[test]
-    fn never_panics_on_mutated_golden_bytes() {
-        // Both corpora: `mixed` is the one with eight entries, so it exercises
-        // multi-entry walking and a `fileattr`-less entry that is not first.
-        for corpus in ["simple", "mixed"] {
-            mutate_and_drain(corpus);
-        }
-    }
-
-    fn mutate_and_drain(corpus: &str) {
-        let (buf, count) = golden(corpus);
-
-        let drain = |b: &[u8], n: u32| {
-            let mut seen = 0usize;
-            for item in entries(b, n) {
-                let _ = item;
-                seen += 1;
-                assert!(seen <= n as usize, "iterator exceeded its count");
-            }
-        };
-
-        for n in [0u32, 1, 2, 3, count, u32::MAX] {
+        for &n in counts {
             for cut in 0..=buf.len() {
                 drain(&buf[..cut], n);
             }
             for i in 0..buf.len() {
                 for bit in 0..8 {
-                    let mut m = buf.clone();
+                    let mut m = buf.to_vec();
                     m[i] ^= 1 << bit;
                     drain(&m, n);
                 }
             }
-            // Whole-byte replacements at the length and name-reference words,
-            // where the dangerous values live.
             for i in 0..OFF_NAME_REF + 8 {
                 for v in [0x00u8, 0x01, 0x7F, 0x80, 0xFF] {
-                    let mut m = buf.clone();
+                    let mut m = buf.to_vec();
                     m[i] = v;
                     drain(&m, n);
                 }
+            }
+        }
+    }
+
+    /// Tests that need nothing but bytes built in memory. **Miri runs exactly
+    /// this module** (`parse::tests::synthetic`), so nothing here may touch the
+    /// filesystem, the clock or a syscall.
+    mod synthetic {
+        use super::*;
+
+        #[test]
+        fn preserves_non_utf8_names_as_bytes() {
+            // Synthetic: macOS rejects invalid UTF-8 filenames at the syscall
+            // boundary, so no fixture on this platform can produce one.
+            const BAD: &[u8] = b"bad\xff\xfename";
+            let buf = Synth {
+                name: BAD.to_vec(),
+                ..Default::default()
+            }
+            .build();
+            let entry = one(&buf);
+            assert_eq!(entry.name, BAD);
+            // Asserted on what came out of the parser: these bytes are not UTF-8,
+            // so any `str` conversion on the way would have had to be lossy.
+            assert!(
+                std::str::from_utf8(entry.name).is_err(),
+                "the name must still be invalid UTF-8 after parsing"
+            );
+        }
+
+        #[test]
+        fn absent_attribute_yields_default_not_shifted_read() {
+            // The slot is present and holds a loud value, but the kernel says the
+            // attribute was not supplied. The value must be the default, and
+            // every field after it must still be read from its own offset.
+            let buf = Synth {
+                returned_file: FILE_MASK & !libc::ATTR_FILE_ALLOCSIZE,
+                allocated: 0xDEAD_BEEF_DEAD_BEEF,
+                logical: 123_456,
+                link_count: 7,
+                ..Default::default()
+            }
+            .build();
+            let entry = one(&buf);
+            assert_eq!(entry.allocated, 0, "unsupplied attribute must not be read");
+            assert_eq!(entry.logical, 123_456, "the next field must not shift");
+            assert_eq!(entry.link_count, 7, "the previous field must not shift");
+            assert_eq!(entry.name, b"synthetic.bin");
+        }
+
+        #[test]
+        fn rejects_entry_length_exceeding_buffer() {
+            assert_eq!(
+                entries(&[0xFF, 0xFF, 0xFF, 0x7F], 1).next(),
+                Some(Err(ParseError::BadLength))
+            );
+        }
+
+        #[test]
+        fn rejects_zero_entry_length() {
+            let buf = Synth {
+                entry_length: Some(0),
+                ..Default::default()
+            }
+            .build();
+            // The classic infinite-loop input: advancing by zero would revisit the
+            // same bytes forever. Ask for far more entries than the buffer holds
+            // and require that iteration ends immediately.
+            let mut it = entries(&buf, u32::MAX);
+            assert_eq!(it.next(), Some(Err(ParseError::BadLength)));
+            for _ in 0..4 {
+                assert_eq!(it.next(), None, "iteration must end after an error");
+            }
+            // Independently: the whole iterator is finite even at u32::MAX.
+            assert_eq!(entries(&buf, u32::MAX).count(), 1);
+        }
+
+        #[test]
+        fn rejects_name_reference_pointing_outside_entry() {
+            // Past the end of the entry.
+            let past = Synth {
+                name_offset: Some(1000),
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&past, 1).next(),
+                Some(Err(ParseError::NameOutOfBounds))
+            );
+            // Backwards, out of the entry entirely.
+            let before = Synth {
+                name_offset: Some(-100),
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&before, 1).next(),
+                Some(Err(ParseError::NameOutOfBounds))
+            );
+            // Backwards, into the fields this parser reads: still refused, so the
+            // name can never alias the header.
+            let aliasing = Synth {
+                name_offset: Some(-16),
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&aliasing, 1).next(),
+                Some(Err(ParseError::NameOutOfBounds))
+            );
+            // Offset in range but length running off the end.
+            let overlong = Synth {
+                name_length: Some(u32::MAX),
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&overlong, 1).next(),
+                Some(Err(ParseError::NameOutOfBounds))
+            );
+        }
+
+        #[test]
+        fn stops_at_count_even_if_buffer_has_more_bytes() {
+            let mut buf = Vec::new();
+            for n in ["one.bin", "two.bin", "three.bin"] {
+                buf.extend_from_slice(
+                    &Synth {
+                        name: n.as_bytes().to_vec(),
+                        ..Default::default()
+                    }
+                    .build(),
+                );
+            }
+            let got: Vec<Vec<u8>> = entries(&buf, 2).map(|e| e.unwrap().name.to_vec()).collect();
+            assert_eq!(got, vec![b"one.bin".to_vec(), b"two.bin".to_vec()]);
+        }
+
+        #[test]
+        fn empty_buffer_yields_no_entries() {
+            assert!(entries(&[], 0).next().is_none());
+        }
+
+        /// The gate that does the real work for directories: even if the returned
+        /// set claimed the `fileattr` attributes were supplied, the slots are not
+        /// in the fixed region, so they are never read out of the name bytes.
+        #[test]
+        fn absent_file_group_is_not_read_from_the_name_bytes() {
+            let buf = Synth {
+                file_group: false,
+                // Deliberately inconsistent: the layout gate must still win.
+                returned_file: FILE_MASK,
+                obj_type: VDIR,
+                name: b"directory-name-long-enough-to-look-like-numbers".to_vec(),
+                ..Default::default()
+            }
+            .build();
+            let entry = one(&buf);
+            assert_eq!(entry.obj_type, ObjType::Dir);
+            assert_eq!(
+                entry.name,
+                b"directory-name-long-enough-to-look-like-numbers"
+            );
+            assert_eq!(
+                (entry.link_count, entry.allocated, entry.logical),
+                (0, 0, 0)
+            );
+            // The common fields, which do fit, are still read correctly.
+            assert_eq!(entry.file_id, 0x0123_4567_89AB_CDEF);
+            assert_eq!(entry.dev_id, 0x0100_000F);
+        }
+
+        /// The gate bits are taken from the right `attrlist` group.
+        /// `ATTR_CMN_NAME` and `ATTR_FILE_LINKCOUNT` are both `0x1`.
+        #[test]
+        fn gate_bits_come_from_the_right_attribute_group() {
+            assert_eq!(libc::ATTR_CMN_NAME, 0x0000_0001);
+            assert_eq!(libc::ATTR_FILE_LINKCOUNT, 0x0000_0001);
+            assert_eq!(RET_LINKCOUNT.0, 0x0000_0001);
+            assert_eq!(RET_DEVID.0, 0x0000_0002);
+            assert_eq!(RET_OBJTYPE.0, 0x0000_0008);
+            assert_eq!(RET_FLAGS.0, 0x0004_0000);
+            assert_eq!(RET_FILEID.0, 0x0200_0000);
+            assert_eq!(RET_ALLOCSIZE.0, 0x0000_0004);
+            assert_eq!(RET_DATALENGTH.0, 0x0000_0200);
+
+            // A name whose bytes would decode as a plausible link count if the
+            // common and file words were confused.
+            let r = Returned {
+                common: COMMON_MASK,
+                file: 0,
+            };
+            assert!(r.has_common(RET_DEVID));
+            assert!(!r.has_file(RET_LINKCOUNT));
+        }
+
+        #[test]
+        fn truncated_buffer_reports_truncated() {
+            // The kernel promises an entry but fewer than four bytes remain, so
+            // there is not even a length field to check.
+            for buf in [&[][..], &[0x50], &[0x50, 0, 0]] {
+                assert_eq!(
+                    entries(buf, 1).next(),
+                    Some(Err(ParseError::Truncated)),
+                    "{buf:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_entry_shorter_than_the_fixed_header() {
+            for len in [1u32, 4, 24, (MIN_ENTRY_LEN - 1) as u32] {
+                let mut buf = vec![0u8; 128];
+                buf[..4].copy_from_slice(&len.to_le_bytes());
+                assert_eq!(
+                    entries(&buf, 1).next(),
+                    Some(Err(ParseError::BadLength)),
+                    "len {len}"
+                );
+            }
+        }
+
+        /// The accept side of the same boundary, and the only entry shape that can
+        /// be exactly `MIN_ENTRY_LEN` long: the name must then start at 32 with
+        /// `attr_length == 0`, so the field is empty and no attribute slot fits.
+        /// Every field is its default and nothing is read out of bounds.
+        #[test]
+        fn accepts_the_shortest_possible_entry_with_an_empty_name() {
+            let mut buf = vec![0u8; MIN_ENTRY_LEN];
+            buf[OFF_LENGTH..][..4].copy_from_slice(&(MIN_ENTRY_LEN as u32).to_le_bytes());
+            buf[OFF_RETURNED_COMMON..][..4].copy_from_slice(&COMMON_MASK.to_le_bytes());
+            buf[OFF_RETURNED_FILE..][..4].copy_from_slice(&FILE_MASK.to_le_bytes());
+            // attr_dataoffset 8 puts the name immediately after the reference;
+            // attr_length 0 leaves it empty.
+            buf[OFF_NAME_REF..][..4].copy_from_slice(&8i32.to_le_bytes());
+            buf[OFF_NAME_REF + 4..][..4].copy_from_slice(&0u32.to_le_bytes());
+
+            let mut it = entries(&buf, 1);
+            let entry = it.next().expect("one entry").expect("must parse");
+            assert_eq!(entry.name, b"");
+            assert_eq!(entry.obj_type, ObjType::Other);
+            assert_eq!(
+                (
+                    entry.file_id,
+                    entry.dev_id,
+                    entry.flags,
+                    entry.logical,
+                    entry.allocated,
+                    entry.link_count
+                ),
+                (0, 0, 0, 0, 0, 0),
+                "no attribute slot fits before the name, so all are defaults"
+            );
+            assert!(it.next().is_none());
+        }
+
+        /// The name reference is the one slot whose absence would shift every
+        /// other offset, so it is gated before it is read. Unreachable from a
+        /// conforming kernel -- `ATTR_CMN_NAME` is `ATTR_BULK_REQUIRED` -- and no
+        /// fuzzer can reach it, because clearing the bit in a fixed-layout buffer
+        /// produces neither a crash nor a value wrong relative to that buffer.
+        #[test]
+        fn rejects_an_unsupplied_name_reference() {
+            let buf = Synth {
+                returned_common: COMMON_MASK & !libc::ATTR_CMN_NAME,
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&buf, 1).next(),
+                Some(Err(ParseError::NameOutOfBounds)),
+                "an absent name reference must end the entry, not shift the layout"
+            );
+            // Clearing any other common bit is a value gate, not a layout gate, so
+            // those entries still parse -- the name slot is genuinely special.
+            for bit in [
+                libc::ATTR_CMN_DEVID,
+                libc::ATTR_CMN_OBJTYPE,
+                libc::ATTR_CMN_FLAGS,
+                libc::ATTR_CMN_FILEID,
+            ] {
+                let buf = Synth {
+                    returned_common: COMMON_MASK & !bit,
+                    ..Default::default()
+                }
+                .build();
+                let entry = entries(&buf, 1)
+                    .next()
+                    .expect("one entry")
+                    .unwrap_or_else(|e| panic!("bit {bit:#x} must still parse, got {e:?}"));
+                assert_eq!(entry.name, b"synthetic.bin");
+            }
+        }
+
+        #[test]
+        fn an_entry_never_reads_into_its_successor() {
+            // Two entries; the first's name reference points past its own length
+            // into the second entry's bytes. It must be refused, not followed.
+            let first = Synth {
+                name: b"first.bin".to_vec(),
+                ..Default::default()
+            }
+            .build();
+            let second = Synth {
+                name: b"second.bin".to_vec(),
+                ..Default::default()
+            }
+            .build();
+            let overrun = Synth {
+                name: b"first.bin".to_vec(),
+                name_offset: Some((first.len() - OFF_NAME_REF + 8) as i32),
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(overrun.len(), first.len());
+            let mut buf = overrun;
+            buf.extend_from_slice(&second);
+            assert_eq!(
+                entries(&buf, 2).next(),
+                Some(Err(ParseError::NameOutOfBounds))
+            );
+        }
+
+        /// `never_panics_on_mutated_golden_bytes` over buffers built in memory,
+        /// so Miri gets an adversarial walk too: it cannot read the fixtures.
+        /// Covers a file, then a directory with no `fileattr` group that is
+        /// not the first entry.
+        #[test]
+        fn never_panics_on_mutated_synthetic_buffers() {
+            let mut buf = Vec::new();
+            for s in [
+                Synth::default(),
+                Synth {
+                    file_group: false,
+                    obj_type: VDIR,
+                    name: b"dir".to_vec(),
+                    ..Default::default()
+                },
+            ] {
+                buf.extend_from_slice(&s.build());
+            }
+            mutate_and_drain(&buf, 2);
+        }
+    }
+
+    /// Tests that replay the committed golden fixtures from disk. Excluded under
+    /// Miri, which cannot do the file I/O they need; everything they establish
+    /// about the *layout* is re-checked by `synthetic` on bytes built in memory.
+    #[cfg(not(miri))]
+    mod golden {
+        use super::*;
+        use std::path::PathBuf;
+
+        // -- golden corpus ----------------------------------------------------
+
+        fn fixture(name: &str) -> PathBuf {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name)
+        }
+
+        /// The recorded `getattrlistbulk` bytes and the entry count the syscall
+        /// returned. See `tests/golden_capture.rs` for the format.
+        fn golden(name: &str) -> (Vec<u8>, u32) {
+            let raw = std::fs::read(fixture(&format!("golden_{name}.bin"))).unwrap();
+            assert_eq!(&raw[..8], b"TSRGOLD1", "bad golden magic in {name}");
+            let count = u32::from_le_bytes(raw[8..12].try_into().unwrap());
+            let len = u32::from_le_bytes(raw[12..16].try_into().unwrap()) as usize;
+            assert_eq!(raw.len(), 16 + len, "golden_{name}.bin length header wrong");
+            (raw[16..].to_vec(), count)
+        }
+
+        /// One row of the `lstat(2)`-derived expectation sidecar. Independent of
+        /// this parser, so a parser bug cannot be baked into both sides.
+        #[derive(Debug, PartialEq)]
+        struct Expect {
+            name: Vec<u8>,
+            kind: String,
+            ino: u64,
+            dev: i32,
+            nlink: u32,
+            logical: u64,
+            allocated: u64,
+        }
+
+        fn expectations(name: &str) -> Vec<Expect> {
+            let text = std::fs::read_to_string(fixture(&format!("golden_{name}.expect"))).unwrap();
+            let rows: Vec<Expect> = text
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .map(|l| {
+                    let f: Vec<&str> = l.split('\t').collect();
+                    assert_eq!(f.len(), 7, "bad expectation row: {l}");
+                    Expect {
+                        name: (0..f[0].len() / 2)
+                            .map(|i| u8::from_str_radix(&f[0][i * 2..i * 2 + 2], 16).unwrap())
+                            .collect(),
+                        kind: f[1].to_string(),
+                        ino: f[2].parse().unwrap(),
+                        dev: f[3].parse().unwrap(),
+                        nlink: f[4].parse().unwrap(),
+                        logical: f[5].parse().unwrap(),
+                        allocated: f[6].parse().unwrap(),
+                    }
+                })
+                .collect();
+            assert!(!rows.is_empty(), "golden_{name}.expect is empty");
+            rows
+        }
+
+        /// Parse a golden buffer and project it into the sidecar's shape, sorted
+        /// so the comparison does not depend on directory order.
+        fn parsed_as_expectations(name: &str) -> Vec<Expect> {
+            let (buf, count) = golden(name);
+            let mut rows: Vec<Expect> = entries(&buf, count)
+                .map(|e| {
+                    let e = e.expect("golden buffer must parse");
+                    Expect {
+                        name: e.name.to_vec(),
+                        kind: match e.obj_type {
+                            ObjType::Reg => "reg",
+                            ObjType::Dir => "dir",
+                            ObjType::Lnk => "lnk",
+                            ObjType::Other => "other",
+                        }
+                        .to_string(),
+                        ino: e.file_id,
+                        dev: e.dev_id,
+                        nlink: e.link_count,
+                        logical: e.logical,
+                        allocated: e.allocated,
+                    }
+                })
+                .collect();
+            assert_eq!(rows.len(), count as usize, "iterator dropped entries");
+            rows.sort_by(|a, b| a.name.cmp(&b.name));
+            rows
+        }
+
+        #[test]
+        fn parses_golden_buffer_into_expected_entries() {
+            // golden_simple.bin: file("a.bin", 4096) + dir("d").
+            let rows = parsed_as_expectations("simple");
+
+            let names: Vec<&[u8]> = rows.iter().map(|r| r.name.as_slice()).collect();
+            assert_eq!(names, vec![&b"a.bin"[..], &b"d"[..]]);
+            let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
+            assert_eq!(kinds, vec!["reg", "dir"]);
+            // The file is dense, so one 4 KiB block is really allocated. The
+            // directory's entry carries no `fileattr` group at all, so its
+            // allocated size is the default -- not a misread of its name bytes.
+            assert_eq!(rows[0].allocated, 4096);
+            assert_eq!(rows[0].logical, 4096);
+            assert_eq!(rows[0].nlink, 1);
+            assert_eq!(rows[1].allocated, 0);
+            assert_eq!(rows[1].logical, 0);
+            assert_eq!(rows[1].nlink, 0);
+
+            // And every field agrees with `lstat(2)` on the same tree.
+            assert_eq!(rows, expectations("simple"));
+        }
+
+        /// One entry of a golden buffer, split by hand so this test's decoding is
+        /// independent of `parse_entry`.
+        struct RawSlice<'a> {
+            bytes: &'a [u8],
+            len: usize,
+            returned_common: u32,
+            returned_file: u32,
+            /// Where the name begins, relative to the entry: the kernel's own
+            /// account of where the fixed-field region ends.
+            name_start: usize,
+            name: Vec<u8>,
+        }
+
+        /// Walk a golden buffer into its entries by length alone, decoding each by
+        /// hand. Deliberately duplicates the layout knowledge rather than calling
+        /// the parser: this is what keeps the layout test non-circular.
+        fn raw_entries(buf: &[u8]) -> Vec<RawSlice<'_>> {
+            let le32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+            let mut out = Vec::new();
+            let mut pos = 0usize;
+            while pos < buf.len() {
+                let e = &buf[pos..];
+                let len = le32(e, OFF_LENGTH) as usize;
+                let name_start = (OFF_NAME_REF as i64
+                    + i64::from(i32::from_le_bytes(
+                        e[OFF_NAME_REF..OFF_NAME_REF + 4].try_into().unwrap(),
+                    ))) as usize;
+                let name_len = le32(e, OFF_NAME_REF + 4) as usize;
+                let field = &e[name_start..name_start + name_len];
+                out.push(RawSlice {
+                    bytes: &e[..len],
+                    len,
+                    returned_common: le32(e, OFF_RETURNED_COMMON),
+                    returned_file: le32(e, OFF_RETURNED_FILE),
+                    name_start,
+                    name: field[..field.len() - 1].to_vec(),
+                });
+                pos += len;
+            }
+            out
+        }
+
+        /// Re-derives the layout from a captured buffer on every run, so the
+        /// constants above cannot drift away from the bytes they were measured
+        /// from without a test failing.
+        ///
+        /// Entries are found by name, not by position: `readdir` order is not
+        /// guaranteed, and a recapture in a different order must not make the
+        /// project's most important non-circular test fail spuriously.
+        #[test]
+        fn layout_matches_the_captured_golden_buffer() {
+            let (buf, count) = golden("simple");
+            assert_eq!(count, 2);
+            let raw = raw_entries(&buf);
+            assert_eq!(raw.len(), count as usize, "length walk lost an entry");
+            let find = |n: &[u8]| {
+                raw.iter()
+                    .find(|r| r.name == n)
+                    .unwrap_or_else(|| panic!("no entry named {}", String::from_utf8_lossy(n)))
+            };
+
+            // The regular file: full fixed region, name directly after it.
+            let file = find(b"a.bin");
+            assert_eq!(file.len, 80, "a.bin entry length");
+            assert_eq!(file.returned_common, COMMON_MASK);
+            assert_eq!(file.returned_file, FILE_MASK);
+            assert_eq!(
+                file.name_start,
+                OFF_DATALENGTH + 8,
+                "the name reference's own address is the base of its offset"
+            );
+
+            // The directory: no `fileattr` group, so the name starts where
+            // ATTR_FILE_LINKCOUNT would have been.
+            let dir = find(b"d");
+            assert_eq!(dir.len, 56, "directory entry length");
+            assert_eq!(
+                dir.returned_file, 0,
+                "a directory reports no fileattr at all"
+            );
+            assert_eq!(
+                dir.name_start, OFF_LINKCOUNT,
+                "the directory's fileattr slots are absent, not zero-filled"
+            );
+            // The decisive arithmetic: the fixed fields need 72 bytes and the
+            // entry is 56, so the three slots cannot be present at any offset.
+            assert!(dir.len < OFF_DATALENGTH + 8);
+            assert_eq!(dir.bytes.len(), 56);
+
+            // ATTR_CMN_NAME is set on every entry, which is why the unconditional
+            // read it guards is unreachable from a conforming kernel.
+            for r in &raw {
+                assert_ne!(r.returned_common & libc::ATTR_CMN_NAME, 0);
+            }
+        }
+
+        #[test]
+        fn parses_golden_mixed_buffer_into_expected_entries() {
+            let rows = parsed_as_expectations("mixed");
+            assert_eq!(rows, expectations("mixed"));
+
+            let by_name = |n: &[u8]| rows.iter().find(|r| r.name == n).expect("entry present");
+
+            // A multi-byte UTF-8 name survives byte for byte.
+            let cafe = by_name(b"caf\xc3\xa9 \xe2\x82\xac.bin");
+            assert_eq!(cafe.kind, "reg");
+
+            // A sparse file: a huge logical size with nothing allocated. Reading
+            // either field from the wrong offset would be obvious here.
+            let sparse = by_name(b"sparse.bin");
+            assert_eq!((sparse.logical, sparse.allocated), (1 << 30, 0));
+
+            // The hardlink pair: one inode, two names, link count 2.
+            let a = by_name(b"hardlink.bin");
+            let b = by_name(b"link-target.bin");
+            assert_eq!(a.ino, b.ino);
+            assert_eq!((a.nlink, b.nlink), (2, 2));
+
+            // The clone is a distinct inode that still accounts for its blocks.
+            let clone = by_name(b"clone.bin");
+            let dense = by_name(b"dense.bin");
+            assert_ne!(clone.ino, dense.ino);
+            assert_eq!((clone.logical, clone.allocated), (8192, 8192));
+
+            assert_eq!(by_name(b"dangling").kind, "lnk");
+            let subdir = by_name(b"subdir");
+            assert_eq!(subdir.kind, "dir");
+            assert_eq!((subdir.nlink, subdir.logical, subdir.allocated), (0, 0, 0));
+        }
+
+        /// `ObjType`'s discriminants are checked against `lstat(2)`, not against
+        /// recollection: the sidecar's `kind` column comes from `st_mode`.
+        #[test]
+        fn obj_type_discriminants_match_lstat() {
+            for corpus in ["simple", "mixed"] {
+                let parsed = parsed_as_expectations(corpus);
+                let expected = expectations(corpus);
+                let got: Vec<&str> = parsed.iter().map(|r| r.kind.as_str()).collect();
+                let want: Vec<&str> = expected.iter().map(|r| r.kind.as_str()).collect();
+                assert_eq!(got, want, "{corpus}");
+                assert!(want.contains(&"dir"), "{corpus} must exercise VDIR");
+            }
+            assert!(expectations("mixed").iter().any(|r| r.kind == "lnk"));
+        }
+
+        /// The standing, cheap version of what `cargo-fuzz` does: mutate real
+        /// kernel bytes every way a single truncation or byte flip can, and
+        /// require that nothing panics and that iteration always terminates.
+        /// Neither this nor the fuzzer can see a wrong-but-plausible value; the
+        /// explicit gates and the golden comparisons above own that.
+        #[test]
+        fn never_panics_on_mutated_golden_bytes() {
+            // Both corpora: `mixed` is the one with eight entries, so it exercises
+            // multi-entry walking and a `fileattr`-less entry that is not first.
+            for corpus in ["simple", "mixed"] {
+                let (buf, count) = golden(corpus);
+                mutate_and_drain(&buf, count);
+            }
+        }
+
+        /// `fuzz/corpus/parse_entries/` seeds the fuzzer with the golden
+        /// buffers, in the fuzz target's input layout: one count byte, then the
+        /// buffer. A recapture of the fixtures would otherwise leave the seeds
+        /// stale and the fuzzer quietly starting from old shapes.
+        #[test]
+        fn fuzz_seeds_are_the_golden_fixtures() {
+            let seeds =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/parse_entries");
+            for corpus in ["simple", "mixed"] {
+                let (buf, count) = golden(corpus);
+                let seed = std::fs::read(seeds.join(format!("golden_{corpus}.bin")))
+                    .unwrap_or_else(|e| panic!("fuzz seed for {corpus} missing: {e}"));
+                let count = u8::try_from(count).expect("the fuzz target's count is one byte");
+                assert_eq!(seed[0], count, "seed {corpus}: count byte");
+                assert_eq!(&seed[1..], &buf[..], "seed {corpus}: buffer bytes");
             }
         }
     }

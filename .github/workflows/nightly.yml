@@ -1,0 +1,82 @@
+name: Nightly
+
+# Slow checks on the getattrlistbulk buffer parser, the riskiest code in the
+# project. Miri and ASAN are regression protection: the parser has no `unsafe`
+# and no indexing, so they are expected to stay green, and they exist to catch
+# the day that stops being true. The fuzzer cannot find a wrong-but-plausible
+# value (an attribute read although the kernel said it was not returned);
+# the golden tests and explicit gates in parse.rs own that.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+# These must run on macOS: the parser's constants come from libc's Apple
+# bindings, and the golden fixtures are macOS kernel output.
+jobs:
+  miri:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Miri is nightly-only and ships as a component; it needs rust-src to
+      # build its own sysroot. If a given nightly lacks the miri component this
+      # step fails loudly, which is the right outcome.
+      - name: Install nightly with Miri
+        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+
+      # The script fails if fewer than the expected number of tests ran, so a
+      # filter that stops matching cannot turn this into a green no-op.
+      - name: Miri (parse::tests::synthetic)
+        run: scripts/parser-sanitizers.sh miri
+
+  asan:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+
+      # RUSTFLAGS="-Zsanitizer=address" is set inside the script, which also
+      # checks the test count and that the binary links the ASAN runtime.
+      - name: AddressSanitizer (parse::)
+        run: scripts/parser-sanitizers.sh asan
+
+  fuzz:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Cache cargo-fuzz
+        id: cargo-fuzz-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-0.13.2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Fuzz parse::entries (15 min)
+        run: scripts/fuzz-parser.sh 900
+
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

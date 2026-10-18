@@ -31,5 +31,46 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Covers the workspace lockfile only. fuzz/ has its own lockfile and is
+      # not checked here: libfuzzer-sys is "(MIT OR Apache-2.0) AND NCSA" and
+      # NCSA is not on the deny.toml allowlist (undecided, see Task 5 report).
       - name: Licences
         run: cargo deny check licenses
+
+  # Short fuzz of the getattrlistbulk buffer parser. Separate from `rust` so
+  # it can use nightly without disturbing the stable pin. The longer run and
+  # the Miri and ASAN jobs live in nightly.yml.
+  fuzz:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins stable; the fuzz scripts ask for nightly with
+      # an explicit `+nightly`. Minimal profile: no docs, clippy or rustfmt.
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+
+      # install-action has no cargo-fuzz manifest, so build it once and cache.
+      - name: Cache cargo-fuzz
+        id: cargo-fuzz-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-0.13.2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Fuzz parse::entries (60 s)
+        run: scripts/fuzz-parser.sh 60
+
+      # A crash leaves its reproducer in fuzz/artifacts; keep it.
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

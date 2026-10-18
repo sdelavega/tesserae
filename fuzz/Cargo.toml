@@ -1,0 +1,26 @@
+[package]
+name = "tesserae-core-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tesserae-core = { path = "../crates/tesserae-core" }
+
+# Deliberately outside the root workspace: cargo-fuzz needs nightly and a
+# sanitizer-instrumented build, which must not leak into `cargo test
+# --workspace`. This empty table is what stops cargo treating the root
+# manifest as this package's workspace.
+[workspace]
+
+[[bin]]
+name = "parse_entries"
+path = "fuzz_targets/parse_entries.rs"
+test = false
+doc = false
+bench = false

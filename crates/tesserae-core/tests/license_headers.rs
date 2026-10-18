@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Every Rust source file in the workspace carries the full GPL-3.0 header.
+//! Every Rust source file in the workspace, and in `fuzz/`, carries the full
+//! GPL-3.0 header.
 //!
 //! Nothing else in the repo checks this, and a truncated header (cut off
 //! before the closing "along with this program" lines) passes every other gate.
@@ -56,15 +57,24 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn all_sources_carry_the_full_gpl_header() {
     // `crates/` holds every workspace member, so new crates are covered
-    // automatically.
+    // automatically. `fuzz/` is deliberately not a workspace member (it needs
+    // nightly), so it is walked separately.
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let fuzz = crates.parent().unwrap().join("fuzz");
     let mut files = Vec::new();
     collect(crates, &mut files);
+    let before_fuzz = files.len();
+    collect(&fuzz, &mut files);
     assert!(
         files.len() >= 3,
         "found only {} .rs files under {}; is the walk broken?",
         files.len(),
         crates.display()
+    );
+    assert!(
+        files.len() > before_fuzz,
+        "found no .rs files under {}; is the fuzz walk broken?",
+        fuzz.display()
     );
     let bad: Vec<_> = files
         .iter()

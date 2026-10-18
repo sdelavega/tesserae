@@ -1,0 +1,7 @@
+target
+artifacts
+coverage
+# The fuzzer writes its discoveries into corpus/<target>/ alongside the seeds.
+# Only the golden seeds are committed.
+corpus/*/*
+!corpus/*/golden_*.bin
