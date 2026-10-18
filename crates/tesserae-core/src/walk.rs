@@ -414,12 +414,24 @@ impl<O: DirOpener> Walker<'_, O> {
     /// directory the walk is about to read, so there is no path to re-resolve
     /// and nothing to swap between the check and the descent.
     ///
-    /// A directory on the root's own volume is the root's own filesystem, which
-    /// the caller chose, so it is entered without asking whether that
-    /// filesystem is local. The policy governs what is *crossed into*, and
-    /// only a change of volume is a crossing. Cost: one `fstatfs` per
-    /// directory (about 0.4 us against several us for the `openat` it follows),
-    /// plus a second only at a crossing.
+    /// # The root's own volume is exempt, deliberately
+    ///
+    /// A directory on the root's own volume is entered without asking whether
+    /// that filesystem is local, even when `include_non_local` is `false` and
+    /// the root is, say, an SMB share. This is a decision, not an oversight.
+    /// `include_non_local` means "cross *into* non-local mounts encountered
+    /// along the way", not "refuse to scan what the caller pointed at": a user
+    /// who names a network path as the root has expressed explicit intent, and
+    /// returning an empty tree with every subdirectory "skipped" would be
+    /// absurd. The hazard the flag guards against is wandering mid-scan into a
+    /// remote mount that is dead, where `openat` blocks uninterruptibly. A
+    /// root the caller named fails at the very first open, immediately and
+    /// visibly, so it needs no such protection. Only a change of volume is a
+    /// crossing. (`boundary::should_descend` still refuses a same-volume
+    /// non-local directory when asked; the walker simply does not ask.)
+    ///
+    /// Cost: one `fstatfs` per directory (about 0.4 us against several us for
+    /// the `openat` it follows), plus a second only at a crossing.
     ///
     /// Returns `Ok(true)` to enter, `Ok(false)` to skip (recorded in
     /// `skipped_mounts`, or in the error counters if the descriptor cannot be
