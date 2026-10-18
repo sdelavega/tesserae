@@ -371,7 +371,8 @@ fn parses_golden_buffer_into_expected_entries() {
 
 #[test]
 fn preserves_non_utf8_names_as_bytes() {            // Review Focus 1
-    // golden_nonutf8.bin from raw_name(".", b"bad\xff\xfename", 16)
+    // synthetic buffer (no filesystem): one entry whose name field holds
+    // b"bad\xff\xfename", assembled by hand like the absent-attribute test
     // assert entry.name == b"bad\xff\xfename"   (no panic, no lossy conversion)
 }
 

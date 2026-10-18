@@ -9,4 +9,4 @@ publish = false
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tesserae-testutil = { path = "../tesserae-testutil" }

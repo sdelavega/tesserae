@@ -96,6 +96,14 @@ name = "tesserae-core"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tesserae-testutil",
+]
+
+[[package]]
+name = "tesserae-testutil"
+version = "0.1.0"
+dependencies = [
+ "libc",
  "tempfile",
 ]
 

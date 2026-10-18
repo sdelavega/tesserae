@@ -12,8 +12,13 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Test-only helpers for manufacturing exact filesystem state.
+//!
+//! This is a separate crate (used as a dev-dependency) so that it is
+//! available to unit tests, integration tests, benches and other crates'
+//! tests alike, and never ships in the production artefact.
 
 pub mod tree;
 

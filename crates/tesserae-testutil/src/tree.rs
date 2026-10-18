@@ -12,20 +12,20 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Filesystem fixture builder (tests only).
+//! Filesystem fixture builder.
 //!
 //! The filesystem is the scanner's input, so tests need to manufacture exact
 //! state: exact sizes, sparse files, hardlinks, symlinks, unreadable
 //! directories and real APFS clones.
 
 use std::ffi::{CString, OsStr};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::FromRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
@@ -33,7 +33,8 @@ use tempfile::TempDir;
 
 extern "C" {
     // Not exposed by the `libc` crate. Creates a copy-on-write APFS clone.
-    fn clonefile(src: *const c_char, dst: *const c_char, flags: c_int) -> c_int;
+    // `flags` is `uint32_t` in <sys/clonefile.h>.
+    fn clonefile(src: *const c_char, dst: *const c_char, flags: u32) -> libc::c_int;
 }
 
 /// Mode restored on every `chmod`-ed path before the temp dir is removed.
@@ -52,7 +53,21 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// # Panics
+    ///
+    /// Panics if the process runs as root: `chmod(0o000)` is bypassed for
+    /// root, so an unreadable-directory fixture would silently be readable
+    /// and every test depending on it would pass for the wrong reason.
+    /// Enforced here, where the dangerous operation lives, so it holds for
+    /// every consumer (unit tests, `tests/`, benches, other crates).
     pub fn new() -> io::Result<Self> {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "fixtures must not be built as root: chmod 000 is bypassed and \
+             permission tests pass for the wrong reason"
+        );
         Ok(Self {
             root: TempDir::new()?,
             chmodded: Mutex::new(Vec::new()),
@@ -66,58 +81,73 @@ impl Fixture {
     /// Regular file of exactly `len` bytes, fully allocated (not sparse).
     pub fn file(&self, rel: &str, len: u64) -> io::Result<&Self> {
         let path = self.resolve(rel)?;
-        write_dense(File::create(path)?, len)?;
+        let file = File::create(&path).map_err(at("create", &path))?;
+        write_dense(file, len).map_err(at("write", &path))?;
         Ok(self)
     }
 
     /// File with logical size `logical` and no data blocks (`ftruncate` only).
     pub fn sparse(&self, rel: &str, logical: u64) -> io::Result<&Self> {
         let path = self.resolve(rel)?;
-        File::create(path)?.set_len(logical)?;
+        File::create(&path)
+            .and_then(|f| f.set_len(logical))
+            .map_err(at("create sparse", &path))?;
         Ok(self)
     }
 
     /// Real APFS clone via `clonefile(2)`: a new inode sharing `src`'s blocks.
+    ///
+    /// Fails (with the paths in the message) if the temp dir is not on APFS.
     pub fn clone_of(&self, src: &str, dst: &str) -> io::Result<&Self> {
-        let src = cstring(self.resolve_existing(src)?.as_os_str().as_bytes())?;
-        let dst = cstring(self.resolve(dst)?.as_os_str().as_bytes())?;
+        let src_path = self.resolve_unchecked(src)?;
+        let dst_path = self.resolve(dst)?;
+        let c_src = cstring(src_path.as_os_str().as_bytes())?;
+        let c_dst = cstring(dst_path.as_os_str().as_bytes())?;
         // SAFETY: both pointers come from live, NUL-terminated CStrings.
-        if unsafe { clonefile(src.as_ptr(), dst.as_ptr(), 0) } != 0 {
-            return Err(io::Error::last_os_error());
+        if unsafe { clonefile(c_src.as_ptr(), c_dst.as_ptr(), 0) } != 0 {
+            return Err(at2("clonefile", &src_path, &dst_path)(
+                io::Error::last_os_error(),
+            ));
         }
         Ok(self)
     }
 
     pub fn hardlink(&self, src: &str, dst: &str) -> io::Result<&Self> {
-        let src = self.resolve_existing(src)?;
-        let dst = self.resolve(dst)?;
-        fs::hard_link(src, dst)?;
+        let src_path = self.resolve_unchecked(src)?;
+        let dst_path = self.resolve(dst)?;
+        fs::hard_link(&src_path, &dst_path).map_err(at2("link", &src_path, &dst_path))?;
         Ok(self)
     }
 
     /// Symlink at `dst` whose target text is stored verbatim (it need not
     /// exist and is not resolved against the fixture root).
     pub fn symlink(&self, target: &str, dst: &str) -> io::Result<&Self> {
-        let dst = self.resolve(dst)?;
-        std::os::unix::fs::symlink(target, dst)?;
+        let dst_path = self.resolve(dst)?;
+        std::os::unix::fs::symlink(target, &dst_path).map_err(at("symlink", &dst_path))?;
         Ok(self)
     }
 
     pub fn dir(&self, rel: &str) -> io::Result<&Self> {
-        fs::create_dir_all(self.resolve_existing(rel)?)?;
+        let path = self.resolve_unchecked(rel)?;
+        fs::create_dir_all(&path).map_err(at("mkdir", &path))?;
         Ok(self)
     }
 
     /// Set permission bits. The path is remembered and restored to a
     /// traversable mode on drop.
+    ///
+    /// Refuses paths that pass through a symlink: `chmod` follows links, and
+    /// the lexical path guard cannot see where a fixture symlink points, so
+    /// this would otherwise be able to change permissions outside the root.
     pub fn chmod(&self, rel: &str, mode: u32) -> io::Result<&Self> {
-        let path = self.resolve_existing(rel)?;
+        let path = self.resolve_unchecked(rel)?;
+        self.refuse_symlinks(&path)?;
         // Record first: if the chmod below succeeds we must be able to undo it.
         self.chmodded
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(path.clone());
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).map_err(at("chmod", &path))?;
         Ok(self)
     }
 
@@ -132,36 +162,25 @@ impl Fixture {
         if name.is_empty() || name.contains(&b'/') {
             return Err(invalid("raw name must be non-empty and contain no '/'"));
         }
-        let mut bytes = self.resolve_existing(dir)?.as_os_str().as_bytes().to_vec();
-        bytes.push(b'/');
-        bytes.extend_from_slice(name);
-        if bytes.contains(&0) {
-            return Err(invalid("raw name must not contain NUL"));
-        }
-        // SAFETY: `bytes` was just checked to contain no interior NUL;
-        // `from_vec_unchecked` appends the terminator.
-        let path = unsafe { CString::from_vec_unchecked(bytes) };
-        // SAFETY: `path` is a valid NUL-terminated string.
-        let fd = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
-                0o644 as libc::c_uint,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `fd` is a freshly opened descriptor we exclusively own.
-        write_dense(unsafe { File::from_raw_fd(fd) }, len)?;
+        let mut path = self.resolve_unchecked(dir)?;
+        path.push(OsStr::from_bytes(name));
+        // `OpenOptions` hands the OS string's bytes to open(2) unchanged and
+        // rejects interior NUL, so no `unsafe` is needed for byte-exactness.
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&path)
+            .map_err(at("create", &path))?;
+        write_dense(file, len).map_err(at("write", &path))?;
         Ok(self)
     }
 
     /// Resolve `rel` under the root, creating its parent directories.
     fn resolve(&self, rel: &str) -> io::Result<PathBuf> {
-        let path = self.resolve_existing(rel)?;
+        let path = self.resolve_unchecked(rel)?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(at("mkdir", parent))?;
         }
         Ok(path)
     }
@@ -169,7 +188,7 @@ impl Fixture {
     /// Resolve `rel` under the root without touching the filesystem.
     /// Rejects absolute paths and `..` so a fixture can never write outside
     /// its own temp dir.
-    fn resolve_existing(&self, rel: &str) -> io::Result<PathBuf> {
+    fn resolve_unchecked(&self, rel: &str) -> io::Result<PathBuf> {
         let rel = Path::new(OsStr::new(rel));
         if rel.components().any(|c| {
             matches!(
@@ -183,6 +202,26 @@ impl Fixture {
         }
         Ok(self.root.path().join(rel))
     }
+
+    /// Error if `path` (under the root) or any component of it is a symlink.
+    fn refuse_symlinks(&self, path: &Path) -> io::Result<()> {
+        let mut cur = self.root.path().to_path_buf();
+        let rel = path.strip_prefix(&cur).unwrap_or(path);
+        for comp in rel.components() {
+            cur.push(comp);
+            match fs::symlink_metadata(&cur) {
+                Ok(md) if md.file_type().is_symlink() => {
+                    return Err(invalid(&format!(
+                        "refusing to chmod through symlink {}",
+                        cur.display()
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) => return Err(at("lstat", &cur)(e)),
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Fixture {
@@ -193,6 +232,10 @@ impl Drop for Fixture {
         let mut paths = std::mem::take(self.chmodded.get_mut().unwrap_or_else(|e| e.into_inner()));
         paths.sort_by_key(|p| p.components().count());
         for path in paths {
+            // Never follow a link that appeared after `chmod` validated the path.
+            if fs::symlink_metadata(&path).is_ok_and(|md| md.file_type().is_symlink()) {
+                continue;
+            }
             // Best effort: the path may already be gone.
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(RESTORE_MODE));
         }
@@ -202,6 +245,20 @@ impl Drop for Fixture {
 
 fn invalid(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, msg)
+}
+
+/// Adds the operation and path to an I/O error, keeping its `ErrorKind`.
+fn at<'a>(op: &'a str, path: &'a Path) -> impl FnOnce(io::Error) -> io::Error + 'a {
+    move |e| io::Error::new(e.kind(), format!("{op} {}: {e}", path.display()))
+}
+
+fn at2<'a>(op: &'a str, src: &'a Path, dst: &'a Path) -> impl FnOnce(io::Error) -> io::Error + 'a {
+    move |e| {
+        io::Error::new(
+            e.kind(),
+            format!("{op} {} -> {}: {e}", src.display(), dst.display()),
+        )
+    }
 }
 
 fn cstring(bytes: &[u8]) -> io::Result<CString> {
@@ -217,7 +274,7 @@ fn write_dense(mut file: File, len: u64) -> io::Result<()> {
         file.write_all(&chunk[..n])?;
         left -= n as u64;
     }
-    file.flush()
+    Ok(())
 }
 
 #[cfg(test)]
@@ -231,10 +288,11 @@ mod tests {
     fn file_has_exact_size() {
         let fx = Fixture::new().unwrap();
         fx.file("a.bin", 4096).unwrap();
-        assert_eq!(
-            std::fs::metadata(fx.path().join("a.bin")).unwrap().len(),
-            4096
-        );
+        let md = std::fs::metadata(fx.path().join("a.bin")).unwrap();
+        assert_eq!(md.len(), 4096);
+        // Fully allocated, not sparse. `clone_consumes_no_new_space` relies on
+        // this: cloning or copying a sparse file moves ~0 bytes either way.
+        assert!(md.blocks() * 512 >= 4096, "allocated {}", md.blocks() * 512);
     }
 
     #[test]
@@ -251,7 +309,9 @@ mod tests {
     }
 
     #[test]
-    fn clonefile_shares_blocks() {
+    fn clone_of_makes_distinct_inode() {
+        // Size and inode alone cannot tell a clone from a copy (`fs::copy`
+        // clones on macOS); `clone_consumes_no_new_space` carries that claim.
         let fx = Fixture::new().unwrap();
         fx.file("b.bin", 1 << 20).unwrap();
         fx.clone_of("b.bin", "copy.bin").unwrap();
@@ -263,9 +323,28 @@ mod tests {
     }
 
     #[test]
+    fn clone_consumes_no_new_space() {
+        // Observable only through volume free space: a real clone shares
+        // blocks, a copy would consume `LEN` more bytes. Meaningful only
+        // because `file()` is dense (asserted in `file_has_exact_size`).
+        const LEN: u64 = 64 << 20;
+        let fx = Fixture::new().unwrap();
+        fx.file("big.bin", LEN).unwrap();
+        let before = free_bytes(fx.path());
+        fx.clone_of("big.bin", "clone.bin").unwrap();
+        let used = before.saturating_sub(free_bytes(fx.path()));
+        assert!(
+            used < LEN / 4,
+            "clone consumed {used} bytes; not a real clone"
+        );
+    }
+
+    #[test]
     fn raw_name_round_trips_exact_bytes() {
-        // Valid UTF-8 but not ASCII: must come back byte-exact through the
-        // raw-byte path (no normalisation, no lossy conversion).
+        // Valid UTF-8, so this cannot show that invalid bytes survive (no
+        // fixture can: see `raw_name`). It guards against the builder or
+        // filesystem normalising the name: precomposed 'e-acute' must not
+        // come back decomposed.
         let name = b"caf\xc3\xa9 \xe2\x82\xac.bin";
         let fx = Fixture::new().unwrap();
         fx.raw_name(".", name, 16).unwrap();
@@ -285,22 +364,6 @@ mod tests {
             let err = fx.raw_name(".", name, 1).unwrap_err();
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         }
-    }
-
-    #[test]
-    fn clone_consumes_no_new_space() {
-        // Observable only through volume free space: a real clone shares
-        // blocks, a copy would consume `LEN` more bytes.
-        const LEN: u64 = 64 << 20;
-        let fx = Fixture::new().unwrap();
-        fx.file("big.bin", LEN).unwrap();
-        let before = free_bytes(fx.path());
-        fx.clone_of("big.bin", "clone.bin").unwrap();
-        let used = before.saturating_sub(free_bytes(fx.path()));
-        assert!(
-            used < LEN / 4,
-            "clone consumed {used} bytes; not a real clone"
-        );
     }
 
     #[test]
@@ -328,6 +391,36 @@ mod tests {
                 "{rel}"
             );
         }
+    }
+
+    #[test]
+    fn chmod_refuses_symlinks_and_never_touches_the_target() {
+        let outside = Fixture::new().unwrap();
+        outside.dir("victim").unwrap();
+        let victim = outside.path().join("victim");
+        let before = std::fs::metadata(&victim).unwrap().mode();
+
+        let fx = Fixture::new().unwrap();
+        fx.symlink(victim.to_str().unwrap(), "link").unwrap();
+        // The link itself, and a path through it, are both refused.
+        for rel in ["link", "link/inner"] {
+            let err = fx.chmod(rel, 0o000).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{rel}");
+        }
+        drop(fx);
+        assert_eq!(std::fs::metadata(&victim).unwrap().mode(), before);
+    }
+
+    #[test]
+    fn errors_name_the_operation_and_paths() {
+        let fx = Fixture::new().unwrap();
+        let err = fx.hardlink("missing.bin", "dst.bin").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("link") && msg.contains("missing.bin") && msg.contains("dst.bin"),
+            "{msg}"
+        );
     }
 
     #[test]

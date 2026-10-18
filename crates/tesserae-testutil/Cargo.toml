@@ -1,0 +1,11 @@
+[package]
+name = "tesserae-testutil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only filesystem fixture builder for Tesserae"
+
+[dependencies]
+libc = "0.2"
+tempfile = "3.27.0"
