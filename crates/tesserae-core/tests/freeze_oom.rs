@@ -57,6 +57,11 @@ fn refuse() -> bool {
     matches!((n, FAIL_AT.try_with(Cell::get)), (Ok(n), Ok(f)) if n == f)
 }
 
+// SAFETY: every method either returns null, which `GlobalAlloc` allows as the
+// failure signal and which the caller must handle, or forwards its arguments
+// unchanged to `System`, whose contract is therefore the one the caller
+// already upheld. The bookkeeping uses const-initialised thread-locals with no
+// destructor, so it never allocates or re-enters the allocator.
 unsafe impl GlobalAlloc for FailingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if refuse() {

@@ -78,6 +78,19 @@ pub enum FreezeError {
     NamesTooLarge,
 }
 
+impl std::fmt::Display for FreezeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FreezeError::OutOfMemory => f.write_str("out of memory building the snapshot"),
+            FreezeError::NamesTooLarge => {
+                f.write_str("the names total more than 4 GiB and cannot be addressed")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FreezeError {}
+
 /// The total name bytes as a `usize`, if every offset into it fits 32 bits.
 fn checked_name_bytes(total: u64) -> Result<usize, FreezeError> {
     u32::try_from(total)
@@ -142,7 +155,7 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 ///
 /// # Panics
 ///
-/// Malformed input and one representation limit panic rather than return an
+/// Malformed input and the representation limits below panic rather than return an
 /// error, because they are not conditions of the machine:
 ///
 /// * **Programmer errors a walk does not produce:** no root or more than one,
@@ -151,6 +164,9 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 ///   and a node can only name an id already issued, so these need a walker
 ///   bug or a caller who dropped an arena. A tree that rendered anyway would
 ///   be wrong, which is worse than no tree.
+/// * **A directory total above `u64::MAX`** (16 EiB), which no volume holds;
+///   a sum is never saturated, since a clamped size would be a silently
+///   wrong one.
 /// * **`u32::MAX` nodes or more**, because indices are 32 bits. That is about
 ///   170 times the node budget, and the budget is per arena until the parallel
 ///   walker makes it global (see the walker's notes), so it is bounded by
@@ -178,7 +194,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             debug_assert_eq!(index.resolve(node_id), Some(src.len()));
             src.push(node);
             // At most 65_536 arenas: distinct non-empty thread tags.
-            arena_of.push(a as u16);
+            arena_of.push(u16::try_from(a).expect("more than 65_536 arenas"));
             name_bytes += u64::from(node.name.len);
         }
     }
@@ -246,8 +262,14 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
     for &v in order.iter().rev() {
         let p = parent[v as usize];
         if p != NODE_NONE {
-            logical[p as usize] = logical[p as usize].saturating_add(logical[v as usize]);
-            allocated[p as usize] = allocated[p as usize].saturating_add(allocated[v as usize]);
+            // A saturated total would be a silently wrong directory size,
+            // so an overflow is loud instead.
+            logical[p as usize] = logical[p as usize]
+                .checked_add(logical[v as usize])
+                .expect("a directory's logical size overflows u64");
+            allocated[p as usize] = allocated[p as usize]
+                .checked_add(allocated[v as usize])
+                .expect("a directory's allocated size overflows u64");
         }
     }
     drop(order);
@@ -558,6 +580,23 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "allocated size overflows u64")]
+    fn a_directory_total_that_overflows_panics_instead_of_saturating() {
+        let mut a = Arena::new(0, u64::MAX);
+        let root = dir(&mut a, ScanId::NONE, b"root");
+        file(&mut a, root, b"x", 1, u64::MAX);
+        file(&mut a, root, b"y", 1, 1);
+        freeze(vec![a], WalkStats::default());
+    }
+
+    #[test]
+    fn freeze_error_has_display_and_is_an_error() {
+        let e: &dyn std::error::Error = &FreezeError::OutOfMemory;
+        assert!(e.to_string().contains("out of memory"));
+        assert!(FreezeError::NamesTooLarge.to_string().contains("4 GiB"));
+    }
+
+    #[test]
     fn no_arenas_and_empty_arenas_freeze_to_an_empty_snapshot() {
         for arenas in [vec![], vec![Arena::new(3, u64::MAX)]] {
             let s = freeze(arenas, WalkStats::default());
@@ -681,6 +720,16 @@ mod tests {
         }
         let late_node = &s.nodes[find(&s, b"late")];
         assert_eq!((late_node.allocated, late_node.child_count), (1000, 1));
+        // Its child's name sits far into the blob, past what 16 bits address:
+        // a `name_off` truncated to u16 would resolve to the wrong bytes.
+        let li = find(&s, b"late_child");
+        assert!(s.names.len() > usize::from(u16::MAX));
+        assert!(s.nodes[li].name_off > u32::from(u16::MAX));
+        assert_eq!(
+            s.nodes[s.nodes[li].parent as usize].name_off,
+            late_node.name_off
+        );
+        assert_eq!(name_of(&s, &s.nodes[s.nodes[li].parent as usize]), b"late");
     }
 
     #[test]
@@ -691,10 +740,12 @@ mod tests {
         let mut a = Arena::new(0, u64::MAX);
         let root = dir(&mut a, ScanId::NONE, b"root");
         file(&mut a, root, b"small", 5, 5);
-        file(&mut a, root, b"mid1", 100, 100);
+        // The tied pair is pushed against name order, so only the name
+        // tie-break (and not push order) can put `mid1` first.
+        file(&mut a, root, b"mid2", 100, 100);
         file(&mut a, root, b"zero", 0, 0);
         let d = dir(&mut a, root, b"dir");
-        file(&mut a, root, b"mid2", 100, 100);
+        file(&mut a, root, b"mid1", 100, 100);
         file(&mut a, root, b"seven", 7, 7);
         file(&mut a, d, b"in1", 50, 50);
         file(&mut a, d, b"in2", 60, 60);
@@ -959,6 +1010,11 @@ mod tests {
 
     impl Tree {
         fn build(&self) -> Vec<Arena> {
+            self.build_in(&self.order)
+        }
+
+        /// The arenas, handed over in `order`.
+        fn build_in(&self, order: &[usize]) -> Vec<Arena> {
             let mut arenas: Vec<Option<Arena>> = self
                 .tags
                 .iter()
@@ -978,7 +1034,7 @@ mod tests {
                     n.allocated,
                 ));
             }
-            self.order
+            order
                 .iter()
                 .map(|&i| arenas[i].take().expect("order is a permutation"))
                 .collect()
@@ -1208,6 +1264,29 @@ mod tests {
                     );
                 }
             }
+        }
+
+        /// Which worker finished first is scheduling, and the parallel
+        /// walker hands the arenas over in that order. Equal-size siblings
+        /// must not reshuffle between rescans of an unchanged volume, so the
+        /// frozen bytes cannot depend on arena order. (The tie-break by name
+        /// is what makes this true; without it ties fall to the dense index,
+        /// which is arena order.)
+        #[test]
+        fn frozen_bytes_do_not_depend_on_arena_order(
+            t in arb_tree(),
+            keys in prop::collection::vec(any::<u32>(), 4),
+        ) {
+            let k = t.tags.len();
+            let mut other: Vec<usize> = (0..k).collect();
+            other.sort_by_key(|&i| keys[i]);
+            let a = freeze(t.build(), WalkStats::default());
+            let b = freeze(t.build_in(&other), WalkStats::default());
+            let c = freeze(t.build_in(&t.order.iter().rev().copied().collect::<Vec<_>>()), WalkStats::default());
+            prop_assert_eq!(&a.nodes, &b.nodes);
+            prop_assert_eq!(&a.names, &b.names);
+            prop_assert_eq!(&a.nodes, &c.nodes);
+            prop_assert_eq!(&a.names, &c.names);
         }
 
         /// The five properties above check the snapshot against itself; this
