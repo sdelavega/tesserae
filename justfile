@@ -18,10 +18,11 @@ default:
 # Every check CI runs, in CI's order.
 gate: lint test header ship-lib deny
 
-# All tests, including the disk-image integration tests (they attach and
-# detach real images with hdiutil), then the one test CI runs on its own:
-# `setrlimit` is process-wide, so that test is `#[ignore]`d in the suite and
-# gets a process and a thread to itself here.
+# The disk-image integration tests attach and detach real images with hdiutil.
+# `setrlimit` is process-wide, so the descriptor-limit test is `#[ignore]`d in
+# the suite and gets a process and a thread to itself here, as in CI.
+#
+# All tests, then the serialized descriptor-limit test.
 test:
     cargo test --workspace --locked
     cargo test -p tesserae-core --lib --locked -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
@@ -38,7 +39,7 @@ deny:
     cargo deny check licenses
     cargo deny --manifest-path fuzz/Cargo.toml check licenses
 
-# Regenerate include/tesserae.h and fail if it differs from what is committed.
+# Regenerate crates/tesserae-ffi/include/tesserae.h and fail if it differs from what is committed.
 header:
     scripts/gen-header.sh
     git diff --exit-code -- crates/tesserae-ffi/include/tesserae.h
