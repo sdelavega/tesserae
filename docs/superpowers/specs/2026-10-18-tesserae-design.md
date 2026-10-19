@@ -1391,13 +1391,13 @@ those tests take.
 ## 13. Spike results
 
 **Phase 2 update (2026-10-19):** The app shell, navigation, labels and file table
-are implemented. The real-window zoom gate remains **failed**: on a partial
-3.22M-node Data-volume snapshot at 60 Hz, presentation gaps reached 50.00 ms
-against a 16.67 ms budget; raw relayout stayed below 7.18 ms. The measured
-optimized Debug build and workload caveats are recorded in
+are implemented. The real-window zoom gate remains **failed** after a rerun
+following macOS prompt approvals: the Data scan saw 6.14M nodes with no
+incomplete stop code and 997 unreadable folders; at 60 Hz, presentation gaps
+reached 50.00 ms against a 16.67 ms budget. Raw relayout peaked at 5.99 ms.
+The optimized Debug build, both captures and workload caveats are recorded in
 [`docs/benchmarks.md`](../../benchmarks.md). Phase 2 is not declared complete;
 final branch review and PR readiness are pending.
-
 
 Everything downstream assumes scan speed. A throwaway Rust spike ran before
 implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread

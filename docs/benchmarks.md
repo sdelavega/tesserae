@@ -453,3 +453,63 @@ its maximum where fewer than 100 samples were collected.
 | Library | out | 40 | 6451 | 7.108 | 68.533 | 0.160 / 0.160 | 11.065 / 11.065 | 50.000 / 50.000 |
 | opt | in | 40 | 4227 | 1.494 | 54.929 | 0.498 / 0.498 | 8.833 / 8.833 | 49.998 / 49.998 |
 | opt | out | 42 | 6451 | 7.180 | 73.680 | 0.330 / 0.330 | 9.431 / 9.431 | 33.333 / 33.333 |
+
+
+### Rerun after macOS prompt approvals — FAILED (2026-10-19)
+
+After the user approved the macOS prompts, the same running measurement app
+rescanned the Data volume. It now saw **6,139,547 nodes and 717.47 GB**, with
+`incomplete = NONE` and **997 unreadable folders**. The scan finished without
+stopping for the earlier stall; the unreadable count remains visible in the
+banner. This supersedes the earlier 3.22M-node snapshot's workload limitation,
+while still recording that some directories could not be read. No new permission
+settings were changed by the agent and no additional access is inferred from
+the prompt approvals alone.
+
+The code, optimized Debug build, window viewport (1679 × 493.5 pt), 60 Hz
+display, thresholds and three-repetition protocol were unchanged. The five
+largest readable immediate Data-root directories were now Users, Applications,
+System, Library and opt. **The gate still failed:** presentation intervals
+reached 50.000 ms (p99 50.000 ms), above the unchanged 16.667 ms budget.
+Raw relayout remained under 100 ms (maximum 5.991 ms).
+
+| measurement | samples | maximum ms | p99 ms |
+|---|---:|---:|---:|
+| Raw squarify layout | 30 | 5.991 | 5.991 |
+| UI preparation | 30 | 58.664 | 58.664 |
+| CPU draw submission | 406 | 0.391 | 0.337 |
+| GPU execution | 406 | 13.716 | 12.646 |
+| Draw-callback interval | 376 | 45.320 | 42.738 |
+| Presentation latency | 404 | 41.610 | 41.564 |
+| Presentation interval | 374 | 50.000 | 50.000 |
+
+All 30 transitions have multiple presentation samples and a complete matching
+CPU/GPU record: 406 submitted frames and 406 GPU completions. The retained
+capture has 404 presentation callbacks, two fewer than submissions; they are
+not invented or counted as zero-duration presentations. This is an additional
+capture limitation, not evidence of a pass. The already-recorded 50 ms gaps
+are sufficient to fail the gate. Presentation cadence excludes boundaries
+between separate transitions, as in the first run.
+
+Raw capture:
+[`benchmarks/2026-10-19-phase2-frame-gate-approved-access.json`](benchmarks/2026-10-19-phase2-frame-gate-approved-access.json).
+The earlier capture is preserved. Per-directory figures combine all three
+repetitions:
+
+| directory | direction | submitted frames | tiles | layout max ms | presentation gap max / p99 ms |
+|---|---|---:|---:|---:|---:|
+| Users | in | 40 | 3480 | 4.518 | 33.333 / 33.333 |
+| Users | out | 40 | 4801 | 5.764 | 33.333 / 33.333 |
+| Applications | in | 39 | 6693 | 0.950 | 33.333 / 33.333 |
+| Applications | out | 39 | 4801 | 4.475 | 33.333 / 33.333 |
+| System | in | 41 | 1063 | 0.223 | 50.000 / 50.000 |
+| System | out | 40 | 4801 | 5.244 | 33.333 / 33.333 |
+| Library | in | 41 | 4811 | 0.651 | 33.333 / 33.333 |
+| Library | out | 43 | 4801 | 5.297 | 50.000 / 50.000 |
+| opt | in | 41 | 4227 | 0.697 | 50.000 / 50.000 |
+| opt | out | 42 | 4801 | 5.991 | 50.000 / 50.000 |
+
+No code or thresholds were tuned after the failed rerun. PR #2 remains draft;
+performance investigation and final whole-branch review remain outstanding.
+All three CI jobs passed for implementation commit `0df73ef` before this
+documentation-only update.

@@ -125,9 +125,10 @@ rulings list kept outside the repo.
 
 ## Phase 2 exit gate (2026-10-19)
 
-- **Frame gate failed; Phase 2 remains open.** On the local partial 3.22M-node
-  Data snapshot, presentation gaps reached 50.00 ms on a 60 Hz display. Layout
-  stayed below 7.18 ms. See `docs/benchmarks.md` for the exact build, display,
+- **Frame gate failed; Phase 2 remains open.** After macOS prompt approvals,
+  the Data scan saw 6.14M nodes with no incomplete stop code and 997 unreadable
+  folders. Presentation gaps still reached 50.00 ms on the 60 Hz display;
+  relayout peaked at 5.99 ms. The earlier partial-snapshot capture is retained. See `docs/benchmarks.md` for the exact build, display,
   workload and raw capture. Investigate scheduling/presentation gaps before
   rerunning the original workload gate; no thresholds were relaxed.
 - An optimized ad-hoc Debug app can fail dyld library validation with the
