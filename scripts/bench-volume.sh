@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# Tesserae: a disk-space visualizer.
+# Copyright (C) 2026 Stephen de la Vega. All rights reserved.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # Time the CLI on a freshly generated volume of 500,000 empty files.
 #
 # Usage: scripts/bench-volume.sh [RUNS]      (default 5)
@@ -38,7 +54,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cargo build --release -p tesserae-cli
+cargo build --release --locked -p tesserae-cli
 cli=target/release/tesserae-cli
 
 scripts/gen-bench-volume.sh "$work" >/dev/null

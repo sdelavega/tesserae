@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# Tesserae: a disk-space visualizer.
+# Copyright (C) 2026 Stephen de la Vega. All rights reserved.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # Run the buffer parser's tests under Miri or AddressSanitizer, and fail if the
 # run did not actually execute the tests it was meant to.
 #
@@ -68,7 +84,7 @@ miri)
     # `--lib` keeps Miri off the integration tests, which do file I/O it
     # cannot do. `parse::tests::synthetic` is the pure-bytes module; the
     # golden-fixture tests are cfg(not(miri)) as well.
-    cargo "+$nightly" miri test -p tesserae-core --lib parse::tests::synthetic 2>&1 | tee "$log"
+    cargo "+$nightly" miri test -p tesserae-core --lib --locked parse::tests::synthetic 2>&1 | tee "$log"
     n="$(passed_count)"
     require_at_least "miri" "$n" "$MIRI_MIN_TESTS"
     ;;
@@ -76,7 +92,7 @@ asan)
     # An explicit --target keeps -Zsanitizer off build scripts and proc macros.
     host="$(rustc "+$nightly" -vV | sed -n 's/^host: //p')"
     RUSTFLAGS="-Zsanitizer=address" \
-        cargo "+$nightly" test -p tesserae-core --lib --target "$host" parse:: 2>&1 | tee "$log"
+        cargo "+$nightly" test -p tesserae-core --lib --locked --target "$host" parse:: 2>&1 | tee "$log"
     n="$(passed_count)"
     require_at_least "asan" "$n" "$ASAN_MIN_TESTS"
 

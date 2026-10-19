@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# Tesserae: a disk-space visualizer.
+# Copyright (C) 2026 Stephen de la Vega. All rights reserved.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # Build the static library the app links and check that it carries no test hook.
 #
 # Usage: scripts/check-shipped-lib.sh
@@ -49,7 +65,7 @@ fi
 # library, in a separate target directory so the real build below is untouched.
 control_dir="$(mktemp -d)"
 trap 'rm -rf "$control_dir"' EXIT
-CARGO_TARGET_DIR="$control_dir" cargo build -p tesserae-ffi --release --tests
+CARGO_TARGET_DIR="$control_dir" cargo build -p tesserae-ffi --release --tests --locked
 # With test targets in the build cargo leaves the archive under deps/ with a hash.
 control="$(find "$control_dir/release/deps" -maxdepth 1 -name 'libtesserae_ffi-*.a' -print -quit)"
 if [ -z "$control" ] || [ "$(grep -ac "$marker" "$control" || true)" = 0 ]; then
@@ -57,7 +73,7 @@ if [ -z "$control" ] || [ "$(grep -ac "$marker" "$control" || true)" = 0 ]; then
     exit 1
 fi
 
-cargo build -p tesserae-ffi --release
+cargo build -p tesserae-ffi --release --locked
 lib=target/release/libtesserae_ffi.a
 if [ ! -f "$lib" ]; then
     echo "error: $lib was not produced" >&2

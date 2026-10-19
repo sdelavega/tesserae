@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Every Rust source file in the workspace, and in `fuzz/`, carries the full
-//! GPL-3.0 header.
+//! Every Rust source file in the workspace, and in `fuzz/`, and every shell
+//! script in `scripts/`, carries the full GPL-3.0 header.
 //!
 //! Nothing else in the repo checks this, and a truncated header (cut off
 //! before the closing "along with this program" lines) passes every other gate.
@@ -79,6 +79,40 @@ fn all_sources_carry_the_full_gpl_header() {
     let bad: Vec<_> = files
         .iter()
         .filter(|f| !fs::read_to_string(f).unwrap().starts_with(HEADER))
+        .map(|f| f.display().to_string())
+        .collect();
+    assert!(bad.is_empty(), "missing or truncated GPL header: {bad:#?}");
+}
+
+/// The same notice in shell-comment form, after the shebang when there is one.
+#[test]
+fn all_scripts_carry_the_full_gpl_header() {
+    let header: String = HEADER
+        .lines()
+        .map(|l| format!("#{}\n", l.strip_prefix("//").unwrap()))
+        .collect();
+    let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
+    let files: Vec<PathBuf> = fs::read_dir(&scripts)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "sh"))
+        .collect();
+    assert!(
+        files.len() >= 7,
+        "found only {} scripts under {}; is the walk broken?",
+        files.len(),
+        scripts.display()
+    );
+    let bad: Vec<_> = files
+        .iter()
+        .filter(|f| {
+            let text = fs::read_to_string(f).unwrap();
+            let body = match text.strip_prefix("#!") {
+                Some(rest) => rest.split_once('\n').map_or("", |(_, b)| b),
+                None => &text,
+            };
+            !body.starts_with(&header)
+        })
         .map(|f| f.display().to_string())
         .collect();
     assert!(bad.is_empty(), "missing or truncated GPL header: {bad:#?}");
