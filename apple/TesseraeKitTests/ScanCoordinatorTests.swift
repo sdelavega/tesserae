@@ -81,22 +81,26 @@ final class ScanCoordinatorTests: XCTestCase {
     }
 
     func test_progress_is_published_while_scanning() async throws {
-        let root = try makeTree(dirs: 40, filesPer: 1000)  // 40,000 files
-        let c = ScanCoordinator(progressInterval: 0.005)
+        let fake = FakeScan()
+        let c = ScanCoordinator(progressInterval: 0.01, factory: { _, _ in fake })
         var seen: [ScanProgress] = []
         c.$state.sink { if case .scanning(let p) = $0 { seen.append(p) } }.store(in: &bag)
-        var opts = TessScanOptions()
-        opts.workers = 1  // slowest scan, so the tree spans several ticks
-        c.start(root: root, options: opts)
+        c.start(root: URL(fileURLWithPath: "/fake"))
+        // The test, not the scan's speed, decides what progress the scan reports.
+        for step in 1...4 {
+            let files = UInt64(step) * 1000
+            fake.report(dirs: UInt64(step), files: files, bytes: files * 100)
+            await wait(until: { seen.last?.files == files }, "progress for \(files) files")
+        }
+        XCTAssertEqual(c.state, .scanning(seen.last!), "still scanning while the fake runs")
+        fake.finishNow()
         await wait(until: { self.isTerminal(c.state) }, "scan to finish")
         XCTAssertEqual(c.state, .finished)
-        XCTAssertEqual(c.snapshot?.stats.files, 40_000)
-        // Precondition: a real update arrived beyond the initial zero state.
-        let live = seen.filter { $0.files + $0.dirs > 0 }
-        XCTAssertFalse(live.isEmpty, "no progress publication arrived during the scan")
-        XCTAssertTrue(live.contains { $0.entriesPerSecond > 0 })
+        let live = seen.filter { $0.files > 0 }
+        XCTAssertGreaterThanOrEqual(live.count, 4)
         XCTAssertEqual(live.map(\.files), live.map(\.files).sorted(), "files must not go backwards")
-        XCTAssertTrue(live.allSatisfy { $0.files <= 40_000 })
+        XCTAssertTrue(live.contains { $0.entriesPerSecond > 0 })
+        XCTAssertEqual(seen.last?.bytes, 400_000)
     }
 
     func test_cancel_returns_a_partial_snapshot_flagged_cancelled() async throws {
@@ -124,51 +128,52 @@ final class ScanCoordinatorTests: XCTestCase {
     }
 
     func test_restart_cancels_the_previous_scan_and_never_mixes_snapshots() async throws {
-        let big = try makeTree(dirs: 100, filesPer: 400)  // 40,000 files
-        let small = try makeTree(dirs: 2, filesPer: 3)
-        let c = ScanCoordinator()
+        let first = FakeScan(tag: 1, finishOnCancel: true)
+        let second = FakeScan(tag: 2)
+        let begun = Locked<[URL]>([])
+        let fakes = ["/first": first, "/second": second]
+        let c = ScanCoordinator(progressInterval: 0.01) { url, _ in
+            begun.mutate { $0.append(url) }
+            return fakes[url.path]
+        }
         var published: [Snapshot] = []
         var terminals: [ScanState] = []
+        var ended: [UInt32?] = []
         c.$snapshot.sink { if let s = $0 { published.append(s) } }.store(in: &bag)
         c.$state.sink { if self.isTerminal($0) { terminals.append($0) } }.store(in: &bag)
+        c.onScanEnded = { snap, _ in ended.append(snap?.root) }
 
-        var ended: [(snap: Snapshot?, gen: UInt64)] = []
-        c.onScanEnded = { ended.append(($0, $1)) }
-
-        c.start(root: big)
-        guard case .scanning = c.state else { return XCTFail("first scan not running") }
-        c.start(root: small)
+        c.start(root: URL(fileURLWithPath: "/first"))
+        XCTAssertTrue(c.hasLiveHandle)
+        c.start(root: URL(fileURLWithPath: "/second"))
+        // The first is cancelled and finished before the second even begins.
+        await wait(until: { ended.count == 1 }, "first scan to end")
+        XCTAssertTrue(first.wasCancelled)
+        XCTAssertEqual(ended, [1])
+        await wait(until: { begun.value.count == 2 }, "second scan to begin")
+        XCTAssertEqual(c.state, .scanning(ScanProgress()))
+        XCTAssertNil(c.snapshot, "nothing from the first scan is published")
+        second.finishNow()
         await wait(until: { self.isTerminal(c.state) }, "second scan to finish")
-        // Let any stray late delivery from the first scan land.
-        try? await Task.sleep(for: .milliseconds(500))
+        try? await Task.sleep(for: .milliseconds(100))
 
-        XCTAssertEqual(c.state, .finished)
-        // The first scan really was cancelled and finished before the second ended.
-        XCTAssertEqual(ended.count, 2)
-        let first = try XCTUnwrap(ended.first?.snap)
-        XCTAssertEqual(first.stats.incomplete, UInt32(TESS_INCOMPLETE_CANCELLED))
-        XCTAssertLessThan(first.stats.files, 40_000)
-        XCTAssertEqual(first.path(first.root), big.path)
+        XCTAssertEqual(ended, [1, 2])
+        XCTAssertFalse(second.wasCancelled)
         XCTAssertEqual(terminals, [.finished], "exactly one terminal state, from the second scan")
-        XCTAssertEqual(published.count, 1, "only the second scan's snapshot is ever published")
-        let snap = try XCTUnwrap(c.snapshot)
-        XCTAssertEqual(snap.path(snap.root), small.path)
-        XCTAssertEqual(snap.stats.files, 6)
-        XCTAssertEqual(snap.stats.incomplete, UInt32(TESS_INCOMPLETE_NONE))
+        XCTAssertEqual(published.map(\.root), [2], "only the second scan's snapshot is published")
     }
 
     func test_releasing_the_coordinator_cancels_its_scan() async throws {
-        let root = try makeTree(dirs: 100, filesPer: 400)  // 40,000 files
-        var ended: [Snapshot?] = []
-        var c: ScanCoordinator? = ScanCoordinator()
-        c?.onScanEnded = { snap, _ in ended.append(snap) }
-        c?.start(root: root)
-        guard case .scanning = c?.state else { return XCTFail("not scanning after start") }
+        let fake = FakeScan(tag: 7, finishOnCancel: true)
+        var ended: [UInt32?] = []
+        var c: ScanCoordinator? = ScanCoordinator(factory: { _, _ in fake })
+        c?.onScanEnded = { snap, _ in ended.append(snap?.root) }
+        c?.start(root: URL(fileURLWithPath: "/fake"))
+        XCTAssertFalse(fake.wasCancelled)
         c = nil
+        XCTAssertTrue(fake.wasCancelled, "deinit must cancel the scan")
         await wait(until: { !ended.isEmpty }, "the orphaned scan to be finished")
-        let snap = try XCTUnwrap(ended.first ?? nil)
-        XCTAssertEqual(snap.stats.incomplete, UInt32(TESS_INCOMPLETE_CANCELLED))
-        XCTAssertLessThan(snap.stats.files, 40_000)
+        XCTAssertEqual(ended, [7], "the orphaned handle is still finished exactly once")
     }
 
     func test_a_second_scan_after_the_first_finished_begins_at_once() async throws {
@@ -181,5 +186,82 @@ final class ScanCoordinatorTests: XCTestCase {
         XCTAssertTrue(c.hasLiveHandle, "second scan was not begun synchronously")
         await wait(until: { self.isTerminal(c.state) }, "second scan")
         XCTAssertEqual(c.snapshot?.stats.files, 6)
+    }
+}
+
+/// A small lock-protected value, shared with the nonisolated factory.
+private final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: T
+    init(_ v: T) { self.v = v }
+    var value: T {
+        lock.lock()
+        defer { lock.unlock() }
+        return v
+    }
+    func mutate(_ f: (inout T) -> Void) {
+        lock.lock()
+        f(&v)
+        lock.unlock()
+    }
+}
+
+/// A scan the test drives: it stays running until `finishNow()` (or, with
+/// `finishOnCancel`, until cancelled) and reports whatever `report` says.
+private final class FakeScan: ScanDriving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = true
+    private var cancelled = false
+    private var prog = TessProgress()
+    private let tag: UInt32
+    private let finishOnCancel: Bool
+
+    init(tag: UInt32 = 0, finishOnCancel: Bool = false) {
+        self.tag = tag
+        self.finishOnCancel = finishOnCancel
+    }
+
+    func report(dirs: UInt64, files: UInt64, bytes: UInt64) {
+        lock.lock()
+        prog = TessProgress(dirs_done: dirs, files_done: files, bytes_seen: bytes, errors: 0)
+        lock.unlock()
+    }
+
+    func finishNow() {
+        lock.lock()
+        running = false
+        lock.unlock()
+    }
+
+    var wasCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func progress() -> TessProgress? {
+        lock.lock()
+        defer { lock.unlock() }
+        return prog
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        if finishOnCancel { running = false }
+        lock.unlock()
+    }
+
+    func status() -> Int32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return running ? Int32(TESS_STATUS_RUNNING) : Int32(TESS_STATUS_FINISHED)
+    }
+
+    /// An empty snapshot whose `root` carries the tag.
+    func finish() -> Snapshot? {
+        Snapshot(
+            testingNodes: UnsafeBufferPointer<TessNode>(start: nil, count: 0),
+            names: UnsafeRawBufferPointer(start: nil, count: 0), root: tag)
     }
 }

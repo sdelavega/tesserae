@@ -45,6 +45,20 @@ public enum ScanState: Equatable {
     case failed(errno: Int32)
 }
 
+/// What the coordinator needs from a scan; `ScanHandle` is the real one and
+/// tests inject fakes whose progress and completion they control.
+protocol ScanDriving: Sendable {
+    func progress() -> TessProgress?
+    func cancel()
+    /// 0 running, 1 finished, negative errno failed.
+    func status() -> Int32
+    /// Consume the scan; at most once, after `status()` has left running.
+    func finish() -> Snapshot?
+}
+
+/// Begins a scan of a root, or nil if it refuses.
+typealias ScanFactory = @Sendable (URL, TessScanOptions) -> (any ScanDriving)?
+
 /// Owns one `TessScan*` and enforces the C ABI's threading contract (spec §6):
 /// progress, cancel and status may be called from any thread while the scan
 /// is live; `finish` consumes the handle and must not race any other call.
@@ -56,7 +70,7 @@ public enum ScanState: Equatable {
 ///
 /// `@unchecked Sendable` is justified: the only stored state is the raw
 /// pointer and `consumed`, and all access to both is serialised by `lock`.
-final class ScanHandle: @unchecked Sendable {
+final class ScanHandle: ScanDriving, @unchecked Sendable {
     private let lock = NSLock()
     private var scan: OpaquePointer?
 
@@ -112,9 +126,9 @@ final class ScanHandle: @unchecked Sendable {
 private final class HandleBox: @unchecked Sendable {
     // @unchecked Sendable: `handle` is only touched under `lock`.
     private let lock = NSLock()
-    private var handle: ScanHandle?
+    private var handle: (any ScanDriving)?
 
-    var value: ScanHandle? {
+    var value: (any ScanDriving)? {
         get {
             lock.lock()
             defer { lock.unlock() }
@@ -156,9 +170,21 @@ public final class ScanCoordinator: ObservableObject {
     /// (spec §7). Overridable by tests so a modest tree spans several ticks.
     private let progressInterval: Double
 
-    public init() { progressInterval = 0.1 }
+    private let factory: ScanFactory
 
-    init(progressInterval: Double) { self.progressInterval = progressInterval }
+    public init() {
+        progressInterval = 0.1
+        factory = { ScanHandle(root: $0, options: $1) }
+    }
+
+    /// Test seam: a custom progress interval and/or scan factory.
+    init(
+        progressInterval: Double = 0.1,
+        factory: @escaping ScanFactory = { ScanHandle(root: $0, options: $1) }
+    ) {
+        self.progressInterval = progressInterval
+        self.factory = factory
+    }
 
     deinit { box.value?.cancel() }
 
@@ -180,7 +206,7 @@ public final class ScanCoordinator: ObservableObject {
 
         // With nothing in flight, begin at once; otherwise begin only after the
         // previous scan has been finished and discarded.
-        var handle: ScanHandle?
+        var handle: (any ScanDriving)?
         if previous == nil {
             handle = beginScan(root: root, options: options)
             guard let h = handle else { return }
@@ -216,10 +242,10 @@ public final class ScanCoordinator: ObservableObject {
         }
     }
 
-    private func beginScan(root: URL, options: TessScanOptions) -> ScanHandle? {
+    private func beginScan(root: URL, options: TessScanOptions) -> (any ScanDriving)? {
         // The C ABI reports no errno for a NULL begin (empty root, or the scan
         // thread could not be spawned), so EINVAL stands for "refused".
-        guard let h = ScanHandle(root: root, options: options) else {
+        guard let h = factory(root, options) else {
             state = .failed(errno: EINVAL)
             return nil
         }
@@ -232,7 +258,7 @@ public final class ScanCoordinator: ObservableObject {
     }
 
     private static func run(
-        _ handle: ScanHandle, generation gen: UInt64, interval: Double,
+        _ handle: any ScanDriving, generation gen: UInt64, interval: Double,
         observer: (@MainActor (Snapshot?, UInt64) -> Void)?, owner: WeakCoordinator
     ) async {
         var lastAt = ContinuousClock.now
