@@ -1,7 +1,10 @@
 # Tesserae — Design Spec
 
 **Date:** 2026-10-18
-**Status:** Approved design. Implementation plan not yet written.
+**Status:** Approved design. Phase 1 (the scan engine and C ABI, §§4–7 and
+the FFI of §6) is built; its plan is
+`docs/superpowers/plans/2026-10-18-tesserae-phase-1-engine.md`, and the
+sections it touches describe it as built. Later phases are not yet planned.
 
 ---
 
@@ -37,10 +40,11 @@ recommendable to anyone.
    repeated warm runs. *Measured (§13 spike), over 6.39M entries on an
    Apple M5:* warm, 3.3 s per 1M at best and 4.3 s per 1M at the median
    (27.3 s total, n=14), so the median meets the criterion warm. **The worst
-   warm run did not:** 42.9 s is 6.7 s per 1M, and across all 42 warm
-   8-thread runs the 95th percentile (33.7 s, 5.3 s per 1M) also exceeded
-   it, with 6 of 42 runs over the line, all taken while the machine was
-   under load 3 to 12. The
+   warm run did not:** 42.9 s is 6.7 s per 1M, taken while the machine was
+   under load 3 to 12. Whether other warm runs also crossed the line cannot
+   be said: only the best, median and worst of the 14 were recorded, and the
+   spike's per-run times were deleted with its code, so no percentile or
+   count of runs over the line is claimed. The
    original wording ("single-digit seconds for 1–2M files") assumed a
    smaller volume than the 6.39M entries this machine holds, where a full
    warm scan takes about 27 s. **The cold path has not been characterised:**
@@ -192,11 +196,14 @@ Tesserae.app
 │   ├── SpaceReconciler       volume facts, snapshots, signed residual
 │   ├── Jetsam                staging set + trash execution
 │   └── Permissions           FDA probe + onboarding
-└── libtesserae.a (Rust staticlib)
-    ├── walk                  getattrlistbulk traversal + worker pool
+└── libtesserae_ffi.a (Rust staticlib)
+    ├── walk · pool           getattrlistbulk traversal + worker pool
+    ├── parse · attrs         bulk-buffer parser, attribute request
     ├── arena                 node and name storage
+    ├── boundary              volume identity, local/non-local policy
     ├── freeze                snapshot construction
     ├── dedup                 inode set for hardlinks
+    ├── progress              counters, cancellation
     └── ffi                   #[repr(C)] surface, catch_unwind
 ```
 
@@ -224,16 +231,26 @@ a window. The engine stays replaceable behind the FFI surface.
 pub struct TessNode {
     pub name_off:    u32,   // byte offset into the name arena
     pub name_len:    u16,
-    pub flags:       u16,   // dir | symlink | clone | perm_denied | aggregated
+    pub flags:       u16,   // dir | symlink | hardlink_dup | perm_denied | aggregated
     pub parent:      u32,   // index; u32::MAX for root
-    pub child_start: u32,   // index of first child
+    pub child_start: u32,   // index of first child; 0 for a leaf (child_count is the guard)
     pub child_count: u32,   // 0 for files
-    pub logical:     u64,   // sum of st_size
-    pub allocated:   u64,   // sum of st_blocks * 512
+    pub logical:     u64,   // sum of data length (st_size)
+    pub allocated:   u64,   // sum of allocated size (st_blocks * 512)
 }
 ```
 
 40 bytes aligned. 1–3M files costs 40–120 MB; 10M files costs 400 MB.
+
+**Flag bits**, as `node.rs` and `arena.rs` define them and `tesserae.h`
+exports them: `DIR = 1 << 0`, `SYMLINK = 1 << 1`, `HARDLINK_DUP = 1 << 2`,
+`PERM_DENIED = 1 << 3`, `AGGREGATED = 1 << 4`. Bit 2 was drafted as `clone`;
+APFS clones cannot be detected (§7), so nothing could ever set it. What it
+marks is a hardlink counted as zero bytes because an earlier link to the same
+inode carried them. `DIR` and `SYMLINK` are derived from the object type at
+freeze, `HARDLINK_DUP` and `PERM_DENIED` are set by the walker, and
+`AGGREGATED` is set by the app's treemap layout and never by a scan. A
+compile-time check keeps the five bits distinct.
 
 **Children are contiguous and pre-sorted descending by `allocated`.**
 Squarified layout wants exactly that, so the freeze step pays once and
@@ -247,11 +264,18 @@ The cache win is theoretical; the complexity is not.
 
 After the parallel scan lands nodes in per-thread arenas:
 
-1. count children per parent, prefix-sum, scatter into the final array
-2. sort each sibling range descending by `allocated`
-3. roll sizes up bottom-up
+1. count children per parent, prefix-sum, scatter into each parent's range
+2. roll sizes up bottom-up
+3. sort each sibling range descending by `allocated`
+4. emit the sorted tree breadth-first, so every parent's children are one
+   contiguous slice of the final array
 
-One counting-sort-style pass, parallelizable by subtree.
+The rollup comes before the sort because a directory's size exists only
+after it: arena directories carry 0 until they are rolled up, and sorting
+first would put every directory last. Equal sizes tie-break by name, then by
+index, so the result is deterministic whatever order the workers ran in.
+Single-threaded as built: 3.4 ms for a synthetic 100k-node tree and 0.6 s for
+the 6.6M nodes of a Data-volume scan (`docs/benchmarks.md`).
 
 ### FFI surface
 
@@ -273,8 +297,55 @@ void tess_snapshot_view(const TessSnapshot*, TessView* out);
 void tess_snapshot_release(TessSnapshot*);
 ```
 
-`tesserae.h` is generated by `cbindgen`, with a CI check that the committed
-header matches a fresh regeneration.
+Three functions beyond those seven were needed, because the seven give Swift
+no way to learn *why* a scan failed, to poll without blocking, or to read the
+walk's statistics, all of which §7 and §11 require the UI to show:
+
+```c
+int32_t        tess_scan_status(const TessScan*);
+void           tess_snapshot_stats(const TessSnapshot*, TessScanStats* out);
+const uint8_t* tess_snapshot_stalled_at(const TessSnapshot*, uint64_t* len_out);
+```
+
+- `tess_scan_status`: 0 running, 1 finished (finish will not block), or a
+  negated errno if the scan failed (finish returns null). The errno is the
+  kernel's own, so `-EPERM` (macOS refusing a protected folder, which Full
+  Disk Access can fix) stays distinct from `-EACCES` (ordinary permissions,
+  which it cannot). A scan whose walk panicked is `-EIO`.
+- `tess_snapshot_stats`: an `incomplete` code (none, cancelled, node budget,
+  out of memory, stalled, fd exhausted, malformed batch, volume lost) plus the
+  counts the scan report shows: files, dirs, errors, unreadable, skipped
+  mounts, lost entries, hardlink duplicates, depth-capped.
+- `tess_snapshot_stalled_at`: the stalled directory's absolute path as bytes
+  borrowed from the snapshot, valid until release. Not NUL-terminated and not
+  necessarily UTF-8.
+
+`TessScanOptions` reads "0 = default" per field, and a null pointer means all
+defaults:
+
+```c
+typedef struct {
+    uint16_t max_depth;         // 0 = 512
+    uint8_t  include_non_local; // 0 = no; a byte, not bool, so no C value is invalid
+    uint32_t workers;           // 0 = cores clamped to 4..=16; capped at 64
+    uint64_t node_budget;       // 0 = 25 million
+    uint64_t buffer_bytes;      // 0 = 256 KiB
+    uint64_t stall_timeout_ms;  // 0 = 15000
+} TessScanOptions;
+```
+
+**Threading contract.** `tess_scan_progress`, `tess_scan_cancel` and
+`tess_scan_status` may be called from any thread, concurrently with the scan.
+`tess_scan_finish` consumes the handle and must not race any other call on
+it. After a cancel it returns promptly, except while the root itself hangs in
+`open` (§11); to avoid blocking at all, poll `tess_scan_status` and finish
+when it is no longer running.
+
+`tesserae.h` (`crates/tesserae-ffi/include/tesserae.h`) is generated by
+`scripts/gen-header.sh`, which runs the `cbindgen` CLI pinned at 0.29.4 (a
+build tool, not a dependency). CI regenerates it and fails on any
+difference, and a test compiles the header with `clang` and asserts the size
+and offset of every struct against the Rust types.
 
 ### How the borrow is made safe
 
@@ -304,10 +375,18 @@ Rust memory. It is closed structurally, not by discipline:
 3. **Deletion does not mutate the snapshot.** Swift keeps an overlay — a
    `[UInt32: Int64]` size-delta map plus a deleted-node set — consulted
    during layout. Past ~10k entries or a 10% root delta, prompt a rescan.
-4. **Panics never cross the boundary.** `catch_unwind` at every FFI entry
-   *and inside every worker thread*, since by the time workers run the
-   entry-point guard has already returned. `panic = "unwind"` pinned in the
-   release profile; with `abort`, a bad symlink kills the app.
+4. **Panics never cross the boundary.** Every `extern "C"` body runs inside
+   `catch_unwind`, and so does the scan thread's whole walk-and-freeze: the
+   scan runs on a thread of its own, so by the time the work happens the
+   entry-point guard has already returned. The pool's workers carry no guard
+   of their own, and need none: a worker is a Rust thread that C never
+   calls, so its panic unwinds only that thread, raises the shared halt so
+   the other workers stop, and is resumed on the thread that called the walk,
+   which is the guarded scan thread. It surfaces as a failed scan (`-EIO` from
+   `tess_scan_status`, null from `tess_scan_finish`). A panic in a worker the
+   walk has abandoned (§11) after the walk returned is lost by design.
+   `panic = "unwind"` pinned in the release profile; with `abort`, a bad
+   symlink kills the app.
 5. **ABI drift traps loudly.** A mismatch is a build defect, not a user
    condition.
 6. **Progress counters are atomics**, so `tess_scan_progress` is safe to
@@ -334,7 +413,7 @@ unresolved.
 | `ATTR_CMN_NAME` | name |
 | `ATTR_CMN_OBJTYPE` | file / dir / symlink |
 | `ATTR_CMN_FILEID` | inode, for hardlink dedup |
-| `ATTR_CMN_DEVID` | volume boundary detection |
+| `ATTR_CMN_DEVID` | device half of the hardlink key; **not** the volume boundary (see Boundaries) |
 | `ATTR_CMN_FLAGS` | `UF_COMPRESSED`, `SF_RESTRICTED`, immutability |
 | `ATTR_FILE_DATALENGTH` | logical size |
 | `ATTR_FILE_ALLOCSIZE` | allocated size |
@@ -406,20 +485,34 @@ directories, close the fd.
 
 **Depth-first within a worker, breadth-shared across workers.** A worker
 descends using fd-relative opens, so its open-fd chain equals *tree depth*,
-not tree size. Tasks pushed for stealing carry an `Arc<Path>` instead.
-Bound is `workers × max_depth`; raise `RLIMIT_NOFILE` to 4096 at startup.
-If `setrlimit` fails, reduce worker count to fit rather than failing.
+not tree size. Tasks pushed for stealing carry an `Arc<Path>` *relative to
+the scan root* instead, since the fd chain belongs to the thread that built
+it. Whoever takes one reopens it with `openat(root_fd, rel, O_NOFOLLOW_ANY |
+O_DIRECTORY | O_CLOEXEC)` beneath a root descriptor held for the whole walk,
+so a symlink swapped into any ancestor fails the open rather than redirecting
+the scan (probed on macOS 27.2; that a 13.x kernel honours the flag is
+unverified). Bound is `workers × (max_depth + 1)`; raise `RLIMIT_NOFILE` to 4096
+at startup. If `setrlimit` cannot reach 4096, reduce worker count to fit
+rather than failing. With the limit raised the requested count stands even
+though the product can exceed it (16 × 513), since real trees are a few dozen
+deep; a tree that deep reports `FdExhausted` and a short result, not a wrong
+one.
 
-Thread count defaults to `available_parallelism()` clamped 4–16, tunable.
+Thread count defaults to `available_parallelism()` clamped 4–16, tunable
+(`TessScanOptions.workers`; a request above 64 is capped).
 This work is mostly kernel-CPU-bound on NVMe, so core count is roughly
 right — reasoning that fails completely on spinning or network volumes,
-which is one more reason `/Volumes` is opt-in.
+which is one more reason `/Volumes` is opt-in. Measured on the real Data
+volume (`docs/benchmarks.md`): 2 workers 50.2 s, 4 workers 29.4 s, 10 (the
+default on this 10-core machine) 21.8 s.
 
 ### Arena allocation
 
-Per-thread chunked bump allocators: `TessNode` chunks of 64 Ki, name-byte
-chunks alongside. Chunks are never reallocated, so nothing is invalidated
-mid-scan, and the only shared-state touch is claiming a new chunk.
+Per-thread chunked bump allocators: scan-node (`ScanNode`, not `TessNode`)
+chunks of 64 Ki, name-byte chunks of 1 MiB alongside. Chunks are never
+reallocated, so nothing is invalidated mid-scan. The node budget is one
+atomic shared by all workers, drawn in chunks of 1,024, because a per-arena
+ceiling would multiply by the worker count.
 
 Scan-time ids are temporary `(thread, chunk, slot)` packed into a `u64`;
 the freeze pass assigns final indices.
@@ -434,15 +527,27 @@ dies. OOM must arrive as a `Result` the engine can report.
 volume is read-only and essentially fixed; all actionable space is on the
 data volume. Scanning `/` is offered as "include system volume."
 
-- **Volume boundary:** compare each directory's `ATTR_CMN_DEVID` to the
-  root's and refuse to cross. One check handles firmlinks, mounted volumes
-  and `/Volumes` entries.
-- **Non-local mounts:** check `MNT_LOCAL` in `statfs` `f_flags` before
-  descending into any mount point. A dead SMB or NFS mount blocks `openat`
-  indefinitely and uninterruptibly; this check is the actual fix, not a
-  timeout.
+- **Volume boundary:** open each child directory, read its volume from the
+  open descriptor with `fstatfs` (`f_fsid`, both words), and refuse to cross
+  to a volume other than the root's. The entry's `ATTR_CMN_DEVID` cannot do
+  this: for a mount point it is the *covered* directory's device, so an
+  entry-level comparison never sees a mount. And `st_dev` does not separate
+  the sealed system volume from the data volume (same `st_dev`, different
+  `f_fsid`), so a scan of `/` would otherwise cross the firmlinks. One check
+  handles firmlinks, mounted volumes and `/Volumes` entries.
+- **Non-local mounts:** the same `fstatfs` carries `MNT_LOCAL` in `f_flags`.
+  A mount point on another volume is not entered if it is local (a disk
+  image, an external drive: separate disks, reported as `OtherVolume`) or if
+  it is non-local and the caller did not opt in (`NonLocalMount`). Both are
+  recorded, with their reason, in the skipped mounts. The root's own volume
+  is exempt: `include_non_local` governs crossing *into* non-local mounts,
+  not scanning a root the caller named. **This check cannot prevent a hang.**
+  The `openat` into a mount point comes first and cannot be avoided (a
+  path-based `statfs` would block identically), so a dead SMB or NFS mount
+  can still block a worker before it is declined; the stall watchdog (§11)
+  is the mitigation, not this check.
 - **Symlinks:** never followed, counted at their own size.
-- **Depth cap** of 512, flagged when hit.
+- **Depth cap** of 512, counted when hit (`depth_capped`).
 - `/private/var/vm` is **scanned but marked non-deletable** — real space,
   and users ask about it.
 
@@ -491,15 +596,20 @@ establish whole-volume agreement. There is no `effective_allocated` correction s
 ### Progress and cancellation
 
 Four atomics — `dirs_done`, `files_done`, `bytes_seen`, `errors` — polled
-at ~10 Hz. No callbacks from Rust threads into Swift.
+at ~10 Hz. No callbacks from Rust threads into Swift. Workers publish once
+per directory batch, not per entry, so the counters lag by at most a batch
+per worker and are exact once the scan has returned.
 
 **Progress is not a percentage.** The total is unknown until completion; a
 fake progress bar on a five-second operation is worse than counts plus a
 throughput rate, which also happens to demonstrate the speed.
 
-Cancellation is an `AtomicBool` checked at directory boundaries.
+Cancellation is an `AtomicBool` checked at directory boundaries (the
+scan's calling thread turns it into a halt every 10 ms).
 `tess_scan_finish` returns a **partial snapshot flagged incomplete** — a
-cancelled scan covering most of the disk is still useful.
+cancelled scan covering most of the disk is still useful. The same flagged
+partial is returned for every other early end: node budget, out of memory,
+descriptors exhausted, a malformed batch, a stall, a lost volume.
 
 ---
 
@@ -948,19 +1058,37 @@ user.
 
 | Condition | Handling |
 |---|---|
-| Non-local mount | refused before descent via `MNT_LOCAL` |
+| Non-local mount | not entered: `MNT_LOCAL` is read by `fstatfs` on the opened directory (§7). The open itself is not protected; see the hang below |
 | `ENOENT` mid-scan | normal churn; counted silently |
+| Volume disappears mid-scan (image detached, drive pulled) | an `ENOENT`/`ENOTDIR`/`EIO`-class failure on a directory triggers an `fstatfs` of the held root descriptor; if that fails or names another volume, the scan stops and returns the partial snapshot flagged `VolumeLost`. On a live volume the same errnos stay churn |
 | `EINTR` | retry |
 | `ELOOP`, `ENAMETOOLONG` | count, skip, continue |
 | Symlink cycles | impossible — never followed |
 | Hardlinked directory cycles | HFS+ Time Machine only; depth cap catches it |
 
+On a vanished volume `ENOTDIR` is what the dead descriptors answer (measured
+with a force-detached disk image), and `ENOTDIR` is also what a directory
+replaced by a file gives, so the errno alone cannot tell churn from loss;
+booking it as churn returned a third of a tree as a finished scan. The
+`VolumeLost` check runs only after a failure, so a healthy scan pays nothing
+for it. It has been measured for a detached disk image only; a pulled USB
+drive or a dropped network mount is unprobed.
+
 **A hanging local volume** has no clean recovery — a blocked `openat` is
-uninterruptible from userspace. A watchdog detects a worker making no
-progress for ~15s and surfaces *"scan stalled at /path"*; Cancel returns
-the partial snapshot. The blocked thread cannot be killed and leaks until
-the syscall returns or the app quits. Stated plainly rather than papered
-over.
+uninterruptible from userspace. A watchdog declares the scan stalled when no
+worker has completed a directory syscall (open, read, `fstatfs`, close) for
+~15 s while one is still inside one, and surfaces *"scan stalled at /path"*;
+Cancel returns the partial snapshot. The blocked thread cannot be killed:
+the scan abandons it, taking its arena so nothing else dangles, and the
+thread leaks until the syscall returns or the app quits. **What is missing
+from the result is that worker's whole unfinished descent chain**: every
+directory on its stack has a node, but the subdirectories it had enumerated
+and not yet entered appear as empty directories, and the blocked directory
+has no children. **A hung root open is not covered**: the root is opened
+before any worker exists, so the watchdog cannot see it, and a cancel cannot
+interrupt it. The app stays responsive because the scan runs on its own
+thread (poll `tess_scan_status`; finish blocks until the open returns). Stated
+plainly rather than papered over.
 
 ### Resource exhaustion
 
@@ -968,7 +1096,8 @@ over.
   snapshot flagged `.nodeLimitReached` — a truthful partial beats an
   OOM-kill the user reads as a crash. Requires `try_reserve` (§7).
 - **File descriptors:** bounded by design; reduce workers if `setrlimit`
-  fails.
+  cannot reach 4096. A tree deep enough to exhaust them anyway skips the
+  subtree that could not be opened and flags the result `FdExhausted`.
 - **Disk full while logging:** log writes are best-effort and never block a
   deletion, but the failure is surfaced.
 
@@ -1002,6 +1131,7 @@ disabled — a degraded treemap beats a dialog saying the app won't run.
 | Node limit reached | partial treemap, table, deletion | **Partial scan** badge + what was cut |
 | Scan cancelled | partial tree, deletion | **Partial** badge; residual suppressed |
 | Volume stalled | partial tree | stalled path named; Cancel offered |
+| Volume lost mid-scan | partial tree (what was read before) | **Partial** badge naming the lost volume; residual suppressed |
 | No Metal | treemap, no zoom animation | nothing stated; it looks plain |
 | Rust panic | app survives, no tree | error + Copy Diagnostics |
 
@@ -1057,7 +1187,10 @@ it, fill it for disk-full, nest a second image to assert the volume
 boundary, detach mid-scan to assert graceful degradation.
 
 Image behaviour can differ subtly from a real internal SSD, so performance
-numbers never come from images — only correctness does.
+numbers do not come from images — only correctness does. The one exception is
+the 500k-file benchmark volume, which has to be a generated image; it is
+labelled as such in `docs/benchmarks.md`, and the numbers that stand for the
+engine (the worker sweep, the Data-volume scan) come from the real volume.
 
 ### Rust
 
@@ -1122,7 +1255,7 @@ must not execute the consequences.
 **Reported, never asserted in CI** — hosted runners are too variable.
 `criterion` micro-benchmarks on parser and freeze; a harness against a
 generated 500k-file volume on a known machine, with the number committed to
-a tracked file so regressions appear in diffs.
+a tracked file (`docs/benchmarks.md`) so regressions appear in diffs.
 
 ### Two deliberate non-goals
 
@@ -1201,7 +1334,9 @@ cache needs root (`purge`) and was not attempted.
    attribute" and the trap framing are replaced by §7 "Size semantics":
    `ATTR_FILE_ALLOCSIZE` already covers all forks and
    `ATTR_FILE_RSRCALLOCSIZE` is not requested. The measurements above stand
-   as a dated record.
+   as a dated record. The attribute was subsequently dropped from the
+   request (`ATTR_FILE_ALLOCSIZE` already covers all forks), so this
+   measurement is a record, not a pending decision.
 4. **`SPACEAVAIL` vs `SPACEFREE`: they are equal.** Both read
    **137,216,397,312 B** (127.79 GiB) on the Data volume, and the same on
    `/`. There is no gap, so the §9 premise that the gap is the system's
@@ -1276,6 +1411,30 @@ coordinator**, who confirmed that proceeding is intended; it is not
 something the data forces. The cold result is open item 6 and makes
 §3's stateless decision provisional, not a reopening of §5.
 
+**Phase 1 results.** The engine built from this spike is measured in
+`docs/benchmarks.md` (one machine, the same M5, macOS 27.2). The headline
+numbers, copied from it:
+
+- **`/System/Volumes/Data` with the CLI:** 21.1 s (walk 20.5, freeze 0.6) for
+  840,124 directories and 5,775,188 files, complete, against `du -sxk` at
+  120.4 s. Allocated bytes: 746,329,884 KiB (CLI) against 746,329,817 KiB
+  (`du`), +67 KiB, inside the 1,572 KiB the live volume moved between two CLI
+  runs, so no counting difference larger than the churn is shown. Both skipped the same 252 unreadable
+  directories, and the CLI counted 204,349 hardlinks as zero.
+- **Worker sweep on that volume** (median of three, every scan complete): 2
+  workers 50.23 s, 4 workers 29.39 s, the default (10 here) 21.75 s. It
+  scales with workers there, so the opposite result on a sparse disk image is
+  that image's property and no evidence against `clamp(cores, 4, 16)`. 16
+  workers were not measured on that volume.
+- **500,000 empty files in a generated image:** median 5.43 s after a
+  re-attach (about 92,000 nodes per second), 2.2 to 2.7 s when scanned right
+  after being built; the runs fall into two groups that are unexplained.
+- **Parse and freeze:** about 5.7 ns per entry and 34 ns per node.
+
+The tree does not reconcile with the volume's own figures (764.2 GB
+allocated against `df`'s 821.1 GB used): a 57 to 77 GB gap whose causes are
+candidates, none measured individually (§9).
+
 ---
 
 ## 14. Build and distribution
@@ -1293,12 +1452,20 @@ closes the stale-library footgun. Checking is cheap and sandbox-safe;
 building is not.
 
 ```
-MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release --target aarch64-apple-darwin
-MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release --target x86_64-apple-darwin
+MACOSX_DEPLOYMENT_TARGET=13.0 cargo build -p tesserae-ffi --release --target aarch64-apple-darwin
+MACOSX_DEPLOYMENT_TARGET=13.0 cargo build -p tesserae-ffi --release --target x86_64-apple-darwin
 lipo -create -output libtesserae.a \
-  target/aarch64-apple-darwin/release/libtesserae.a \
-  target/x86_64-apple-darwin/release/libtesserae.a
+  target/aarch64-apple-darwin/release/libtesserae_ffi.a \
+  target/x86_64-apple-darwin/release/libtesserae_ffi.a
 ```
+
+The library must be built with exactly `cargo build -p tesserae-ffi
+--release`: building test targets (`--all-targets`, `cargo test --release`)
+would link tesserae-core's fault-injection hooks into it, and
+`scripts/check-shipped-lib.sh` fails if it did. A real Xcode link of the
+archive has not been done yet (its embedded bitcode is newer than Apple's
+`nm` reads, though a `clang` link and run succeeded); it is the first step of
+Phase 2.
 
 Exporting `MACOSX_DEPLOYMENT_TARGET` to match Xcode's setting avoids link
 warnings that are easy to ignore until they aren't.
@@ -1378,10 +1545,14 @@ Apple Developer account that lets this ship notarized" is a concrete ask.
 
 **Per PR** (macOS runner): `cargo fmt --check` · `cargo clippy -D warnings`
 · `cargo test` · `cargo deny check licenses` · `cargo fuzz run
-parse_entries -max_total_time=60` · `xcodebuild test` on the framework
-scheme · palette validator · unsigned universal build.
+parse_entries -max_total_time=60` · the C header regenerated with no diff
+(`scripts/gen-header.sh`) · the static library carries no test hooks
+(`scripts/check-shipped-lib.sh`) · `xcodebuild test` on the framework
+scheme · palette validator · unsigned universal build. `fuzz/` is a
+separate crate, so `fmt`, `clippy` and `deny` run for it explicitly.
 
-**Nightly** (nightly toolchain): ASAN on parser tests, longer fuzz run.
+**Nightly** (pinned nightly toolchain): Miri and ASAN on the parser tests,
+a 15-minute fuzz run.
 
 **On tag `v*`:** both Rust targets → lipo → `xcodebuild archive` →
 `-exportArchive` with Developer ID → DMG → sign → notarize → staple →
@@ -1399,16 +1570,19 @@ get it working before a real release depends on it.
 tesserae/
 ├── Cargo.toml                    workspace
 ├── crates/
-│   ├── tesserae-core/            walk · arena · freeze · dedup
-│   └── tesserae-ffi/             staticlib + #[repr(C)] surface
-│       └── include/tesserae.h    generated by cbindgen
-├── fuzz/
+│   ├── tesserae-core/            walk · pool · parse · arena · boundary · freeze · dedup · progress
+│   ├── tesserae-ffi/             staticlib + #[repr(C)] surface
+│   │   └── include/tesserae.h    generated by scripts/gen-header.sh (cbindgen)
+│   ├── tesserae-cli/             dev CLI: scan a path, print totals (not shipped)
+│   └── tesserae-testutil/        test-only fixtures and disk images (dev-dependency)
+├── fuzz/                         separate crate, outside the workspace
 ├── apple/
 │   ├── Tesserae.xcodeproj
 │   ├── Tesserae/                 app target — SwiftUI chrome
 │   └── TesseraeKit/              framework — all testable logic
-├── scripts/                      build-rust · make-dmg · validate-palette
-├── justfile
+├── scripts/                      gen-header · check-shipped-lib · fuzz-parser · bench-volume · … (later: make-dmg · validate-palette)
+├── justfile                      thin index over scripts/
+├── docs/benchmarks.md
 ├── LICENSE                       GPL-3.0
 └── docs/superpowers/specs/
 ```
