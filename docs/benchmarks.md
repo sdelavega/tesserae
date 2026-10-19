@@ -513,3 +513,86 @@ No code or thresholds were tuned after the failed rerun. PR #2 remains draft;
 performance investigation and final whole-branch review remain outstanding.
 All three CI jobs passed for implementation commit `0df73ef` before this
 documentation-only update.
+
+
+### Targeted UI and renderer improvements — gate still FAILED (2026-10-19)
+
+Following the user's authorization to improve performance, a local Instruments
+Game Performance capture was sampled before editing. In its limited sampled
+window, app-main inclusive stacks accounted for 47 ms, with 43 ms under
+`placeLabels`. Background samples included Snapshot's Debug liveness mutex.
+This supports targeting label placement and overlapping table traversal; it is
+not a complete attribution for every missed refresh. Instruments traces and
+metadata remain local; only the timing captures below are committed.
+
+The first change publishes the new tiles immediately, defers label measurement
+and top-K table traversal until the renderer settles, and generation-guards
+completion callbacks so an old zoom cannot release a newer navigation's work.
+An empty folder settles without a renderer callback. The second change skips
+renderer input rebuilding when the snapshot, mode, tiles, palette and appearance
+are unchanged, and renders the static destination texture once per zoom. The
+moving old layout still renders geometry every frame to preserve device-pixel
+borders. Palette, background, tile, point-size, scale, texture-size and transition
+changes invalidate the destination cache.
+
+Xcode was updated by the user from `27B5038j` to **27B48** during verification;
+its matching Metal component is now available (metal 32023.922). Both optimization
+captures below use the **same updated toolchain**, optimized Debug command and
+local-only `ENABLE_HARDENED_RUNTIME=NO` override documented above. No project
+security settings changed. Comparisons with the earlier approved-access capture
+are also affected by that toolchain update, live filesystem churn, and the small
+viewport difference. No profiler or compilation ran during these two captures.
+
+| capture | nodes | allocated | unreadable | viewport pt | submitted / GPU / presented frames |
+|---|---:|---:|---:|---|---:|
+| Deferred UI | 6,148,048 | 721.74 GB | 1,006 | 1659 × 483.5 | 443 / 443 / 443 |
+| Deferred UI + renderer caches | 6,150,320 | 721.87 GB | 1,006 | 1679 × 493.5 | 441 / 441 / 441 |
+
+Both scans finished with `incomplete = NONE`; unreadable folders remain flagged
+in the window. Both captures use the same 60 Hz display and the unchanged
+five-directory, three-repetition, in/out protocol: Users, Applications, System,
+Library and opt. All 30 transitions have matching CPU/GPU/presentation samples,
+one raw layout, one preparation interval and one deferred-label interval.
+
+| measurement | deferred UI: max / p99 ms | with renderer caches: max / p99 ms |
+|---|---:|---:|
+| Preparation before animation | 3.501 / 3.501 | 4.750 / 4.750 |
+| Raw layout | 3.464 / 3.464 | 4.650 / 4.650 |
+| Labels after animation | 64.574 / 64.574 | 67.467 / 67.467 |
+| CPU frame submission | 3.244 / 0.593 | 0.938 / 0.543 |
+| GPU execution | 13.797 / 11.977 | 11.730 / 9.144 |
+| Draw callback interval | 17.719 / 17.667 | 17.678 / 17.655 |
+| Presentation latency | 58.209 / 58.029 | 41.319 / 41.166 |
+| Presentation interval | 50.000 / 33.333 | 33.333 / 16.667 |
+
+Preparation before motion is now at most **4.750 ms**, versus 58.664 ms in the
+older approved-access capture. Labels still take up to 67.467 ms, but run after
+motion rather than before its first frame. This does not claim that text shaping
+itself became faster. Between the two captures under Xcode 27B48, GPU median
+fell from **3.147 ms to 1.839 ms**, and GPU p99 fell from 11.977 to 9.144 ms.
+There are exactly **30 renderer-input rebuilds** in the final capture, one per
+navigation; hover/zoom-state/label/table changes do not rebuild them.
+
+Presentation p99 improved from 33.333 ms to **16.667 ms** between the two
+optimization captures. Intervals spanning multiple refreshes fell from 11/413
+to **2/411**; the final capture's two 33.333 ms gaps occurred at `2 in Library`
+and `3 in opt`. Counting intervals above 1.5 refresh periods is a diagnostic of
+multi-refresh gaps, not a replacement pass criterion. The strict original gate
+**still fails**: its unchanged budget is 16.667 ms, and the maximum presentation
+gap remains 33.333 ms. Relayout remains well below 100 ms. Final branch review
+and PR readiness remain pending. No frame-budget threshold was relaxed.
+
+Raw captures:
+
+- [Deferred UI](benchmarks/2026-10-19-phase2-deferred-ui.json)
+- [Deferred UI plus renderer caches](benchmarks/2026-10-19-phase2-renderer-caches.json)
+
+Verification includes the navigation/empty-folder/stale-callback test, input
+invalidation tests, byte-exact cached-versus-fresh Metal renders, and the existing
+Metal/CoreGraphics and zoom cross-fade pixel oracles. Mutations making labels
+eager, removing the generation check, disabling input reuse, disabling texture
+reuse, and removing destination invalidation were each caught and restored.
+
+Final local verification for these changes: `just gate` passed (114 Swift tests,
+with only the two opt-in benchmarks skipped), and the unsigned universal Release
+`just app-build` passed. Test-created disk images were detached.

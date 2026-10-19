@@ -125,12 +125,14 @@ rulings list kept outside the repo.
 
 ## Phase 2 exit gate (2026-10-19)
 
-- **Frame gate failed; Phase 2 remains open.** After macOS prompt approvals,
-  the Data scan saw 6.14M nodes with no incomplete stop code and 997 unreadable
-  folders. Presentation gaps still reached 50.00 ms on the 60 Hz display;
-  relayout peaked at 5.99 ms. The earlier partial-snapshot capture is retained. See `docs/benchmarks.md` for the exact build, display,
-  workload and raw capture. Investigate scheduling/presentation gaps before
-  rerunning the original workload gate; no thresholds were relaxed.
+- **Frame gate failed; Phase 2 remains open.** Targeted label/table deferral
+  and renderer caching brought presentation p99 to 16.67 ms on the latest 6.15M-node
+  Data snapshot (no incomplete stop code, 1,006 unreadable folders), but two
+  presentation gaps still reached 33.33 ms on the 60 Hz display. Raw relayout
+  peaked at 4.65 ms. See `docs/benchmarks.md` for both optimization captures,
+  earlier captures, toolchain caveats and the unchanged gate definition.
+- Label placement still runs on the main actor after motion and can take ~67 ms;
+  deferral removes it from the zoom-start path but does not accelerate text shaping.
 - An optimized ad-hoc Debug app can fail dyld library validation with the
   project's hardened runtime enabled. The measurement used a command-line-only
   `ENABLE_HARDENED_RUNTIME=NO` override. Resolve development/distribution signing

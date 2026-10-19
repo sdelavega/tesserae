@@ -16,6 +16,7 @@
 
 import AppKit
 import Combine
+import Metal
 import TesseraeFFI
 import XCTest
 @testable import TesseraeKit
@@ -89,6 +90,7 @@ final class AppModelTests: XCTestCase {
         old.navigator.descend(into: a["sub"])
         old.selection.nodes = [a["b"]]
         old.hover(tile: try XCTUnwrap(old.tiles.firstIndex { $0.node == a["b"] }))
+        old.zoomRunning = false // the renderer completed navigation before this rescan
         await old.waitForTable()
         XCTAssertNotNil(old.inspector)
         XCTAssertFalse(old.table.rows.isEmpty)
@@ -182,6 +184,75 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(result.height, target.height, accuracy: 1e-8)
         XCTAssertEqual(TreemapView.navigationZoomRect(old: parent, new: child, viewport: viewport), target)
         XCTAssertNil(TreemapView.navigationZoomRect(old: parent, new: parent, viewport: viewport))
+    }
+
+    func test_navigation_defers_labels_and_table_until_zoom_settles() async throws {
+        let t = TestSnapshot(.dir("/R", [.dir("sub", [.file("large", 80), .file("small", 20)]), .dir("empty", [])]))
+        let app = AppModel()
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 800, height: 600))
+        await session.waitForTable()
+        XCTAssertFalse(session.labels.isEmpty)
+        XCTAssertFalse(session.table.rows.isEmpty)
+        let oldGeneration = session.layoutGeneration
+        session.navigator.descend(into: t["sub"])
+        session.setZoomRunning(false, generation: oldGeneration)
+        XCTAssertEqual(session.tiles.first?.node, t["sub"])
+        XCTAssertTrue(session.labels.isEmpty, "do not measure labels on the navigation critical path")
+        await session.waitForTable()
+        XCTAssertNil(session.table.content, "defer table traversal and publication during motion")
+        session.zoomRunning = true
+        XCTAssertTrue(session.labels.isEmpty)
+        session.zoomRunning = false
+        await session.waitForTable()
+        XCTAssertFalse(session.labels.isEmpty)
+        XCTAssertEqual(Set(session.table.rows), [t["large"], t["small"]])
+        session.navigator.ascend()
+        XCTAssertTrue(session.labels.isEmpty)
+        session.zoomRunning = false // a fallback or cancelled animation settles without starting
+        await session.waitForTable()
+        XCTAssertFalse(session.labels.isEmpty)
+        XCTAssertFalse(session.table.rows.isEmpty)
+        session.navigator.descend(into: t["empty"])
+        await session.waitForTable()
+        XCTAssertTrue(session.isEmpty)
+        XCTAssertNotNil(session.table.content, "an empty folder has no renderer to send a completion callback")
+        XCTAssertTrue(session.table.rows.isEmpty)
+    }
+
+    func test_renderer_inputs_only_rebuild_when_their_identity_or_values_change() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let renderer = try XCTUnwrap(TreemapRenderer(device: device))
+        let a = TestSnapshot(.dir("/A", [.file("one.mp4", 20)]))
+        let b = TestSnapshot(.dir("/B", [.file("one.txt", 20)]))
+        let coordinator = TreemapView.Coordinator()
+        var tiles = [Tile(rect: CGRect(x: 0, y: 0, width: 100, height: 80), node: 1, depth: 0)]
+        var palette = Palette.colours(.depth, dark: false)
+        var calls = 0
+        func install(_ snapshot: Snapshot?, _ mode: ColourMode?, dark: Bool = false) {
+            coordinator.updateRenderer(renderer, tiles: tiles, palette: palette, dark: dark,
+                snapshot: snapshot, mode: mode, colourOf: { _ in calls += 1; return 2 })
+        }
+        install(a.snapshot, .depth)
+        XCTAssertEqual(calls, 1)
+        install(a.snapshot, .depth)
+        XCTAssertEqual(calls, 1, "hover or zoom-state updates do not rebuild identical input")
+        tiles[0].flags |= Tile.Flag.selected
+        install(a.snapshot, .depth)
+        XCTAssertEqual(calls, 2, "selection invalidates the input")
+        install(a.snapshot, .typeFocus([.video]))
+        XCTAssertEqual(calls, 3, "a mode change invalidates even if its palette bytes match")
+        install(b.snapshot, .typeFocus([.video]))
+        XCTAssertEqual(calls, 4, "new snapshot names can map to different colours")
+        palette[2] = SIMD4(1, 0, 0, 1)
+        install(b.snapshot, .typeFocus([.video]))
+        XCTAssertEqual(calls, 5)
+        install(b.snapshot, .typeFocus([.video]), dark: true)
+        XCTAssertEqual(calls, 6)
+        install(nil, nil)
+        install(nil, nil)
+        XCTAssertEqual(calls, 8, "arbitrary closures without an identity remain dynamic")
     }
 
     func test_treemap_click_writes_shared_selection() throws {

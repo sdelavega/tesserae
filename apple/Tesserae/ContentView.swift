@@ -122,6 +122,7 @@ private struct SessionView: View {
     var dark: Bool
 
     var body: some View {
+        let generation = session.layoutGeneration
         VStack(spacing: 0) {
             if let banner = session.banner { warning(banner) }
             if session.droppedTileCount > 0 {
@@ -156,8 +157,9 @@ private struct SessionView: View {
                             } else {
                                 TreemapView(
                                     tiles: session.tiles, palette: Palette.colours(mode, dark: dark), dark: dark,
-                                    navigator: session.navigator, selection: session.selection,
-                                    onZoomChanged: { session.zoomRunning = $0 },
+                                    navigator: session.navigator, snapshot: session.snapshot, mode: mode,
+                                    selection: session.selection,
+                                    onZoomChanged: { session.setZoomRunning($0, generation: generation) },
                                     onDroppedTiles: { session.droppedTileCount = $0 },
                                     onHover: { session.hover(tile: $0) },
                                     colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) })

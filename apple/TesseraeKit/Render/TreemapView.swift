@@ -42,6 +42,10 @@ public struct TreemapView: NSViewRepresentable {
     public var palette: [SIMD4<Float>]
     public var colourOf: (Tile) -> UInt16
     public var dark: Bool
+    /// Supplying both promises colourOf depends only on this snapshot, mode
+    /// and tile. Without them an arbitrary closure is evaluated every update.
+    public var snapshot: Snapshot?
+    public var mode: ColourMode?
     public var selection: Selection?
     public var onZoomChanged: ((Bool) -> Void)?
     public var onDroppedTiles: ((Int) -> Void)?
@@ -50,10 +54,13 @@ public struct TreemapView: NSViewRepresentable {
 
     public init(
         tiles: [Tile], palette: [SIMD4<Float>], dark: Bool, navigator: Navigator? = nil,
+        snapshot: Snapshot? = nil, mode: ColourMode? = nil,
         selection: Selection? = nil, onZoomChanged: ((Bool) -> Void)? = nil,
         onDroppedTiles: ((Int) -> Void)? = nil,
         onHover: ((Int?) -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
     ) {
+        self.snapshot = snapshot
+        self.mode = mode
         self.selection = selection
         self.onZoomChanged = onZoomChanged
         self.onDroppedTiles = onDroppedTiles
@@ -109,17 +116,22 @@ public struct TreemapView: NSViewRepresentable {
         guard let renderer = coordinator.renderer, let view = nsView as? MTKView else {
             // No animation without Metal: the new layout at once.
             (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
+            if previousTiles != tiles { coordinator.reportZoom(false, force: true) }
             return
         }
-        renderer.clearColour = Palette.surface(dark: dark)
         if let zoomFrom {
             // The old layout is what the renderer holds now; keep it before
             // the update replaces it.
             coordinator.startZoom(from: zoomFrom, in: view, beforeUpdate: renderer.beginZoom())
         }
-        renderer.update(tiles: tiles, colourOf: colourOf, palette: palette)
+        let updated = coordinator.updateRenderer(
+            renderer, tiles: tiles, palette: palette, dark: dark,
+            snapshot: snapshot, mode: mode, colourOf: colourOf)
         coordinator.reportDropped(renderer.droppedTileCount)
-        nsView.needsDisplay = true
+        if zoomFrom == nil && !coordinator.player.isRunning && previousTiles != tiles {
+            coordinator.reportZoom(false, force: true)
+        }
+        if updated || zoomFrom != nil { nsView.needsDisplay = true }
     }
 
     /// A virtual old-layout window that makes the existing zoom transform
@@ -279,6 +291,33 @@ public struct TreemapView: NSViewRepresentable {
         private var lastDropped: Int?
         private var reportedZoom = false
 
+        private struct InputKey: Equatable {
+            var tiles: [Tile]
+            var palette: [SIMD4<Float>]
+            var dark: Bool
+            var mode: ColourMode
+        }
+        private var inputKey: InputKey?
+        // Retaining the owner prevents ObjectIdentifier reuse and also keeps
+        // the previous colour source alive until it is replaced.
+        private var inputSnapshot: Snapshot?
+
+        @discardableResult
+        func updateRenderer(
+            _ renderer: TreemapRenderer, tiles: [Tile], palette: [SIMD4<Float>], dark: Bool,
+            snapshot: Snapshot?, mode: ColourMode?, colourOf: (Tile) -> UInt16
+        ) -> Bool {
+            let next = mode.map { InputKey(tiles: tiles, palette: palette, dark: dark, mode: $0) }
+            if let snapshot, let next, inputSnapshot === snapshot, inputKey == next { return false }
+            let timing = FrameTimer.shared.begin("inputs", tiles: tiles.count)
+            defer { FrameTimer.shared.end(timing) }
+            renderer.clearColour = Palette.surface(dark: dark)
+            renderer.update(tiles: tiles, colourOf: colourOf, palette: palette)
+            inputSnapshot = snapshot
+            inputKey = next
+            return true
+        }
+
         func reportDropped(_ count: Int) {
             guard count != lastDropped else { return }
             lastDropped = count
@@ -286,8 +325,8 @@ public struct TreemapView: NSViewRepresentable {
             Task { @MainActor in report?(count) }
         }
 
-        private func reportZoom(_ running: Bool) {
-            guard running != reportedZoom else { return }
+        func reportZoom(_ running: Bool, force: Bool = false) {
+            guard force || running != reportedZoom else { return }
             reportedZoom = running
             let report = onZoomChanged
             Task { @MainActor in report?(running) }
@@ -308,7 +347,7 @@ public struct TreemapView: NSViewRepresentable {
         }
 
         private func stopZoom(_ view: MTKView) {
-            reportZoom(false)
+            reportZoom(false, force: true)
             player.cancel()
             renderer?.endZoom()
             view.isPaused = true

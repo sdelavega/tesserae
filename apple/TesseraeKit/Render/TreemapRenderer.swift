@@ -68,8 +68,8 @@ struct TreemapUniforms {
 /// **Zoom** (spec §8 "Zoom and navigation"). `beginZoom()` keeps the tiles
 /// it is showing as the *old* layout, in a buffer of its own; the caller then
 /// `update`s to the new layout and draws frames with `drawZoom`, which renders
-/// the old layout (through the animation's transform) and the new one each
-/// *opaque* into an offscreen texture, then composites the two with the
+/// the old layout (through the animation's transform) each frame and caches
+/// the static new layout, each *opaque* in an offscreen texture, then composites the two with the
 /// `alpha` uniform in a final pass. The fade is of whole layers, so it is
 /// uniform: a pixel where a child paints over its parent shows exactly
 /// mix(old, new, alpha), as a pixel under one tile does. (Per-tile alpha
@@ -110,7 +110,9 @@ public final class TreemapRenderer {
     /// under-reporting (§11).
     public private(set) var droppedTileCount = 0
     /// The colour under the tiles (sRGB-encoded, like the palette).
-    public var clearColour: SIMD4<Float> = Palette.surface(dark: false)
+    public var clearColour: SIMD4<Float> = Palette.surface(dark: false) {
+        didSet { if clearColour != oldValue { destinationValid = false } }
+    }
 
     private var instances: [TileInstance] = []
     private var palette: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1)]
@@ -119,6 +121,11 @@ public final class TreemapRenderer {
     private var zoomFrom: (buffer: MTLBuffer, count: Int, palette: [SIMD4<Float>])?
     /// The two layer textures of the zoom, reused while the size holds.
     private var layers: (old: MTLTexture, new: MTLTexture)?
+    private var destinationValid = false
+    private var destinationSize = CGSize.zero
+    private var destinationScale: CGFloat = 0
+    /// Test evidence that the static layer is encoded only when invalidated.
+    private(set) var destinationRenderCount = 0
 
     /// Whether `beginZoom()` has kept an old layout that `endZoom()` has not dropped.
     public var isZooming: Bool { zoomFrom != nil }
@@ -195,6 +202,7 @@ public final class TreemapRenderer {
     /// Replaces the tiles to draw. `colourOf` gives each tile's index into
     /// `palette` (`Palette.colours`); tiles past `instanceBudget` are dropped.
     public func update(tiles: [Tile], colourOf: (Tile) -> UInt16, palette: [SIMD4<Float>]) {
+        destinationValid = false
         precondition(!palette.isEmpty, "empty palette")
         let n = min(tiles.count, instanceBudget)
         droppedTileCount = tiles.count - n
@@ -234,6 +242,7 @@ public final class TreemapRenderer {
     /// zoom) if there are none or their buffer cannot be allocated: the
     /// caller then just shows the new layout.
     public func beginZoom() -> Bool {
+        destinationValid = false
         zoomFrom = nil
         guard !instances.isEmpty else { return false }
         let made = instances.withUnsafeBytes { src in
@@ -247,6 +256,7 @@ public final class TreemapRenderer {
 
     /// Drops the old layout; frames are plain `draw`s again.
     public func endZoom() {
+        destinationValid = false
         zoomFrom = nil
         layers = nil
     }
@@ -381,22 +391,23 @@ public final class TreemapRenderer {
 
     /// Clears `pass`'s target to `clearColour` and draws `count` instances
     /// of `buffer` over it.
+    @discardableResult
     private func encodeTiles(
         _ cb: MTLCommandBuffer, pass: MTLRenderPassDescriptor, buffer: MTLBuffer, count: Int,
         palette: [SIMD4<Float>], uniforms: TreemapUniforms
-    ) {
+    ) -> Bool {
         let colour = pass.colorAttachments[0]!
         colour.loadAction = .clear
         colour.storeAction = .store
         colour.clearColor = MTLClearColor(
             red: Double(clearColour.x), green: Double(clearColour.y), blue: Double(clearColour.z),
             alpha: Double(clearColour.w))
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return false }
         defer { enc.endEncoding() }
         // A view with no area (or a non-finite size or scale) shows only the
         // clear colour: dividing by its size would send NaN to the GPU.
         let sizeOK = [uniforms.viewSize.x, uniforms.viewSize.y, uniforms.scale].allSatisfy { $0.isFinite && $0 > 0 }
-        guard count > 0, sizeOK else { return }
+        guard count > 0, sizeOK else { return true }
         var u = uniforms
         lastEncodedUniforms.append(u)
         enc.setRenderPipelineState(pipeline)
@@ -407,6 +418,7 @@ public final class TreemapRenderer {
         }
         enc.setFragmentBytes(&u, length: MemoryLayout<TreemapUniforms>.stride, index: 1)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: count)
+        return true
     }
 
     /// The zoom's scale-and-translate as the shader's `zoom`; the identity
@@ -444,11 +456,16 @@ public final class TreemapRenderer {
         encodeTiles(
             cb, pass: oldPass, buffer: from.buffer, count: from.count, palette: from.palette,
             uniforms: uniforms(size: size, scale: scale, alpha: 1, zoom: Self.zoomUniform(oldTransform)))
-        let newPass = MTLRenderPassDescriptor()
-        newPass.colorAttachments[0].texture = layers.new
-        encodeTiles(
-            cb, pass: newPass, buffer: nextInstanceBuffer(), count: instances.count, palette: palette,
-            uniforms: uniforms(size: size, scale: scale, alpha: 1, zoom: SIMD4(1, 1, 0, 0)))
+        if !destinationValid || destinationSize != size || destinationScale != scale {
+            let newPass = MTLRenderPassDescriptor()
+            newPass.colorAttachments[0].texture = layers.new
+            destinationValid = encodeTiles(
+                cb, pass: newPass, buffer: nextInstanceBuffer(), count: instances.count, palette: palette,
+                uniforms: uniforms(size: size, scale: scale, alpha: 1, zoom: SIMD4(1, 1, 0, 0)))
+            destinationSize = size
+            destinationScale = scale
+            if destinationValid { destinationRenderCount += 1 }
+        }
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -468,6 +485,7 @@ public final class TreemapRenderer {
     /// the size changes; nil if they cannot be allocated.
     private func layerTextures(width: Int, height: Int) -> (old: MTLTexture, new: MTLTexture)? {
         if let l = layers, l.old.width == width, l.old.height == height { return l }
+        destinationValid = false
         layers = nil
         let td = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: Self.pixelFormat, width: width, height: height, mipmapped: false)

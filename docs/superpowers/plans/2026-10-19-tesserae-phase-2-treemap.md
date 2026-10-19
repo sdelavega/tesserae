@@ -550,7 +550,7 @@ func test_focus_legend_has_voiceover_labels()
 
 ### Task 14: Phase gate — fluid zoom on a million-node tree
 
-**Status (2026-10-19): measured, FAILED; stop rule applied.** See `docs/benchmarks.md` and its raw capture. Instrumentation and both navigation directions are implemented; final whole-branch review and finishing the branch remain pending. The first snapshot had 3.22M nodes and was partial. A rerun after macOS prompt approvals saw 6.14M nodes, no incomplete stop code and 997 unreadable folders; presentation gaps still reached 50.00 ms at 60 Hz.
+**Status (2026-10-19): measured, FAILED; stop rule applied.** See `docs/benchmarks.md` and its raw capture. Instrumentation and both navigation directions are implemented; final whole-branch review and finishing the branch remain pending. The first snapshot had 3.22M nodes and was partial. A rerun after macOS prompt approvals saw 6.14M nodes, no incomplete stop code and 997 unreadable folders; presentation gaps still reached 50.00 ms at 60 Hz. A subsequent authorized optimization run deferred label/table work and cached renderer inputs and the destination layer. On a 6.15M-node scan, presentation p99 is now 16.67 ms, but two gaps reached 33.33 ms; the unchanged gate still fails.
 
 Spec §17: "Fluid zoom on a million-node tree." Defined here as: on the development machine (Apple M5), with the `/System/Volumes/Data` snapshot (6.7M nodes) loaded, every frame of a zoom animation into and out of the five largest directories completes within the display's frame budget (16.7 ms at 60 Hz; 8.3 ms at 120 Hz if the display runs ProMotion), and relayout for each new root completes in under 100 ms.
 

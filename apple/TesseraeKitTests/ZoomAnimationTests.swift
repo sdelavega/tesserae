@@ -169,6 +169,61 @@ final class ZoomAnimationTests: XCTestCase {
         if renderer != nil { XCTAssertEqual(animatedFrames, 6) }
     }
 
+    func test_static_zoom_destination_is_cached_and_invalidated_without_changing_pixels() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let renderer = try XCTUnwrap(TreemapRenderer(device: device))
+        let size = CGSize(width: 100, height: 80)
+        let old = [Tile(rect: CGRect(origin: .zero, size: size), node: 0, depth: 3)]
+        var next = [Tile(rect: CGRect(x: 0, y: 0, width: 60, height: 50), node: 1, depth: 0)]
+        var palette = Palette.colours(.depth, dark: false)
+        let index: (Tile) -> UInt16 = { UInt16(2 + $0.depth) }
+        renderer.update(tiles: old, colourOf: index, palette: palette)
+        XCTAssertTrue(renderer.beginZoom())
+        renderer.update(tiles: next, colourOf: index, palette: palette)
+        let animation = ZoomAnimation(from: CGRect(x: 10, y: 10, width: 40, height: 30), viewport: CGRect(origin: .zero, size: size))
+        func check(_ size: CGSize, _ scale: CGFloat, _ alpha: Float, _ time: Double) throws {
+            let reference = try XCTUnwrap(TreemapRenderer(device: device))
+            reference.clearColour = renderer.clearColour
+            reference.update(tiles: old, colourOf: index, palette: palette)
+            XCTAssertTrue(reference.beginZoom())
+            reference.update(tiles: next, colourOf: index, palette: palette)
+            let transform = animation.transform(at: time)
+            let expected = reference.renderZoomOffscreen(size: size, scale: scale, oldTransform: transform, alpha: alpha)
+            let actual = renderer.renderZoomOffscreen(size: size, scale: scale, oldTransform: transform, alpha: alpha)
+            XCTAssertEqual(actual.width, expected.width)
+            XCTAssertEqual(actual.height, expected.height)
+            let actualBytes = try XCTUnwrap(actual.dataProvider?.data) as Data
+            let expectedBytes = try XCTUnwrap(expected.dataProvider?.data) as Data
+            XCTAssertEqual(actualBytes, expectedBytes, "cached and fresh renders must be byte-identical")
+        }
+        try check(size, 1, 0.25, 0.02)
+        XCTAssertEqual(renderer.destinationRenderCount, 1)
+        try check(size, 1, 0.5, 0.1)
+        try check(size, 1, 1, 0.2)
+        XCTAssertEqual(renderer.destinationRenderCount, 1, "only the old geometry moves between frames")
+        palette[2] = SIMD4(1, 0, 0, 1)
+        renderer.update(tiles: next, colourOf: index, palette: palette)
+        try check(size, 1, 1, 0.2)
+        XCTAssertEqual(renderer.destinationRenderCount, 2, "palette invalidates cached pixels")
+        renderer.clearColour = SIMD4(0, 1, 0, 1)
+        try check(size, 1, 1, 0.2)
+        XCTAssertEqual(renderer.destinationRenderCount, 3, "background invalidates uncovered pixels")
+        next[0].rect.origin.x = 30
+        renderer.update(tiles: next, colourOf: index, palette: palette)
+        try check(size, 1, 1, 0.2)
+        XCTAssertEqual(renderer.destinationRenderCount, 4)
+        try check(size, 2, 0.5, 0.1)
+        XCTAssertEqual(renderer.destinationRenderCount, 5, "backing pixel size invalidates")
+        try check(CGSize(width: 200, height: 160), 1, 0.5, 0.1)
+        XCTAssertEqual(renderer.destinationRenderCount, 6, "point size/scale invalidate even with identical texture dimensions")
+        renderer.endZoom()
+        renderer.update(tiles: old, colourOf: index, palette: palette)
+        XCTAssertTrue(renderer.beginZoom())
+        renderer.update(tiles: next, colourOf: index, palette: palette)
+        try check(size, 1, 0.5, 0.1)
+        XCTAssertEqual(renderer.destinationRenderCount, 7, "a new transition invalidates")
+    }
+
     // MARK: The cross-fade
 
     private struct Px: Equatable { var r, g, b: Int }

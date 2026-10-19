@@ -35,7 +35,16 @@ public final class AppSession: ObservableObject, Identifiable {
     @Published public private(set) var tiles: [Tile] = []
     @Published public private(set) var labels: [PlacedLabel] = []
     @Published public private(set) var inspector: InspectorInfo?
-    @Published public var zoomRunning = false
+    @Published public var zoomRunning = false {
+        didSet {
+            guard !zoomRunning, decorationsPending else { return }
+            decorationsPending = false
+            updateLabels()
+            requestTable()
+        }
+    }
+    private var decorationsPending = false
+    public private(set) var layoutGeneration: UInt64 = 0
     @Published public var droppedTileCount = 0
     @Published public private(set) var root: UInt32
     private var size = CGSize.zero
@@ -50,8 +59,10 @@ public final class AppSession: ObservableObject, Identifiable {
             guard let self else { return }
             self.root = root
             self.inspector = nil
+            self.decorationsPending = true
+            self.tableTask?.cancel()
+            self.table.reset()
             self.relayout()
-            self.requestTable()
         }.store(in: &observers)
         selection.$nodes.sink { [weak self] nodes in
             guard let self else { return }
@@ -80,6 +91,7 @@ public final class AppSession: ObservableObject, Identifiable {
     }
 
     private func relayout() {
+        layoutGeneration &+= 1
         inspector = nil
         guard root != Tile.noNode, size.width.isFinite, size.height.isFinite,
             size.width >= 1, size.height >= 1 else {
@@ -94,7 +106,22 @@ public final class AppSession: ObservableObject, Identifiable {
         FrameTimer.shared.end(layout)
         applySelection(&next, selection.nodes)
         tiles = next
-        labels = placeLabels(next, in: snapshot, measure: LabelStyle.measure)
+        if next.isEmpty && decorationsPending {
+            decorationsPending = false
+            requestTable()
+        }
+        if decorationsPending { labels = [] } else { updateLabels() }
+    }
+
+    private func updateLabels() {
+        let timing = FrameTimer.shared.begin("labels")
+        defer { FrameTimer.shared.end(timing) }
+        labels = placeLabels(tiles, in: snapshot, measure: LabelStyle.measure)
+    }
+
+    public func setZoomRunning(_ running: Bool, generation: UInt64) {
+        guard generation == layoutGeneration, running != zoomRunning || decorationsPending else { return }
+        zoomRunning = running
     }
 
     public func hover(tile: Int?) {

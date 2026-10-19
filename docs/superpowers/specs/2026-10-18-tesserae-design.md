@@ -808,7 +808,8 @@ close to categorical hues in CVD terms, so the icon pairing is load-bearing.
 
 A SwiftUI overlay of positioned `Text` views, not a glyph atlas. At 50–400
 visible labels SwiftUI copes. **Labels are suppressed during zoom
-animation** and fade in when motion settles — this avoids SwiftUI diffing
+animation**; placement for a new navigation root is deferred until motion settles,
+then labels fade in — this avoids SwiftUI diffing
 hundreds of views per frame and reads as intentional. Name plus size,
 middle-truncated, only where it fits. Text wears ink tokens
 (`#0b0b0b` / `#f0efec`), never a tile's series colour.
@@ -818,7 +819,9 @@ middle-truncated, only where it fits. Text wears ink tokens
 Clicking a directory tile makes it the layout root. The animation computes
 the target layout, renders the *old* layout transformed so the clicked rect
 fills the viewport, and cross-fades — ~250ms ease-out, two instance buffers
-and an alpha uniform, no per-frame relayout.
+and an alpha uniform, no per-frame relayout. The static destination texture is
+cached during the transition; the moving old geometry is rendered each frame to
+keep borders one device pixel wide.
 
 Returning to an ancestor shrinks the old root into its tile in the ancestor's
 new layout and cross-fades; if that root has no emitted tile, it redraws at
@@ -1391,13 +1394,13 @@ those tests take.
 ## 13. Spike results
 
 **Phase 2 update (2026-10-19):** The app shell, navigation, labels and file table
-are implemented. The real-window zoom gate remains **failed** after a rerun
-following macOS prompt approvals: the Data scan saw 6.14M nodes with no
-incomplete stop code and 997 unreadable folders; at 60 Hz, presentation gaps
-reached 50.00 ms against a 16.67 ms budget. Raw relayout peaked at 5.99 ms.
-The optimized Debug build, both captures and workload caveats are recorded in
-[`docs/benchmarks.md`](../../benchmarks.md). Phase 2 is not declared complete;
-final branch review and PR readiness are pending.
+are implemented. Targeted UI deferral and renderer caching improved measured
+presentation p99 to 16.67 ms, but the real-window gate remains **failed**: on a
+6.15M-node Data scan with no incomplete stop code and 1,006 unreadable folders,
+two presentation gaps reached 33.33 ms against the unchanged 16.67 ms budget.
+Raw relayout peaked at 4.65 ms. Toolchain, build and workload caveats plus raw
+captures are recorded in [`docs/benchmarks.md`](../../benchmarks.md).
+Phase 2 is not declared complete; final branch review and PR readiness are pending.
 
 Everything downstream assumes scan speed. A throwaway Rust spike ran before
 implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread
