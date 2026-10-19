@@ -55,13 +55,16 @@ ship-lib:
 ffi:
     scripts/build-ffi.sh
 
-# TesseraeKit's XCTest suite (Debug, this machine's architecture).
+# TesseraeKit's XCTest suite (Debug, this machine's architecture). The result
+# bundle (xcodebuild refuses to overwrite one) is what CI uploads on failure.
 app-test:
-    xcodebuild test -project apple/Tesserae.xcodeproj -scheme TesseraeKit -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath apple/build/DerivedData
+    rm -rf apple/build/TesseraeKit-test.xcresult
+    xcodebuild test -project apple/Tesserae.xcodeproj -scheme TesseraeKit -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/TesseraeKit-test.xcresult
 
 # Unsigned universal Release build of the app, as CI builds it.
 app-build:
-    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData CODE_SIGNING_ALLOWED=NO
+    rm -rf apple/build/Tesserae-build.xcresult
+    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO
 
 # Criterion benchmarks (parse and freeze). Reported, not asserted.
 bench:

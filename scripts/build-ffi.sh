@@ -25,7 +25,9 @@
 # (scripts/verify-ffi-fresh.sh) only checks that it is newer than its sources.
 #
 # Each architecture is built with exactly
-#     cargo build -p tesserae-ffi --release --target <triple>
+#     cargo build -p tesserae-ffi --release --locked --target <triple>
+# the flags scripts/check-shipped-lib.sh builds the host library with (spec
+# §14's command plus --locked, as every cargo call in CI uses).
 # Building test targets (--all-targets, --tests, `cargo test --release`) would
 # unify tesserae-core's fault-injection hooks into the library; see
 # scripts/check-shipped-lib.sh, which proves the marker search below can see
@@ -39,6 +41,10 @@ cd "$(dirname "$0")/.."
 export MACOSX_DEPLOYMENT_TARGET=13.0
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
 marker='TESSERAE_TEST_HOOKS_PRESENT'
+
+# Record the inputs before building: a source edited during the build then
+# shows as a difference, never as a library that looks current.
+stamp="$(ffi_inputs .)"
 
 inputs=()
 for target in "${targets[@]}"; do
@@ -63,4 +69,8 @@ if [ "$(grep -ac "$marker" "$out" || true)" != 0 ]; then
     echo "error: $out contains the test-hooks marker" >&2
     exit 1
 fi
+# The input stamp scripts/verify-ffi-fresh.sh compares against; written last,
+# so a library without a matching stamp is never taken as current.
+printf '%s\n' "$stamp" > apple/build/libtesserae.inputs.tmp
+mv -f apple/build/libtesserae.inputs.tmp apple/build/libtesserae.inputs
 lipo -info "$out"

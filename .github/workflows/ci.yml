@@ -11,7 +11,7 @@ env:
 
 jobs:
   rust:
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +110,18 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
+      # Fail with a readable message, and the list of what the image does
+      # have, if the pinned Xcode is gone (images drop old point releases).
+      # Pinned deliberately rather than "newest Xcode_26.*": a silent Xcode
+      # change is harder to debug than this step failing.
+      - name: Pinned Xcode is installed
+        run: |
+          ls -d /Applications/Xcode*.app
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode 26.6 ($DEVELOPER_DIR) is not on this runner image; pick one listed above and update DEVELOPER_DIR in ci.yml"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Xcode in use
@@ -128,6 +140,19 @@ jobs:
         with:
           tool: just
 
+      # Two release LTO builds (one per architecture) are the slow part.
+      # Keyed on everything that changes what cargo fetches or which compiler
+      # runs; the workspace's own crates rebuild anyway (checkout gives their
+      # sources new mtimes), the dependencies do not.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: apple-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
       # Both Rust targets, lipo'd into apple/build/libtesserae.a. Xcode never
       # runs cargo; its Run Script phase fails the build if this is stale.
       - name: Universal Rust library
@@ -142,20 +167,23 @@ jobs:
           lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
           lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/Frameworks/TesseraeKit.framework/TesseraeKit
 
-      # The .xcresult bundle holds the full build and test logs.
-      - name: Upload test results
+      # The .xcresult bundles (passed with -resultBundlePath by the just
+      # recipes) hold the full build and test logs; open them in Xcode.
+      - name: Upload Xcode results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-logs
-          path: apple/build/DerivedData/Logs
+          name: xcode-results
+          path: |
+            apple/build/*.xcresult
+            apple/build/DerivedData/Logs
           if-no-files-found: ignore
 
   # Short fuzz of the getattrlistbulk buffer parser. Separate from `rust` so
   # it can use nightly without disturbing the stable pin. The longer run and
   # the Miri and ASAN jobs live in nightly.yml.
   fuzz:
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

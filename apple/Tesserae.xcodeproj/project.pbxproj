@@ -279,10 +279,13 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../scripts/verify-ffi-fresh.sh",
+				"$(SRCROOT)/../scripts/lib.sh",
 				"$(SRCROOT)/../crates",
 				"$(SRCROOT)/../Cargo.toml",
 				"$(SRCROOT)/../Cargo.lock",
+				"$(SRCROOT)/../rust-toolchain.toml",
 				"$(SRCROOT)/build/libtesserae.a",
+				"$(SRCROOT)/build/libtesserae.inputs",
 			);
 			name = "Verify Rust library is fresh";
 			outputFileListPaths = (
@@ -341,7 +344,6 @@
 		1F49495F8FDDFF8DC071D2F8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -349,7 +351,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKitTests;
 				SDKROOT = macosx;
 			};
@@ -519,7 +521,6 @@
 		9A58F18000EFFDBF4E2DB821 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Tesserae/Tesserae.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
@@ -537,7 +538,6 @@
 		A32DD237B42CE943854DCE7A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -545,7 +545,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKitTests;
 				SDKROOT = macosx;
 			};
@@ -554,7 +554,6 @@
 		B0373835AD75326F762E3A56 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Tesserae/Tesserae.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
