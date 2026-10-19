@@ -60,10 +60,16 @@ final class ScanHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var scan: OpaquePointer?
 
-    /// nil when `tess_scan_begin` refuses (invalid root, thread spawn failure).
-    init?(root: String, options: TessScanOptions) {
+    /// nil when `tess_scan_begin` refuses (empty root, thread spawn failure).
+    /// The root goes through the file-system representation: the C ABI takes
+    /// the path as bytes, not as a Swift string.
+    init?(root: URL, options: TessScanOptions) {
         var opts = options
-        guard let s = tess_scan_begin(root, &opts) else { return nil }
+        let s = root.withUnsafeFileSystemRepresentation { path -> OpaquePointer? in
+            guard let path else { return nil }
+            return tess_scan_begin(path, &opts)
+        }
+        guard let s else { return nil }
         scan = s
     }
 
@@ -102,39 +108,75 @@ final class ScanHandle: @unchecked Sendable {
     }
 }
 
+/// Lets `deinit` (nonisolated) reach the live handle to cancel it.
+private final class HandleBox: @unchecked Sendable {
+    // @unchecked Sendable: `handle` is only touched under `lock`.
+    private let lock = NSLock()
+    private var handle: ScanHandle?
+
+    var value: ScanHandle? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return handle
+        }
+        set {
+            lock.lock()
+            handle = newValue
+            lock.unlock()
+        }
+    }
+}
+
 /// Drives a scan through the C ABI and publishes progress and the resulting
 /// snapshot. Progress is polled at 10 Hz on the main actor; `finish` runs off
 /// it, only after `status` has left "running".
+///
+/// Releasing the coordinator cancels its scan; the scan's task still runs to
+/// `finish` so the handle is consumed exactly once. A hung root open (spec §6)
+/// keeps `finish` blocked, and so keeps a restarted scan waiting behind it.
 @MainActor
 public final class ScanCoordinator: ObservableObject {
     @Published public private(set) var state: ScanState = .idle
     @Published public private(set) var snapshot: Snapshot?
 
+    /// Test observer: called when a scan's `finish` returns, before the
+    /// staleness check, with the snapshot (nil on failure) and its generation.
+    /// Captured at `start`, so it outlives the coordinator.
+    var onScanEnded: (@MainActor (Snapshot?, UInt64) -> Void)?
+
     /// Bumped by every start; a scan publishes only while its token is current.
     private var generation: UInt64 = 0
-    private var current: ScanHandle?
-    /// The latest scan's whole lifecycle, finish included.
+    private let box = HandleBox()
+    /// The latest scan's whole lifecycle, finish included, and its generation.
     private var inFlight: Task<Void, Never>?
+    private var inFlightGeneration: UInt64 = 0
 
-    private static let statusInterval: Duration = .milliseconds(10)
-    /// Seconds between progress publications: 10 Hz (spec §7). Overridable
-    /// by tests so a modest tree spans several ticks.
+    /// Seconds between status checks and progress publications: 10 Hz
+    /// (spec §7). Overridable by tests so a modest tree spans several ticks.
     private let progressInterval: Double
 
     public init() { progressInterval = 0.1 }
 
     init(progressInterval: Double) { self.progressInterval = progressInterval }
 
+    deinit { box.value?.cancel() }
+
+    /// Whether a begun scan's handle is live (test seam).
+    var hasLiveHandle: Bool { box.value != nil }
+
     /// Cancel and wait out any scan in flight, then scan `root`. Nothing from
     /// an earlier scan is published once this has been called.
     public func start(root: URL, options: TessScanOptions = .init()) {
         let previous = inFlight
-        current?.cancel()
-        current = nil
+        box.value?.cancel()
+        box.value = nil
         generation &+= 1
         let gen = generation
         snapshot = nil
         state = .scanning(ScanProgress())
+        let observer = onScanEnded
+        let interval = progressInterval
 
         // With nothing in flight, begin at once; otherwise begin only after the
         // previous scan has been finished and discarded.
@@ -142,27 +184,31 @@ public final class ScanCoordinator: ObservableObject {
         if previous == nil {
             handle = beginScan(root: root, options: options)
             guard let h = handle else { return }
-            current = h
+            box.value = h
         }
+        inFlightGeneration = gen
+        let weakSelf = WeakCoordinator(self)
         inFlight = Task { @MainActor in
             await previous?.value
             if handle == nil {
-                // Superseded or cancelled while waiting: never begin.
-                guard self.generation == gen else { return }
-                handle = self.beginScan(root: root, options: options)
+                // Superseded, cancelled or released while waiting: never begin.
+                guard let me = weakSelf.value, me.generation == gen else { return }
+                handle = me.beginScan(root: root, options: options)
                 guard let h = handle else { return }
-                self.current = h
+                me.box.value = h
             }
             // A begun scan is always run to its finish, even if superseded, so
-            // its handle is consumed; `run` publishes nothing once stale.
-            await self.run(handle!, generation: gen)
+            // its handle is consumed; nothing is published once stale.
+            await ScanCoordinator.run(
+                handle!, generation: gen, interval: interval, observer: observer, owner: weakSelf)
+            if let me = weakSelf.value, me.inFlightGeneration == gen { me.inFlight = nil }
         }
     }
 
     /// Ask the running scan to stop. It still delivers its partial snapshot
     /// (spec §7); a scan still waiting to begin is abandoned.
     public func cancel() {
-        if let current {
+        if let current = box.value {
             current.cancel()
         } else if case .scanning = state {
             generation &+= 1
@@ -171,45 +217,56 @@ public final class ScanCoordinator: ObservableObject {
     }
 
     private func beginScan(root: URL, options: TessScanOptions) -> ScanHandle? {
-        guard let h = ScanHandle(root: root.path, options: options) else {
+        // The C ABI reports no errno for a NULL begin (empty root, or the scan
+        // thread could not be spawned), so EINVAL stands for "refused".
+        guard let h = ScanHandle(root: root, options: options) else {
             state = .failed(errno: EINVAL)
             return nil
         }
         return h
     }
 
-    private func run(_ handle: ScanHandle, generation gen: UInt64) async {
+    private struct WeakCoordinator {
+        weak var value: ScanCoordinator?
+        init(_ c: ScanCoordinator) { value = c }
+    }
+
+    private static func run(
+        _ handle: ScanHandle, generation gen: UInt64, interval: Double,
+        observer: (@MainActor (Snapshot?, UInt64) -> Void)?, owner: WeakCoordinator
+    ) async {
         var lastAt = ContinuousClock.now
         var lastEntries: UInt64 = 0
         var status = handle.status()
         while status == Int32(TESS_STATUS_RUNNING) {
-            try? await Task.sleep(for: Self.statusInterval)
+            try? await Task.sleep(for: .seconds(interval))
             status = handle.status()
             let now = ContinuousClock.now
             let elapsed = (now - lastAt).seconds
-            guard generation == gen, elapsed >= progressInterval,
-                status == Int32(TESS_STATUS_RUNNING), let p = handle.progress()
+            guard let me = owner.value, me.generation == gen,
+                status == Int32(TESS_STATUS_RUNNING), elapsed > 0, let p = handle.progress()
             else { continue }
             let entries = p.dirs_done + p.files_done
             let rate = Double(entries &- lastEntries) / elapsed
             lastAt = now
             lastEntries = entries
-            state = .scanning(
+            me.state = .scanning(
                 ScanProgress(
                     dirs: p.dirs_done, files: p.files_done, bytes: p.bytes_seen,
                     errors: p.errors, entriesPerSecond: rate))
         }
         // Off the main actor: finish blocks until the scan thread ends.
         let result = await Task.detached { handle.finish() }.value
-        guard generation == gen else { return }
-        current = nil
+        observer?(result, gen)
+        guard let me = owner.value, me.generation == gen else { return }
+        me.box.value = nil
         if status < 0 {
-            state = .failed(errno: -status)
+            me.state = .failed(errno: -status)
         } else if let result {
-            snapshot = result
-            state = .finished
+            me.snapshot = result
+            me.state = .finished
         } else {
-            state = .failed(errno: EIO)
+            me.state = .failed(errno: EIO)
         }
     }
 }

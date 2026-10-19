@@ -94,7 +94,9 @@ final class ScanCoordinatorTests: XCTestCase {
         // Precondition: a real update arrived beyond the initial zero state.
         let live = seen.filter { $0.files + $0.dirs > 0 }
         XCTAssertFalse(live.isEmpty, "no progress publication arrived during the scan")
-        XCTAssertTrue(live.allSatisfy { $0.files <= 40_000 && $0.entriesPerSecond >= 0 })
+        XCTAssertTrue(live.contains { $0.entriesPerSecond > 0 })
+        XCTAssertEqual(live.map(\.files), live.map(\.files).sorted(), "files must not go backwards")
+        XCTAssertTrue(live.allSatisfy { $0.files <= 40_000 })
     }
 
     func test_cancel_returns_a_partial_snapshot_flagged_cancelled() async throws {
@@ -130,6 +132,9 @@ final class ScanCoordinatorTests: XCTestCase {
         c.$snapshot.sink { if let s = $0 { published.append(s) } }.store(in: &bag)
         c.$state.sink { if self.isTerminal($0) { terminals.append($0) } }.store(in: &bag)
 
+        var ended: [(snap: Snapshot?, gen: UInt64)] = []
+        c.onScanEnded = { ended.append(($0, $1)) }
+
         c.start(root: big)
         guard case .scanning = c.state else { return XCTFail("first scan not running") }
         c.start(root: small)
@@ -138,11 +143,43 @@ final class ScanCoordinatorTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(500))
 
         XCTAssertEqual(c.state, .finished)
+        // The first scan really was cancelled and finished before the second ended.
+        XCTAssertEqual(ended.count, 2)
+        let first = try XCTUnwrap(ended.first?.snap)
+        XCTAssertEqual(first.stats.incomplete, UInt32(TESS_INCOMPLETE_CANCELLED))
+        XCTAssertLessThan(first.stats.files, 40_000)
+        XCTAssertEqual(first.path(first.root), big.path)
         XCTAssertEqual(terminals, [.finished], "exactly one terminal state, from the second scan")
         XCTAssertEqual(published.count, 1, "only the second scan's snapshot is ever published")
         let snap = try XCTUnwrap(c.snapshot)
         XCTAssertEqual(snap.path(snap.root), small.path)
         XCTAssertEqual(snap.stats.files, 6)
         XCTAssertEqual(snap.stats.incomplete, UInt32(TESS_INCOMPLETE_NONE))
+    }
+
+    func test_releasing_the_coordinator_cancels_its_scan() async throws {
+        let root = try makeTree(dirs: 100, filesPer: 400)  // 40,000 files
+        var ended: [Snapshot?] = []
+        var c: ScanCoordinator? = ScanCoordinator()
+        c?.onScanEnded = { snap, _ in ended.append(snap) }
+        c?.start(root: root)
+        guard case .scanning = c?.state else { return XCTFail("not scanning after start") }
+        c = nil
+        await wait(until: { !ended.isEmpty }, "the orphaned scan to be finished")
+        let snap = try XCTUnwrap(ended.first ?? nil)
+        XCTAssertEqual(snap.stats.incomplete, UInt32(TESS_INCOMPLETE_CANCELLED))
+        XCTAssertLessThan(snap.stats.files, 40_000)
+    }
+
+    func test_a_second_scan_after_the_first_finished_begins_at_once() async throws {
+        let root = try makeTree(dirs: 2, filesPer: 3)
+        let c = ScanCoordinator()
+        c.start(root: root)
+        await wait(until: { self.isTerminal(c.state) }, "first scan")
+        c.start(root: root)
+        // Begun synchronously: a finished scan leaves nothing in flight.
+        XCTAssertTrue(c.hasLiveHandle, "second scan was not begun synchronously")
+        await wait(until: { self.isTerminal(c.state) }, "second scan")
+        XCTAssertEqual(c.snapshot?.stats.files, 6)
     }
 }
