@@ -45,6 +45,39 @@ const VOLUME_NAME: &str = "TesseraeTest";
 /// failure.
 const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The filesystem a [`DiskImage`] is formatted with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filesystem {
+    Apfs,
+    /// Mac OS Extended (journaled is not requested; plain HFS+).
+    HfsPlus,
+    ExFat,
+    /// FAT32. `hdiutil` needs an image of at least about 33 MiB for it.
+    Fat32,
+}
+
+impl Filesystem {
+    /// The name `hdiutil create -fs` takes.
+    fn hdiutil_name(self) -> &'static str {
+        match self {
+            Filesystem::Apfs => "APFS",
+            Filesystem::HfsPlus => "HFS+",
+            Filesystem::ExFat => "ExFAT",
+            Filesystem::Fat32 => "MS-DOS FAT32",
+        }
+    }
+
+    /// The volume label. FAT labels hold at most 11 characters, and
+    /// `hdiutil` refuses a longer one with "Operation not permitted" (measured
+    /// for exFAT with `VOLUME_NAME`), so those get a short one.
+    fn volume_name(self) -> &'static str {
+        match self {
+            Filesystem::Apfs | Filesystem::HfsPlus => VOLUME_NAME,
+            Filesystem::ExFat | Filesystem::Fat32 => "TESSTEST",
+        }
+    }
+}
+
 /// A disk image attached at a chosen mountpoint, detached when dropped.
 ///
 /// Declare it *after* the [`crate::Fixture`] whose directory holds the
@@ -67,7 +100,14 @@ impl DiskImage {
     /// mountpoint is verified to be on a different device from its parent, so
     /// a call that returns `Ok` really did mount a separate filesystem.
     pub fn attach(mountpoint: &Path, size_mib: u32) -> io::Result<Self> {
-        Self::attach_using(mountpoint, size_mib, |dmg| hdiutil_attach(mountpoint, dmg))
+        Self::attach_fs(mountpoint, size_mib, Filesystem::Apfs)
+    }
+
+    /// [`DiskImage::attach`], formatted with `fs` instead of APFS.
+    pub fn attach_fs(mountpoint: &Path, size_mib: u32, fs: Filesystem) -> io::Result<Self> {
+        Self::attach_using(mountpoint, size_mib, fs, |dmg| {
+            hdiutil_attach(mountpoint, dmg)
+        })
     }
 
     /// [`DiskImage::attach`] with the attach step supplied, so a test can make
@@ -75,6 +115,7 @@ impl DiskImage {
     fn attach_using(
         mountpoint: &Path,
         size_mib: u32,
+        fs: Filesystem,
         attach: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<Self> {
         if !mountpoint.is_absolute() {
@@ -92,7 +133,7 @@ impl DiskImage {
 
         run(Command::new("hdiutil")
             .args(["create", "-size", &format!("{size_mib}m")])
-            .args(["-fs", "APFS", "-volname", VOLUME_NAME])
+            .args(["-fs", fs.hdiutil_name(), "-volname", fs.volume_name()])
             .arg(&dmg))?;
         // `mounted` stays false until `hdiutil attach` succeeds, so a failed
         // attach is not followed by a detach of something that is not there.
@@ -356,7 +397,7 @@ mod tests {
         let mnt = fx.path().join("mnt");
         let mut attached = false;
 
-        let err = DiskImage::attach_using(&mnt, 16, |dmg| {
+        let err = DiskImage::attach_using(&mnt, 16, Filesystem::Apfs, |dmg| {
             hdiutil_attach(&mnt, dmg)?;
             attached = is_mounted(&mnt);
             Err(io::Error::new(io::ErrorKind::TimedOut, "simulated kill"))

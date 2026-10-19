@@ -30,7 +30,12 @@
 //! * **A directory's modification time is a rollup too**, but of the
 //!   maximum rather than the sum: the latest of its own time and every
 //!   descendant's, so the treemap's age colouring shows when anything inside
-//!   it last changed.
+//!   it last changed. Only times at or before the scan's start
+//!   ([`WalkStats::started_at`]) count: a file stamped in the future (measured:
+//!   170 files dated 2076 on one Data volume) would otherwise make every
+//!   ancestor up to the root look newest. A directory with no such time
+//!   anywhere in its subtree keeps its own, as read. A file's or symlink's
+//!   time is never altered.
 //!
 //! # Passes
 //!
@@ -145,7 +150,7 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 ///
 /// Every allocation (about 48 bytes per node for the snapshot, and roughly as
 /// much again for working arrays while the arenas are still alive, so around
-/// 2 GB at the 25M-node budget) goes through `try_reserve_exact`.
+/// 2.4 GB at the 25M-node budget) goes through `try_reserve_exact`.
 /// `tests/freeze_oom.rs` fails each allocation in turn to hold that to account.
 ///
 /// # Errors
@@ -264,8 +269,17 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
     logical.extend(src.iter().map(|x| x.logical));
     let mut allocated: Vec<u64> = reserved(n)?;
     allocated.extend(src.iter().map(|x| x.allocated));
-    let mut modified: Vec<i64> = reserved(n)?;
-    modified.extend(src.iter().map(|x| x.modified));
+    // `latest[v]` is the newest time at or before `cutoff` in v's subtree,
+    // meaningful only where `dated[v]`; a flag rather than a sentinel value,
+    // so that every `i64` stays a time.
+    let cutoff = stats.started_at;
+    let mut latest: Vec<i64> = reserved(n)?;
+    let mut dated: Vec<bool> = reserved(n)?;
+    for x in &src {
+        let counts = x.modified <= cutoff;
+        latest.push(if counts { x.modified } else { 0 });
+        dated.push(counts);
+    }
     for &v in order.iter().rev() {
         let p = parent[v as usize];
         if p != NODE_NONE {
@@ -279,7 +293,11 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
                 .expect("a directory's allocated size overflows u64");
             // Every child is final before its parent is read (reverse
             // breadth-first order), so this is the max over the subtree.
-            modified[p as usize] = modified[p as usize].max(modified[v as usize]);
+            let (p, v) = (p as usize, v as usize);
+            if dated[v] && (!dated[p] || latest[v] > latest[p]) {
+                latest[p] = latest[v];
+                dated[p] = true;
+            }
         }
     }
     drop(order);
@@ -349,7 +367,12 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             child_count: off[v + 1] - off[v],
             logical: logical[v],
             allocated: allocated[v],
-            modified: modified[v],
+            modified: match src[v].obj_type {
+                ObjType::Dir if dated[v] => latest[v],
+                // A leaf as read; a directory with nothing dated at or
+                // before the cutoff, its own time as read.
+                _ => src[v].modified,
+            },
         });
     }
     Ok(Snapshot {
@@ -578,25 +601,49 @@ mod tests {
     }
 
     /// A directory's `modified` is the latest of its own time and every
-    /// descendant's, so its tile ages with its most recently touched content.
-    /// A file's is its own, untouched. Built across two arenas, with a child
-    /// pushed before its parent's other children, so the rollup cannot be
-    /// relying on arena order; and with a directory whose own time is the
-    /// newest, so "max" cannot be "max of children only".
+    /// descendant's that is not after the scan's start, so its tile ages with
+    /// its most recently touched content and a future-dated file cannot make
+    /// it look newest. A file's is its own, untouched, future or not. Built
+    /// across two arenas, with a child pushed before its parent's other
+    /// children, so the rollup cannot be relying on arena order; and with a
+    /// directory whose own time is the newest, so "max" cannot be "max of
+    /// children only".
     #[test]
     fn directory_modified_is_the_max_over_its_subtree() {
+        const START: i64 = 10_000;
         let mut a0 = Arena::new(0, u64::MAX);
         let mut a1 = Arena::new(1, u64::MAX);
         let root = push_modified(&mut a0, ScanId::NONE, b"root", ObjType::Dir, 0, 0, 0, 100);
-        // deep/ is old itself, but holds the newest file two levels down.
+        // deep/ is old itself, but holds the newest past file two levels
+        // down, beside a future one.
         let deep = push_modified(&mut a1, root, b"deep", ObjType::Dir, 0, 0, 0, 50);
         let mid = push_modified(&mut a0, deep, b"mid", ObjType::Dir, 0, 0, 0, 60);
         push_modified(&mut a1, mid, b"newest.bin", ObjType::Reg, 0, 1, 1, 9_000);
+        push_modified(&mut a0, mid, b"future.bin", ObjType::Reg, 0, 1, 1, 50_000);
         push_modified(&mut a0, deep, b"old.bin", ObjType::Reg, 0, 1, 1, 10);
         // fresh/ was itself touched after anything inside it.
         let fresh = push_modified(&mut a1, root, b"fresh", ObjType::Dir, 0, 0, 0, 5_000);
         push_modified(&mut a0, fresh, b"inner.bin", ObjType::Reg, 0, 1, 1, 20);
         push_modified(&mut a1, fresh, b"link", ObjType::Lnk, 0, 0, 0, 30);
+        // Its own time is in the future, so only what is inside counts.
+        let stamped = push_modified(&mut a0, root, b"stamped", ObjType::Dir, 0, 0, 0, 20_000);
+        push_modified(&mut a1, stamped, b"plain.bin", ObjType::Reg, 0, 1, 1, 40);
+        // Nothing dated at or before the start anywhere inside: its own time
+        // as read, future or not.
+        let all_future = push_modified(&mut a1, root, b"all-future", ObjType::Dir, 0, 0, 0, 30_000);
+        push_modified(
+            &mut a0,
+            all_future,
+            b"later.bin",
+            ObjType::Reg,
+            0,
+            1,
+            1,
+            40_000,
+        );
+        // Exactly at the start counts: the cutoff is inclusive.
+        let edge = push_modified(&mut a0, root, b"edge", ObjType::Dir, 0, 0, 0, 1);
+        push_modified(&mut a1, edge, b"at-start.bin", ObjType::Reg, 0, 1, 1, START);
         // Empty: nothing beneath it, so its own time stands.
         push_modified(&mut a0, root, b"empty", ObjType::Dir, 0, 0, 0, 70);
         // Pre-1970: negative times are ordered like any others.
@@ -604,16 +651,26 @@ mod tests {
         push_modified(&mut a0, ancient, b"older.bin", ObjType::Reg, 0, 1, 1, -900);
         push_modified(&mut a1, ancient, b"newer.bin", ObjType::Reg, 0, 1, 1, -100);
 
-        let s = freeze(vec![a0, a1], WalkStats::default());
-        // Precondition: every node made it, so a missing one cannot pass.
-        assert_eq!(s.nodes.len(), 12);
+        let stats = WalkStats {
+            started_at: START,
+            ..WalkStats::default()
+        };
+        let s = freeze(vec![a0, a1], stats);
+        // Preconditions: every node made it, so a missing one cannot pass,
+        // and the cutoff reached the snapshot.
+        assert_eq!(s.nodes.len(), 19);
+        assert_eq!(s.stats.started_at, START);
         let m = |name: &[u8]| s.nodes[find(&s, name)].modified;
-        // Leaves keep their own time.
+        // Leaves keep their own time, a future one included.
         for (name, own) in [
             (&b"newest.bin"[..], 9_000),
+            (b"future.bin", 50_000),
             (b"old.bin", 10),
             (b"inner.bin", 20),
             (b"link", 30),
+            (b"plain.bin", 40),
+            (b"later.bin", 40_000),
+            (b"at-start.bin", START),
             (b"older.bin", -900),
             (b"newer.bin", -100),
         ] {
@@ -622,14 +679,20 @@ mod tests {
         assert_eq!(
             m(b"mid"),
             9_000,
-            "a file below beats the directory's own time"
+            "a past file below beats the directory; a future one does not"
         );
         assert_eq!(m(b"deep"), 9_000, "the max reaches up more than one level");
         assert_eq!(m(b"fresh"), 5_000, "the directory's own time counts too");
+        assert_eq!(m(b"stamped"), 40, "a future own time does not count");
+        assert_eq!(
+            m(b"all-future"),
+            30_000,
+            "nothing dated in time: its own, as read"
+        );
+        assert_eq!(m(b"edge"), START, "a time equal to the start counts");
         assert_eq!(m(b"empty"), 70);
         assert_eq!(m(b"ancient"), -100);
-        assert_eq!(m(b"root"), 9_000);
-        assert_eq!(s.nodes[s.root as usize].modified, 9_000);
+        assert_eq!(m(b"root"), START, "the newest time not after the start");
     }
 
     #[test]
@@ -984,6 +1047,7 @@ mod tests {
             hardlink_dups: 6,
             stalled_at: Some(PathBuf::from("/stuck")),
             incomplete: Some(crate::walk::Incomplete::MalformedBatch),
+            started_at: 1_700_000_000,
         };
         let want = format!("{stats:?}");
         let s = freeze(vec![empty_arena_with_root()], stats);
@@ -1104,6 +1168,8 @@ mod tests {
         /// The order the arenas are handed to `freeze`: a permutation of
         /// `0..tags.len()`, so a child's arena can precede its parent's.
         order: Vec<usize>,
+        /// The scan's start, handed to `freeze` as `WalkStats::started_at`.
+        cutoff: i64,
     }
 
     impl Tree {
@@ -1162,18 +1228,27 @@ mod tests {
             tot
         }
 
-        /// Independent of the freeze: raise every ancestor to each node's own
-        /// modification time by walking parent links one node at a time.
+        /// Independent of the freeze: offer each node's own time, if it is not
+        /// after the cutoff, to itself and every ancestor by walking parent
+        /// links one node at a time. A directory takes the best offer, or its
+        /// own time if it had none; anything else keeps its own time.
         fn expected_modified(&self) -> Vec<i64> {
-            let mut latest: Vec<i64> = self.nodes.iter().map(|n| n.modified).collect();
-            for n in &self.nodes {
-                let mut p = n.parent;
-                while let Some(q) = p {
-                    latest[q] = latest[q].max(n.modified);
-                    p = self.nodes[q].parent;
+            let mut best: Vec<Option<i64>> = vec![None; self.nodes.len()];
+            for n in self.nodes.iter().filter(|n| n.modified <= self.cutoff) {
+                let mut at = self.nodes.iter().position(|m| std::ptr::eq(m, n));
+                while let Some(q) = at {
+                    best[q] = Some(best[q].map_or(n.modified, |b| b.max(n.modified)));
+                    at = self.nodes[q].parent;
                 }
             }
-            latest
+            self.nodes
+                .iter()
+                .zip(best)
+                .map(|(n, b)| match (n.obj_type, b) {
+                    (ObjType::Dir, Some(b)) => b,
+                    _ => n.modified,
+                })
+                .collect()
         }
 
         fn by_name(&self) -> HashMap<Vec<u8>, usize> {
@@ -1224,62 +1299,82 @@ mod tests {
                 prop::collection::vec(arb_entry(), 0..80),
                 any::<usize>(),
                 arb_modified(),
+                // Mostly a cutoff among the times, so some are later than it;
+                // sometimes none at all, as for stats not from a walk.
+                prop_oneof![3 => arb_modified(), 1 => Just(i64::MAX)],
             )
-                .prop_map(move |(tags, order, entries, root_arena, root_modified)| {
-                    let mut nodes = vec![MNode {
-                        parent: None,
-                        obj_type: ObjType::Dir,
-                        name: b"root".to_vec(),
-                        flags: 0,
-                        logical: 0,
-                        allocated: 0,
-                        modified: root_modified,
-                        arena: root_arena % k,
-                    }];
-                    let mut dirs = vec![0usize];
-                    for (pick, is_dir, kind, fl, logical, allocated, arena, mut name, modified) in
-                        entries
-                    {
-                        let idx = nodes.len();
-                        name.extend_from_slice(&(idx as u32).to_le_bytes());
-                        let flags = [
-                            0,
-                            FLAG_HARDLINK_DUP,
-                            FLAG_PERM_DENIED,
-                            FLAG_HARDLINK_DUP | FLAG_PERM_DENIED,
-                        ][usize::from(fl)];
-                        let (obj_type, logical, allocated) = if is_dir {
-                            // As the kernel reports a directory: no size.
-                            (ObjType::Dir, 0, 0)
-                        } else {
-                            let t = [ObjType::Reg, ObjType::Lnk, ObjType::Other][usize::from(kind)];
-                            (t, logical, allocated)
-                        };
-                        nodes.push(MNode {
-                            parent: Some(dirs[pick % dirs.len()]),
-                            obj_type,
-                            name,
-                            flags,
+                .prop_map(
+                    move |(tags, order, entries, root_arena, root_modified, cutoff)| {
+                        let mut nodes = vec![MNode {
+                            parent: None,
+                            obj_type: ObjType::Dir,
+                            name: b"root".to_vec(),
+                            flags: 0,
+                            logical: 0,
+                            allocated: 0,
+                            modified: root_modified,
+                            arena: root_arena % k,
+                        }];
+                        let mut dirs = vec![0usize];
+                        for (
+                            pick,
+                            is_dir,
+                            kind,
+                            fl,
                             logical,
                             allocated,
+                            arena,
+                            mut name,
                             modified,
-                            arena: arena % k,
-                        });
-                        if is_dir {
-                            dirs.push(idx);
+                        ) in entries
+                        {
+                            let idx = nodes.len();
+                            name.extend_from_slice(&(idx as u32).to_le_bytes());
+                            let flags = [
+                                0,
+                                FLAG_HARDLINK_DUP,
+                                FLAG_PERM_DENIED,
+                                FLAG_HARDLINK_DUP | FLAG_PERM_DENIED,
+                            ][usize::from(fl)];
+                            let (obj_type, logical, allocated) = if is_dir {
+                                // As the kernel reports a directory: no size.
+                                (ObjType::Dir, 0, 0)
+                            } else {
+                                let t =
+                                    [ObjType::Reg, ObjType::Lnk, ObjType::Other][usize::from(kind)];
+                                (t, logical, allocated)
+                            };
+                            nodes.push(MNode {
+                                parent: Some(dirs[pick % dirs.len()]),
+                                obj_type,
+                                name,
+                                flags,
+                                logical,
+                                allocated,
+                                modified,
+                                arena: arena % k,
+                            });
+                            if is_dir {
+                                dirs.push(idx);
+                            }
                         }
-                    }
-                    Tree {
-                        nodes,
-                        tags: tags.into_iter().collect(),
-                        order,
-                    }
-                })
+                        Tree {
+                            nodes,
+                            tags: tags.into_iter().collect(),
+                            order,
+                            cutoff,
+                        }
+                    },
+                )
         })
     }
 
     fn frozen(t: &Tree) -> Snapshot {
-        freeze(t.build(), WalkStats::default())
+        let stats = WalkStats {
+            started_at: t.cutoff,
+            ..WalkStats::default()
+        };
+        freeze(t.build(), stats)
     }
 
     proptest! {

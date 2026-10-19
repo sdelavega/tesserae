@@ -89,10 +89,9 @@
 //!    name starting at offset 68 — the three `fileattr` slots are *absent*,
 //!    not zero-filled. 72 is less than the 88 bytes the fixed fields would
 //!    need, so this is arithmetic, not interpretation. Measured identically on
-//!    APFS, HFS+, exFAT and FAT32 for the Phase 1 mask, so it is VFS
-//!    behaviour rather than one filesystem's quirk (the ten-attribute mask
-//!    was re-measured on APFS only), and setting or clearing `FSOPT_PACK_INVAL_ATTRS`
-//!    changes nothing — although `getattrlistbulk(2)` documents that option as
+//!    APFS, HFS+, exFAT and FAT32, for the Phase 1 mask and again for this
+//!    one, so it is VFS behaviour rather than one filesystem's quirk, and
+//!    setting or clearing `FSOPT_PACK_INVAL_ATTRS` changes nothing — although `getattrlistbulk(2)` documents that option as
 //!    meaning "all requested attributes [...] will be returned".
 //!    Offsets therefore do **not** stay stable from entry to entry, and a
 //!    parser that assumed they did would read a directory's name bytes as its
@@ -106,10 +105,13 @@
 //!   of where the fixed-field region ends. Over a full scan of a Data volume
 //!   (6.78 million entries: directories, regular files, symlinks, sockets and
 //!   fifos), that end was only ever 68 with the `fileattr` word zero (every
-//!   directory) or 88 with it non-zero (everything else). For the Phase 1
-//!   mask, without `ATTR_CMN_MODTIME`, the two sizes were 52 and 72, on that
-//!   volume and on HFS+, exFAT and FAT32 images alike. Any other size, or a size that disagrees with the
-//!   `fileattr` word, is [`ParseError::UnexpectedLayout`]: a kernel that
+//!   directory) or 88 with it non-zero (everything else), and the same two
+//!   held on HFS+, exFAT and FAT32 images (directories, regular files,
+//!   symlinks, and fifos where the filesystem has them);
+//!   `every_filesystem_scans_with_only_the_two_measured_layouts` in
+//!   `tests/volume.rs` scans one of each. For the Phase 1 mask, without
+//!   `ATTR_CMN_MODTIME`, the two sizes were 52 and 72. Any other size, or a
+//!   size that disagrees with the `fileattr` word, is [`ParseError::UnexpectedLayout`]: a kernel that
 //!   packed this mask differently would put a neighbour's bytes under the
 //!   constant offsets, so the entry is refused rather than read.
 //! * **The layout gate.** A slot that does not fit entirely before the end of
@@ -289,9 +291,9 @@ const MIN_NAME_START: usize = OFF_NAME_REF + 8;
 
 /// Where the fixed-field region ends, and so the name begins, in the two
 /// measured layouts: without the `fileattr` group (a directory) and with it.
-/// No other region size has been observed for this mask over a full scan of a
-/// 6.78-million-entry Data volume, and the parser accepts no other. (The
-/// Phase 1 mask's 52 and 72 held on HFS+, exFAT and FAT32 images too.)
+/// No other region size has been observed for this mask, over a full scan of
+/// a 6.78-million-entry Data volume nor on HFS+, exFAT and FAT32 images, and
+/// the parser accepts no other.
 const DIR_FIXED_END: usize = OFF_LINKCOUNT;
 const FILE_FIXED_END: usize = OFF_DATALENGTH + 8;
 
@@ -1181,6 +1183,8 @@ mod tests {
             allocated: u64,
             /// `st_mtimespec.tv_sec`.
             mtime: i64,
+            /// `st_flags`.
+            flags: u32,
         }
 
         fn expectations(name: &str) -> Vec<Expect> {
@@ -1190,7 +1194,7 @@ mod tests {
                 .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
                 .map(|l| {
                     let f: Vec<&str> = l.split('\t').collect();
-                    assert_eq!(f.len(), 8, "bad expectation row: {l}");
+                    assert_eq!(f.len(), 9, "bad expectation row: {l}");
                     Expect {
                         name: (0..f[0].len() / 2)
                             .map(|i| u8::from_str_radix(&f[0][i * 2..i * 2 + 2], 16).unwrap())
@@ -1202,6 +1206,7 @@ mod tests {
                         logical: f[5].parse().unwrap(),
                         allocated: f[6].parse().unwrap(),
                         mtime: f[7].parse().unwrap(),
+                        flags: f[8].parse().unwrap(),
                     }
                 })
                 .collect();
@@ -1231,6 +1236,7 @@ mod tests {
                         logical: e.logical,
                         allocated: e.allocated,
                         mtime: e.modified,
+                        flags: e.flags,
                     }
                 })
                 .collect();
@@ -1403,6 +1409,11 @@ mod tests {
             let dense = by_name(b"dense.bin");
             assert_ne!(clone.ino, dense.ino);
             assert_eq!((clone.logical, clone.allocated), (8192, 8192));
+
+            // `ATTR_CMN_FLAGS` agrees with `st_flags` for every entry (the
+            // comparison above); this one has non-zero flags, so the slot at
+            // `OFF_FLAGS` is pinned by a value and not by a run of zeros.
+            assert_eq!(by_name(b"dense.bin").flags, 0x0000_8001);
 
             assert_eq!(by_name(b"dangling").kind, "lnk");
             let subdir = by_name(b"subdir");

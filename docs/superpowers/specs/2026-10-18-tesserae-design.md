@@ -249,9 +249,16 @@ inspector, growing the node from 40 to 48 bytes; it is appended after
 because ABI 1 had not shipped. It is `ATTR_CMN_MODTIME`'s `tv_sec` (§7),
 signed like `time_t`, so a time before 1970 is negative; the nanoseconds are
 dropped. For a file or symlink it is the object's own time. For a directory
-it is the **latest of its own time and every descendant's**, rolled up at
-freeze like the sizes, so a directory's tile ages with the most recently
-touched thing inside it. The scan root, which no `getattrlistbulk` entry
+it is the **latest of its own time and every descendant's that is not later
+than the scan's start**, rolled up at freeze like the sizes, so a directory's
+tile ages with the most recently touched thing inside it. The cutoff is
+`WalkStats::started_at`, the walk's own reading of the clock when it began:
+a time after it is a file stamped in the future or written under a wrong
+clock (measured: 170 files dated 2076 on one Data volume, which without the
+cutoff made the volume's root, and every directory above them, report 2076).
+A file's or symlink's own time is reported as read, future or not; a
+directory with nothing at or before the cutoff in its subtree keeps its own
+time as read. The scan root, which no `getattrlistbulk` entry
 describes, takes its own time from `fstat` on its open descriptor.
 
 **Flag bits**, as `node.rs` and `arena.rs` define them and `tesserae.h`
@@ -277,7 +284,8 @@ The cache win is theoretical; the complexity is not.
 After the parallel scan lands nodes in per-thread arenas:
 
 1. count children per parent, prefix-sum, scatter into each parent's range
-2. roll sizes up bottom-up (sums), and modification times (maxima)
+2. roll sizes up bottom-up (sums), and modification times (maxima of those
+   not after the scan's start)
 3. sort each sibling range descending by `allocated`
 4. emit the sorted tree breadth-first, so every parent's children are one
    contiguous slice of the final array
@@ -420,8 +428,9 @@ Rust memory. It is closed structurally, not by discipline:
 
 Kept lean, because every additional attribute costs scan time. Ten
 attributes: the nine of Phase 1 and `ATTR_CMN_MODTIME`, added in Phase 2 at a
-measured cost of about 2% on the Data volume (22.4 s against a same-day
-22.0 s at 10 workers; `docs/benchmarks.md`).
+measured cost of a few percent at most on the Data volume (series 3: +2.0%,
+22.4 s against a same-day 22.0 s at 10 workers, n = 3 each, overlapping
+ranges; `docs/benchmarks.md`).
 `ATTR_CMN_RETURNED_ATTRS` is requested first so per-entry absence is
 detectable rather than guessed — which it must be, because absence is real
 and structural (see below). `FSOPT_PACK_INVAL_ATTRS` asks the kernel to
@@ -455,10 +464,17 @@ were 80 and 56 bytes, the name at 52 and the fixed fields 72:
 and `ATTR_CMN_FLAGS`, and move every later slot.) `man 2 getattrlist` states the rule for the mirror
 case: *"Requested directory attributes are not returned for file system
 objects that are not directories."* Setting or clearing
-`FSOPT_PACK_INVAL_ATTRS` changes nothing, and the behaviour was identical on
-APFS, HFS+, exFAT and FAT32 for the nine-attribute mask, so it is VFS-level
-rather than one filesystem's quirk. The ten-attribute layout has been
-re-measured on APFS only.
+`FSOPT_PACK_INVAL_ATTRS` changes nothing, and the behaviour is identical on
+APFS, HFS+, exFAT and FAT32, for the nine-attribute mask and again for the
+ten (68 and 88 bytes on each; `tests/volume.rs` scans an image of each), so
+it is VFS-level rather than one filesystem's quirk.
+
+*Measured, FAT32 only:* `getattrlistbulk` returns `ATTR_FILE_ALLOCSIZE` as 0,
+with its returned bit set, for every file, while `getattrlist(2)` on the
+path and `lstat` report the real allocation (102,400 bytes for a 100 KiB
+file). The data length beside it is right, so this is the kernel's bulk path
+for msdosfs, not a misread; but a FAT32 volume therefore scans with no
+allocated bytes at all. exFAT, HFS+ and APFS agree with `lstat`.
 
 **The parser accepts exactly two fixed-region sizes**, the two a census
 found. Over a full read-only scan of `/System/Volumes/Data` (6.78 million

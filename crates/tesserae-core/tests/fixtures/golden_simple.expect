@@ -1,4 +1,4 @@
-# name_hex	kind	ino	dev	nlink	logical	allocated	mtime
-# from lstat(2); nlink/logical/allocated are 0 for dirs; mtime is st_mtime
-612e62696e	reg	166057723	16777231	1	4096	4096	1600000000
-64	dir	166057725	16777231	0	0	0	-31536000
+# name_hex	kind	ino	dev	nlink	logical	allocated	mtime	flags
+# from lstat(2); nlink/logical/allocated are 0 for dirs; mtime is st_mtime; flags is st_flags
+612e62696e	reg	166377489	16777231	1	4096	4096	1600000000	0
+64	dir	166377491	16777231	0	0	0	-31536000	0

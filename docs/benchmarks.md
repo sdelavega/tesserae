@@ -274,3 +274,32 @@ a few percent at most. Where those percent go was not measured; the
 likeliest candidate is the 20% larger entries (fewer per 256 KiB
 `getattrlistbulk` buffer, so more calls). Not measured: the sparse-image benchmark, or the criterion
 `parse` and `freeze` numbers, for this change.
+
+### Criterion, before and after
+
+`cargo bench -p tesserae-core`, same machine and day (10:22 to 10:26, load
+average 3.5 to 6, an ordinary desktop session). **Before** is `ffff993`
+(nine attributes, 40-byte nodes), run from a detached worktree; **after** is
+this change with the fix round's freeze cutoff (ten attributes, 48-byte
+nodes, two more freeze working arrays). Two complete runs each, alternating;
+the middle of criterion's confidence interval.
+
+| benchmark | before, run 1 | before, run 2 | after, run 1 | after, run 2 |
+|---|---|---|---|---|
+| `parse/golden_simple` (2 entries) | 8.39 ns | 8.45 ns | 8.68 ns | 8.81 ns |
+| `parse/golden_mixed` (8 entries) | 50.4 ns | 51.8 ns | 53.4 ns | 53.1 ns |
+| `parse/golden_mixed_xN` (256 KiB) | 19.03 us (x385, 3,080 entries) | 19.00 us | 16.86 us (x324, 2,592 entries) | 16.95 us |
+| `freeze/synthetic_100k_nodes_4_arenas` | 3.512 ms | 3.530 ms | 4.011 ms | 4.005 ms |
+
+The 256 KiB row repeats the mixed buffer to fill the walker's read buffer, so
+the larger entries fit fewer times (324 against 385): per entry that is
+6.17 ns before and 6.52 ns after (+6%), per byte the same or slightly
+faster. The freeze is 14% slower per node (34 to 40 ns): the node is 8 bytes
+wider, and the rollup now fills and walks two more arrays (the newest time
+not after the scan's start, and whether there is one). Neither shows in the
+volume scan above, which is kernel-bound: freeze took 0.71 to 0.85 s of
+22 to 30 s there, against 0.64 to 0.73 s before.
+
+The before figures are a little slower than Phase 1's own (7.6 ns, 47 ns,
+17.7 us, 3.40 ms) on the same machine, as the volume scans were: the machine
+is busier today.

@@ -104,11 +104,15 @@ pub struct TessNode {
     /// figure exists only because the freeze rolled it up.
     pub allocated: u64,
     /// Last modification, in seconds since the Unix epoch (UTC); negative
-    /// before 1970. For a file or symlink, its own `ATTR_CMN_MODTIME`. For a
-    /// directory, the latest of its own and every descendant's, rolled up
-    /// at freeze like the sizes, so a directory is as recent as the most
-    /// recently touched thing inside it. Last in the struct: appended in
-    /// Phase 2 without moving any earlier field.
+    /// before 1970. For a file or symlink, its own `ATTR_CMN_MODTIME`, as
+    /// read, even if it is in the future. For a directory, the latest of its
+    /// own and every descendant's time **that is not later than the scan's
+    /// start** (`WalkStats::started_at`), rolled up at freeze like the sizes,
+    /// so a directory is as recent as the most recently touched thing inside
+    /// it and a future-dated file cannot make its ancestors look newest. A
+    /// directory with no such time in its subtree keeps its own time as read.
+    /// Last in the struct: appended in Phase 2 without moving any earlier
+    /// field.
     pub modified: i64,
 }
 

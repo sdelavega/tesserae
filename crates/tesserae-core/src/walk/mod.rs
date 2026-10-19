@@ -325,7 +325,7 @@ impl Default for WalkOptions {
 }
 
 /// What a walk saw. Counts cover nodes that were actually pushed.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WalkStats {
     /// Directory nodes, the root included, whether or not they were entered.
     pub dirs: u64,
@@ -368,6 +368,43 @@ pub struct WalkStats {
     pub stalled_at: Option<PathBuf>,
     /// `Some` if the result is partial and why.
     pub incomplete: Option<Incomplete>,
+    /// When the walk began, in seconds since the Unix epoch (UTC), read from
+    /// the system clock before the root is opened. [`crate::freeze`] uses it
+    /// as the cutoff for directory modification times: a time later than
+    /// this cannot be a real modification seen by this scan (a file stamped
+    /// in the future, or a clock that was wrong when it was written), so it
+    /// does not make a directory look newer. [`WalkStats::default`] sets it
+    /// to `i64::MAX`, which is no cutoff at all, for stats that did not come
+    /// from a walk.
+    pub started_at: i64,
+}
+
+impl Default for WalkStats {
+    fn default() -> Self {
+        WalkStats {
+            dirs: 0,
+            files: 0,
+            errors: 0,
+            unreadable: Vec::new(),
+            skipped_mounts: Vec::new(),
+            depth_capped: 0,
+            lost_entries: 0,
+            hardlink_dups: 0,
+            stalled_at: None,
+            incomplete: None,
+            started_at: i64::MAX,
+        }
+    }
+}
+
+/// Now, in whole seconds since the Unix epoch: the [`WalkStats::started_at`]
+/// a walk records. A clock set before 1970 gives a negative value, as
+/// `time_t` would; one past the range of `i64` seconds cannot occur.
+pub(crate) fn now_epoch_secs() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_secs()).unwrap_or(i64::MAX),
+        Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
+    }
 }
 
 /// Walk `opts.root` on the calling thread.
@@ -402,6 +439,7 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     inodes: &InodeSet,
 ) -> io::Result<(Arena, WalkStats)> {
     check_options(opts)?;
+    let started_at = now_epoch_secs();
     let root_fd = open_root(opts)?;
     let root_volume = root_volume_of(opts, &root_fd)?;
     // A budget and a halt for one walker: nothing else draws on the counter,
@@ -433,7 +471,9 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     // `run_root` records the reason in the stats; a serial walk has no other
     // worker to tell.
     let _ = walker.run_root(root_fd);
-    Ok(walker.finish())
+    let (arena, mut stats) = walker.finish();
+    stats.started_at = started_at;
+    Ok((arena, stats))
 }
 
 /// Reject options no walk can honour. Separate so the parallel walker fails

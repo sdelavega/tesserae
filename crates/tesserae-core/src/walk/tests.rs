@@ -185,9 +185,24 @@ fn walk_records_each_entrys_modified_time_and_the_roots_own() {
     set_mtime(fx.path(), "d", 1_100_000_000);
     set_mtime(fx.path(), "", 1_300_000_000);
 
+    let before = now_epoch_secs();
     let (arena, stats) = walk_serial(&opts(fx.path())).unwrap();
+    let after = now_epoch_secs();
     assert_eq!(stats.incomplete, None);
     assert_eq!((stats.files, stats.dirs), (3, 2), "precondition: the tree");
+    // The walk records when it began: freeze's cutoff for directory times.
+    assert!(
+        (before..=after).contains(&stats.started_at),
+        "started_at {} is not within {before}..={after}",
+        stats.started_at
+    );
+    // The parallel walker too, through the merge of its workers' stats.
+    let (_, pooled) = crate::pool::walk(&opts(fx.path())).unwrap();
+    assert!(
+        (before..=now_epoch_secs()).contains(&pooled.started_at),
+        "pool started_at {}",
+        pooled.started_at
+    );
     for (name, want) in [
         (&b"a.bin"[..], 1_000_000_000),
         (b"b.bin", 1_500_000_000),

@@ -490,6 +490,7 @@ mod tests {
             hardlink_dups: 5,
             stalled_at: Some("/v/hung".into()),
             incomplete: Some(Incomplete::Stalled),
+            started_at: 1_700_000_000,
         };
         Report {
             path: "/v".into(),
