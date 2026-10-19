@@ -13,6 +13,7 @@
 # Install the pinned version with
 #   cargo install cbindgen --version 0.29.4 --locked
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
 # Released 2026-06-09. Licence: MPL-2.0. It is a build tool, run and discarded:
 # nothing of it is linked into Tesserae or shipped with it.

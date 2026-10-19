@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/tesserae-cli",
     "crates/tesserae-core",
     "crates/tesserae-ffi",
     "crates/tesserae-testutil",

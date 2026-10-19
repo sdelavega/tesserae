@@ -116,6 +116,15 @@ impl DiskImage {
         &self.mountpoint
     }
 
+    /// Bytes available on the image's own volume. The image is its own APFS
+    /// container, so this moves only with writes to the image; hold
+    /// [`crate::allocation_lock`] across a measurement all the same, since
+    /// creating another image allocates in a shared place and a measuring test
+    /// should not have to argue about which allocations reach it.
+    pub fn free_bytes(&self) -> io::Result<u64> {
+        crate::free_bytes(&self.mountpoint)
+    }
+
     /// Detach now and report the outcome. Idempotent; `Drop` calls this and can
     /// only print a failure, so a test that cares should call it itself.
     pub fn detach(&mut self) -> io::Result<()> {
@@ -125,11 +134,26 @@ impl DiskImage {
         let first = run(Command::new("hdiutil").arg("detach").arg(&self.mountpoint));
         // A volume that is still busy (Spotlight, fseventsd) refuses a polite
         // detach. The image is ours and temporary, so forcing is safe.
-        let result = first.or_else(|_| {
-            run(Command::new("hdiutil")
-                .args(["detach", "-force"])
-                .arg(&self.mountpoint))
-        });
+        match first {
+            Ok(()) => {
+                self.mounted = false;
+                Ok(())
+            }
+            Err(_) => self.force_detach(),
+        }
+    }
+
+    /// Detach at once, without waiting for open files to close, as a pulled
+    /// cable would: a process still reading the volume has its descriptors
+    /// invalidated underneath it. This is how a test takes a volume away in
+    /// the middle of a scan. Idempotent.
+    pub fn force_detach(&mut self) -> io::Result<()> {
+        if !self.mounted {
+            return Ok(());
+        }
+        let result = run(Command::new("hdiutil")
+            .args(["detach", "-force"])
+            .arg(&self.mountpoint));
         if result.is_ok() {
             self.mounted = false;
         }
@@ -293,6 +317,60 @@ mod tests {
         let mut image = DiskImage::attach(&fx.path().join("mnt"), 16).unwrap();
         image.detach().unwrap();
         image.detach().unwrap();
+    }
+
+    #[test]
+    fn free_bytes_falls_by_what_is_written_and_a_copy_is_not_a_clone() {
+        // The image has its own APFS container, so its free space moves only
+        // when something is written to it.
+        const LEN: u64 = 1 << 20;
+        const SLACK: u64 = 64 * 1024;
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let image = DiskImage::attach(&mnt, 16).unwrap();
+
+        let _quiet = crate::allocation_lock();
+        let before = image.free_bytes().unwrap();
+        crate::write_dense_file(&mnt.join("a"), LEN).unwrap();
+        let written = before - image.free_bytes().unwrap();
+        // The data blocks plus or minus a few blocks of metadata: measured
+        // +1 block for a first file and -1 for a second, as the image's
+        // metadata is allocated and reclaimed.
+        let near = LEN - SLACK..=LEN + SLACK;
+        assert!(near.contains(&written), "{written}");
+
+        let before_copy = image.free_bytes().unwrap();
+        crate::copy_by_read_write(&mnt.join("a"), &mnt.join("b")).unwrap();
+        let copied = before_copy - image.free_bytes().unwrap();
+        assert!(near.contains(&copied), "{copied}");
+        assert_eq!(
+            std::fs::read(mnt.join("a")).unwrap(),
+            std::fs::read(mnt.join("b")).unwrap()
+        );
+
+        // The contrast that gives the number meaning: a clone adds nothing.
+        let before_clone = image.free_bytes().unwrap();
+        fx.clone_of("mnt/a", "mnt/c").unwrap();
+        let cloned = before_clone - image.free_bytes().unwrap();
+        assert!(cloned < SLACK, "{cloned}");
+    }
+
+    #[test]
+    fn force_detach_unmounts_at_once_and_is_idempotent() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let mut image = DiskImage::attach(&mnt, 16).unwrap();
+        // A file held open makes a polite detach refuse; force does not.
+        let held = std::fs::File::create(mnt.join("held")).unwrap();
+        assert!(is_mounted(&mnt));
+
+        image.force_detach().unwrap();
+
+        assert!(!is_mounted(&mnt));
+        image.force_detach().unwrap();
+        drop(held);
     }
 
     #[test]

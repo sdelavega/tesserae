@@ -31,6 +31,7 @@
 # under `pipefail` the early exit of `grep -q` can SIGPIPE the producer and turn
 # a match into a failure, or hide one.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
 cd "$(dirname "$0")/.."
 

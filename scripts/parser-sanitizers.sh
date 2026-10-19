@@ -19,6 +19,7 @@
 # only the subshell, so values are assigned on their own line (where `set -e`
 # sees the status) and validated as numbers before they are compared.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
 mode="${1:-}"
 cd "$(dirname "$0")/.."

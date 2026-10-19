@@ -1,0 +1,16 @@
+[package]
+name = "tesserae-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Developer command line over the Tesserae scan engine"
+
+[dependencies]
+tesserae-core = { path = "../tesserae-core" }
+# Pinned exactly: the JSON output is a developer-facing format and the
+# dependency tree is audited against deny.toml at this version.
+serde_json = "=1.0.151"
+
+[dev-dependencies]
+tesserae-testutil = { path = "../tesserae-testutil" }

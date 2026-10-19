@@ -339,9 +339,13 @@ pub fn assert_allocation_lock_held() {
 }
 
 /// Write `len` bytes of non-zero data so every block is really allocated.
-fn write_dense(mut file: File, len: u64) -> io::Result<()> {
+fn write_dense(file: File, len: u64) -> io::Result<()> {
     let _alloc = allocation_lock();
     assert_allocation_lock_held();
+    fill_dense(file, len)
+}
+
+fn fill_dense(mut file: File, len: u64) -> io::Result<()> {
     let chunk = [0xA5u8; 64 * 1024];
     let mut left = len;
     while left > 0 {
@@ -350,6 +354,70 @@ fn write_dense(mut file: File, len: u64) -> io::Result<()> {
         left -= n as u64;
     }
     Ok(())
+}
+
+/// Create a new file at `path` holding `len` bytes of non-zero data and flush
+/// it to the volume.
+///
+/// For a test that is *measuring* free space and so already holds
+/// [`allocation_lock`], which [`Fixture::file`] would try to take a second time
+/// and refuse. Panics unless the calling thread holds the lock. `path` is
+/// taken as given: unlike a `Fixture` path it is not confined to a fixture
+/// root, so the caller owns where it points.
+pub fn write_dense_file(path: &Path, len: u64) -> io::Result<()> {
+    assert_allocation_lock_held();
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(at("create", path))?;
+    let flushed = file.try_clone().map_err(at("dup", path))?;
+    fill_dense(file, len).map_err(at("write", path))?;
+    flushed.sync_all().map_err(at("fsync", path))
+}
+
+/// A real copy of `src` at the new file `dst`: every block read and written
+/// again, so it consumes `src`'s size in new space.
+///
+/// `std::fs::copy` is not that on macOS: it calls `copyfile(3)` with its clone
+/// flag and shares blocks, which is the opposite of what a caller using this
+/// as the control for a clone wants. Same lock contract as
+/// [`write_dense_file`].
+pub fn copy_by_read_write(src: &Path, dst: &Path) -> io::Result<()> {
+    assert_allocation_lock_held();
+    let mut from = File::open(src).map_err(at("open", src))?;
+    let mut to = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dst)
+        .map_err(at("create", dst))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = io::Read::read(&mut from, &mut buf).map_err(at("read", src))?;
+        if n == 0 {
+            break;
+        }
+        to.write_all(&buf[..n]).map_err(at("write", dst))?;
+    }
+    to.sync_all().map_err(at("fsync", dst))
+}
+
+/// Bytes available to an unprivileged writer on the volume holding `path`.
+///
+/// Of an APFS volume this is the free space of its *container*, shared with
+/// every other volume in it. That is the machine's own disk for a path on the
+/// boot volume, and just the one volume for a [`crate::DiskImage`], whose
+/// container is the image: which is why free-space measurements are made on an
+/// image.
+pub fn free_bytes(path: &Path) -> io::Result<u64> {
+    let c = cstring(path.as_os_str().as_bytes())?;
+    // SAFETY: an all-zero `statvfs` is a valid value of a plain C struct.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is NUL-terminated and `st` is a live, writable `statvfs`.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return Err(at("statvfs", path)(io::Error::last_os_error()));
+    }
+    Ok(u64::from(st.f_bavail) * st.f_frsize)
 }
 
 #[cfg(test)]
@@ -408,9 +476,9 @@ mod tests {
         // Nothing else in this binary may allocate between the two readings;
         // see `allocation_lock`. `clone_of` does not take it, so no deadlock.
         let _quiet = super::allocation_lock();
-        let before = free_bytes(fx.path());
+        let before = super::free_bytes(fx.path()).unwrap();
         fx.clone_of("big.bin", "clone.bin").unwrap();
-        let used = before.saturating_sub(free_bytes(fx.path()));
+        let used = before.saturating_sub(super::free_bytes(fx.path()).unwrap());
         assert!(
             used < LEN / 4,
             "clone consumed {used} bytes; not a real clone"
@@ -437,6 +505,20 @@ mod tests {
     #[should_panic(expected = "must hold `allocation_lock()`")]
     fn the_held_assertion_fires_without_the_lock() {
         super::assert_allocation_lock_held();
+    }
+
+    #[test]
+    #[should_panic(expected = "must hold `allocation_lock()`")]
+    fn write_dense_file_refuses_to_write_without_the_lock() {
+        let fx = Fixture::new().unwrap();
+        let _ = super::write_dense_file(&fx.path().join("x"), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "must hold `allocation_lock()`")]
+    fn copy_by_read_write_refuses_to_write_without_the_lock() {
+        let fx = Fixture::new().unwrap();
+        let _ = super::copy_by_read_write(&fx.path().join("a"), &fx.path().join("b"));
     }
 
     #[test]
@@ -535,12 +617,5 @@ mod tests {
         let root = fx.path().to_path_buf();
         drop(fx);
         assert!(!root.exists(), "fixture leaked {}", root.display());
-    }
-
-    fn free_bytes(path: &Path) -> u64 {
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        assert_eq!(unsafe { libc::statvfs(c.as_ptr(), &mut st) }, 0);
-        st.f_bavail as u64 * st.f_frsize as u64
     }
 }

@@ -24,4 +24,7 @@ pub mod diskimage;
 pub mod tree;
 
 pub use diskimage::DiskImage;
-pub use tree::{allocation_lock, assert_allocation_lock_held, AllocationGuard, Fixture};
+pub use tree::{
+    allocation_lock, assert_allocation_lock_held, copy_by_read_write, free_bytes, write_dense_file,
+    AllocationGuard, Fixture,
+};

@@ -16,4 +16,15 @@ libc = "0.2"
 
 [dev-dependencies]
 proptest = "1.12.0"
+# Pinned exactly, with the default features off: `plotters` (HTML reports with
+# charts) and `rayon` (parallel analysis) pull in a large tree of crates for
+# output nobody reads from CI, and the numbers are recorded in
+# docs/benchmarks.md instead. `cargo deny` checks what is left.
+criterion = { version = "=0.8.2", default-features = false }
 tesserae-testutil = { path = "../tesserae-testutil" }
+
+# Benchmarks are reported, never asserted (CI timings are too variable to gate
+# on). `harness = false` because criterion supplies its own `main`.
+[[bench]]
+name = "scan"
+harness = false

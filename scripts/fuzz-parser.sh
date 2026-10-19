@@ -13,6 +13,7 @@
 # This does not make fuzzing capable of finding wrong-but-plausible values;
 # see the module comment in fuzz/fuzz_targets/parse_entries.rs.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
 seconds="${1:?usage: $0 SECONDS}"
 cd "$(dirname "$0")/.."
