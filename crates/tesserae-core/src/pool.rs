@@ -838,7 +838,7 @@ mod tests {
     use std::ffi::CStr;
     use std::os::fd::RawFd;
     use std::os::raw::c_int;
-    use tesserae_testutil::Fixture;
+    use tesserae_testutil::{DiskImage, Fixture};
 
     fn opts(root: &Path) -> WalkOptions {
         WalkOptions {
@@ -1025,6 +1025,102 @@ mod tests {
                     .position(|(a, b)| a != b)
             );
         }
+    }
+
+    /// Fails the open of the directory `victim` with a fixed errno.
+    struct FailVictim(c_int);
+
+    impl DirOpener for FailVictim {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if name.to_bytes() == b"victim" {
+                return Err(self.0);
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    /// The parallel half of `volume_gone_errnos_on_a_live_volume_are_churn_not_loss`
+    /// in `walk`: on a live volume these stay a counted error with several
+    /// workers too.
+    #[test]
+    fn volume_gone_errnos_on_a_live_volume_are_churn_not_loss() {
+        for errno in [
+            libc::ENOENT,
+            libc::ENOTDIR,
+            libc::EIO,
+            libc::ENXIO,
+            libc::ENODEV,
+            libc::EBADF,
+            libc::ENOTSUP,
+        ] {
+            let fx = Fixture::new().unwrap();
+            fx.file("victim/inner.bin", 4096).unwrap();
+            for d in 0..8 {
+                fx.file(&format!("other{d}/f.bin"), 4096).unwrap();
+            }
+            let mut o = opts(fx.path());
+            o.workers = 4;
+
+            let (_, stats) =
+                walk_with(&o, Arc::new(FailVictim(errno)), &[], &Progress::default()).unwrap();
+
+            assert_eq!(stats.incomplete, None, "errno {errno}");
+            assert_eq!(stats.errors, 1, "errno {errno}");
+            assert_eq!(stats.files, 8, "errno {errno}");
+        }
+    }
+
+    /// Detaches its image the first time a directory below the root is opened,
+    /// then opens for real. See the serial twin in `walk`.
+    struct DetachOnFirstOpen {
+        image: std::sync::Mutex<DiskImage>,
+        fired: std::sync::atomic::AtomicBool,
+    }
+
+    impl DirOpener for DetachOnFirstOpen {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if !self.fired.swap(true, Ordering::SeqCst) {
+                self.image.lock().unwrap().force_detach().unwrap();
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+
+        fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+            crate::walk::open_beneath(root, rel)
+        }
+    }
+
+    #[test]
+    fn a_volume_lost_mid_walk_stops_every_worker_as_volume_lost() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let image = DiskImage::attach(&mnt, 16).unwrap();
+        for d in 0..40 {
+            std::fs::create_dir(mnt.join(format!("d{d:02}"))).unwrap();
+            std::fs::File::create(mnt.join(format!("d{d:02}/f"))).unwrap();
+        }
+        let mut o = opts(&mnt);
+        o.workers = 4;
+        // Precondition: undisturbed, the walk sees everything and is complete.
+        let (_, whole) = walk(&o).unwrap();
+        assert_eq!((whole.dirs, whole.files, whole.errors), (41, 40, 0));
+        assert_eq!(whole.incomplete, None);
+
+        let opener = Arc::new(DetachOnFirstOpen {
+            image: std::sync::Mutex::new(image),
+            fired: std::sync::atomic::AtomicBool::new(false),
+        });
+        let (_, stats) = walk_with(&o, Arc::clone(&opener), &[], &Progress::default()).unwrap();
+
+        assert!(opener.fired.load(Ordering::SeqCst), "the detach never ran");
+        assert_eq!(stats.incomplete, Some(Incomplete::VolumeLost));
+        assert!(stats.errors >= 1);
+        assert!(
+            stats.files < 40,
+            "{} files from a detached volume",
+            stats.files
+        );
     }
 
     /// The paths a user reads ("12 locations unreadable") are rebuilt
@@ -1413,11 +1509,11 @@ mod tests {
             merge(&mut into, flagged(b)).unwrap();
             into.incomplete
         };
-        use Incomplete::{FdExhausted, MalformedBatch, NodeBudget, OutOfMemory};
+        use Incomplete::{FdExhausted, MalformedBatch, NodeBudget, OutOfMemory, VolumeLost};
 
         // A terminal reason wins from either side, so the answer is the same
         // whichever worker is merged first.
-        for terminal in [NodeBudget, OutOfMemory, Incomplete::Cancelled] {
+        for terminal in [NodeBudget, OutOfMemory, Incomplete::Cancelled, VolumeLost] {
             for noticed in [FdExhausted, MalformedBatch] {
                 assert_eq!(merged(Some(noticed), Some(terminal)), Some(terminal));
                 assert_eq!(merged(Some(terminal), Some(noticed)), Some(terminal));

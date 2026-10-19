@@ -73,6 +73,8 @@
 //! |                                    | entries lost are added to           |
 //! |                                    | `lost_entries`; the walk goes on    |
 //! | any other errno (`EIO`, ...)       | `errors += 1`, the walk continues   |
+//! | ... and the volume is gone         | `incomplete = VolumeLost`; the walk |
+//! |                                    | stops (see below)                   |
 //! | a mount boundary (below)           | path pushed to `skipped_mounts`;    |
 //! |                                    | not entered, not an error           |
 //! | node budget or arena memory out    | the walk stops: [`Incomplete`]      |
@@ -89,6 +91,24 @@
 //! A node-budget failure is terminal: `push_name` has already stored the
 //! entry's name, so a failed `push_node` leaves orphaned name bytes in the
 //! arena, and carrying on would only add more.
+//!
+//! # A volume that disappears
+//!
+//! Measured on macOS 27.2 with `hdiutil detach -force` under a running walk:
+//! descriptors that were open on the volume stay open but answer `ENOTDIR` to
+//! `getattrlistbulk` and to `openat`, `EBADF` to `fstat` and `ENOTSUP` to
+//! `fstatfs`; a descriptor on the parent volume is unaffected. `ENOTDIR` is
+//! also what a directory replaced by a file mid-walk gives, so the errno alone
+//! cannot tell churn from loss, and booking it as churn returned about a third
+//! of a tree as a finished scan. So a directory-level failure with one of the
+//! errnos a lost volume can produce (`ENOENT`, `ENOTDIR`, `EIO`, `ENXIO`,
+//! `ENODEV`, `EBADF`, `ENOTSUP`) is still counted in `errors`, and then the
+//! scan root's own descriptor is asked which volume it is on (`fstatfs`, the
+//! same call the boundary check uses). If that fails, or names a volume other
+//! than the one recorded at the start, the walk stops with
+//! [`Incomplete::VolumeLost`]. On a live volume the answer is the recorded
+//! volume and the walk goes on, exactly as before. The check runs only after a
+//! failure, so a healthy scan pays nothing for it.
 //!
 //! # Volume boundary
 //!
@@ -168,7 +188,7 @@
 use std::ffi::{CStr, CString, OsStr};
 use std::io;
 use std::ops::{Deref, DerefMut};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -358,6 +378,16 @@ pub enum Incomplete {
     /// The parser rejected a `getattrlistbulk` batch, so the entries after the
     /// bad one were never read. [`WalkStats::lost_entries`] says how many.
     MalformedBatch,
+    /// The volume being scanned went away mid-walk (a disk image detached, a
+    /// drive pulled): the root's descriptor no longer answers `fstatfs`, or
+    /// answers with another volume's identity. Terminal: every other directory
+    /// the walk had yet to read is gone too, so the walk stops where it is and
+    /// the tree is whatever was read before. Raised only after a directory
+    /// failed with an errno that can mean "the volume is gone" (`ENOENT`,
+    /// `ENOTDIR`, `EIO`, `ENXIO`, `ENODEV`, `EBADF`, `ENOTSUP`) *and* a fresh
+    /// `fstatfs` of the root says it is; the same errnos on a live volume stay
+    /// ordinary churn in [`WalkStats::errors`].
+    VolumeLost,
 }
 
 impl From<ArenaError> for Incomplete {
@@ -381,6 +411,7 @@ impl Incomplete {
             Incomplete::Stalled => 4,
             Incomplete::FdExhausted => 5,
             Incomplete::MalformedBatch => 6,
+            Incomplete::VolumeLost => 7,
         }
     }
 
@@ -392,6 +423,7 @@ impl Incomplete {
             Incomplete::Stalled,
             Incomplete::FdExhausted,
             Incomplete::MalformedBatch,
+            Incomplete::VolumeLost,
         ]
         .into_iter()
         .find(|i| i.code() == code)
@@ -410,7 +442,8 @@ impl Incomplete {
             Incomplete::Cancelled
             | Incomplete::NodeBudget
             | Incomplete::OutOfMemory
-            | Incomplete::Stalled => 2,
+            | Incomplete::Stalled
+            | Incomplete::VolumeLost => 2,
         }
     }
 }
@@ -652,6 +685,13 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     let halt = Halt::new();
     let progress = Progress::default();
     let lane = Lane::new(Arena::new(0, u64::MAX));
+    // Nothing is ever reopened by path in a serial walk, so the root's
+    // descriptor belongs to the root frame and closes with it. This duplicate
+    // is only ever asked which volume it is on (`Walker::volume_lost`), and
+    // outlives the frame's descriptor.
+    let root_probe = root_fd
+        .try_clone()
+        .map_err(|e| with_context(e, format!("dup {}", opts.root.display())))?;
     let ctx = WalkerCtx {
         opener,
         inodes,
@@ -660,9 +700,7 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
         progress: &progress,
         root_volume,
         root_path: &opts.root,
-        // Nothing is ever reopened by path in a serial walk, so the root's
-        // descriptor can belong to the root frame and close with it.
-        root_dir: None,
+        root_dir: Some(root_probe.as_fd()),
     };
     let mut walker = Walker::new(&ctx, None, opts, &lane)?;
     // `run_root` records the reason in the stats; a serial walk has no other
@@ -1014,8 +1052,10 @@ pub(crate) struct WalkerCtx<'a, O> {
     /// with a path relative to the root; it is never opened again.
     pub root_path: &'a Path,
     /// The scan root, open for the whole walk: every published directory is
-    /// reopened relative to it with [`open_beneath`]. `None` in a serial walk,
-    /// which never reopens anything.
+    /// reopened relative to it with [`open_beneath`], and it is the descriptor
+    /// asked whether the volume is still there. In a serial walk it is a
+    /// duplicate that is only ever asked the latter; `None` in unit tests that
+    /// build a walker by hand.
     pub root_dir: Option<BorrowedFd<'a>>,
 }
 
@@ -1654,6 +1694,10 @@ impl<'a, O: DirOpener> Walker<'a, O> {
 
     /// Account for a failure on directory `id`.
     fn note_error(&mut self, id: ScanId, errno: c_int) -> Result<(), Incomplete> {
+        // Asked before the slot is locked: it is a syscall, and none may be
+        // made under the lock. Only the errnos a vanished volume can produce
+        // pay for it, and only the `_` arm below can act on the answer.
+        let lost = may_mean_volume_gone(errno) && self.volume_lost(id);
         let mut slot = self.lock()?;
         match errno {
             libc::EPERM | libc::EACCES => {
@@ -1692,8 +1736,43 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             _ => slot.stats.errors += 1,
         }
         self.publish(&mut slot);
+        if lost {
+            // Terminal: `guard` records it and raises the shared halt, so every
+            // other worker stops at its next directory or batch.
+            return Err(Incomplete::VolumeLost);
+        }
         Ok(())
     }
+
+    /// Whether the volume the scan began on is gone: the root's descriptor no
+    /// longer answers `fstatfs`, or names a different volume. A walk with no
+    /// root descriptor to ask (some unit tests) can never tell, so says no.
+    fn volume_lost(&self, on: ScanId) -> bool {
+        let Some(root) = self.root_dir else {
+            return false;
+        };
+        match self.lane.during(on, || volume_of(root.as_raw_fd())) {
+            Ok(volume) => volume != self.root_volume,
+            Err(_) => true,
+        }
+    }
+}
+
+/// Whether a failed directory operation with this errno may be the volume
+/// going away rather than something wrong with the one directory: the churn
+/// class (`ENOENT`, `ENOTDIR`) and the I/O class (`EIO`, `ENXIO`, `ENODEV`,
+/// `EBADF`), plus `ENOTSUP`, which is what `fstatfs` says on a detached image.
+fn may_mean_volume_gone(errno: c_int) -> bool {
+    matches!(
+        errno,
+        libc::ENOENT
+            | libc::ENOTDIR
+            | libc::EIO
+            | libc::ENXIO
+            | libc::ENODEV
+            | libc::EBADF
+            | libc::ENOTSUP
+    )
 }
 
 /// `rel` (relative to the scan root, empty for the root itself) as a user
@@ -2095,6 +2174,92 @@ mod tests {
         assert_eq!(stats.incomplete, Some(Incomplete::OutOfMemory));
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.files, 1, "the walk went on to other/f.bin");
+    }
+
+    /// Every errno a vanished volume can produce, on a volume that is fine:
+    /// the directory is counted as churn and the walk goes on. This is the
+    /// half of the volume-lost rule that keeps ordinary churn ordinary.
+    #[test]
+    fn volume_gone_errnos_on_a_live_volume_are_churn_not_loss() {
+        for errno in [
+            libc::ENOENT,
+            libc::ENOTDIR,
+            libc::EIO,
+            libc::ENXIO,
+            libc::ENODEV,
+            libc::EBADF,
+            libc::ENOTSUP,
+        ] {
+            assert!(may_mean_volume_gone(errno), "errno {errno}");
+            let fx = Fixture::new().unwrap();
+            fx.file("victim/inner.bin", 4096).unwrap();
+            fx.file("other/f.bin", 4096).unwrap();
+
+            let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(errno)).unwrap();
+
+            assert_eq!(stats.incomplete, None, "errno {errno}");
+            assert_eq!(stats.errors, 1, "errno {errno}");
+            assert_eq!(
+                stats.files, 1,
+                "errno {errno}: the walk went on to other/f.bin"
+            );
+        }
+    }
+
+    /// Detaches its image the first time a directory below the root is
+    /// opened, then opens for real, so that open meets a volume that is gone:
+    /// the same `ENOTDIR` a detach under a real walk produces, with no race
+    /// about when.
+    struct DetachOnFirstOpen {
+        image: std::sync::Mutex<DiskImage>,
+        fired: AtomicBool,
+    }
+
+    impl DetachOnFirstOpen {
+        fn new(image: DiskImage) -> Self {
+            DetachOnFirstOpen {
+                image: std::sync::Mutex::new(image),
+                fired: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl DirOpener for DetachOnFirstOpen {
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if !self.fired.swap(true, Ordering::SeqCst) {
+                self.image.lock().unwrap().force_detach().unwrap();
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+    }
+
+    #[test]
+    fn a_volume_lost_mid_walk_stops_the_walk_as_volume_lost() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let image = DiskImage::attach(&mnt, 16).unwrap();
+        for d in 0..4 {
+            fs::create_dir(mnt.join(format!("d{d}"))).unwrap();
+            File::create(mnt.join(format!("d{d}/f"))).unwrap();
+        }
+        // Precondition: undisturbed, the same walk sees everything and is
+        // complete, so what follows is the detach and nothing else.
+        let (_, whole) = walk_serial(&opts(&mnt)).unwrap();
+        assert_eq!((whole.dirs, whole.files, whole.errors), (5, 4, 0));
+        assert_eq!(whole.incomplete, None);
+
+        let opener = DetachOnFirstOpen::new(image);
+        let (_, stats) = walk_serial_with(&opts(&mnt), &opener).unwrap();
+
+        assert!(opener.fired.load(Ordering::SeqCst), "the detach never ran");
+        assert_eq!(stats.incomplete, Some(Incomplete::VolumeLost));
+        assert!(stats.errors >= 1, "the failing directory is still counted");
+        assert!(
+            stats.files < 4,
+            "{} files from a detached volume",
+            stats.files
+        );
     }
 
     /// Hands back a regular file's descriptor for the directory `victim`, so

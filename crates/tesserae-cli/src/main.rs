@@ -29,9 +29,9 @@
 //!   that could not be read for lack of permission, mount points that were
 //!   not entered and the depth cap are reported, but they are the scan's
 //!   policy and not a reason it stopped, so they do not change the status.
-//! * `2`: the scan returned a partial result (cancelled, stalled, out of
-//!   memory or descriptors, node budget, malformed batch). The totals are
-//!   printed anyway, with the reason.
+//! * `2`: the scan returned a partial result (cancelled, stalled, volume
+//!   lost, out of memory or descriptors, node budget, malformed batch). The
+//!   totals are printed anyway, with the reason.
 //! * `1`: nothing was scanned (the root could not be opened, bad arguments,
 //!   the snapshot could not be built).
 //!
@@ -82,7 +82,8 @@ options:
 
 exit status:
   0  the scan completed
-  2  the scan is partial; the totals are printed with the reason
+  2  the scan is partial (stalled, volume lost, node budget, ...); the
+     totals are printed with the reason in `incomplete`
   1  nothing was scanned: bad arguments, an unopenable root, or no memory
 ";
 

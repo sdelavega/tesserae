@@ -76,8 +76,12 @@ the CLI prints it (walk plus freeze):
 |---|---|---|---|---|---|---|---|
 | seconds | 5.578 | 5.483 | 4.149 | 5.432 | 4.328 | 5.456 | 4.386 |
 
-**Median 5.43 s** (about 92,000 nodes per second). An earlier series of three
-on a freshly built image gave 5.92, 4.40 and 5.29 s. The runs fall in two
+**Median 5.43 s** (about 92,000 nodes per second). This is the slow regime
+of the volume: every scan here followed a re-attach, and the sweep below shows
+the same image scanning in 2.2 to 2.7 s at the default 10 workers when it is
+scanned right after being built, without the re-attach. The re-attach, not
+the image, is the difference between the two numbers. An earlier series of
+three after a re-attach gave 5.92, 4.40 and 5.29 s. The runs fall in two
 groups, about 4.2 and about 5.4 s; I do not know why.
 
 Worker count, one volume, three scans each, in seconds (`--workers N`):
@@ -90,8 +94,27 @@ Worker count, one volume, three scans each, in seconds (`--workers N`):
 The scan is not CPU-bound (user time 0.03 s, system 0.7 to 1.1 s of 2 to 5 s
 elapsed) and extra workers made it slower, not faster, past two to four. This
 is one sparse disk image through the image helper; it need not hold on the
-internal SSD. It is a measurement to look at before the default worker count
-(`clamp(cores, 4, 16)`) is treated as tuned.
+internal SSD, and the sweep on the real volume below shows it does not.
+
+The same sweep on the real volume, `/System/Volumes/Data` (read-only, warm: one
+unrecorded scan first, then three rounds of 2, 4 and default workers in turn;
+the default here is 10), commit `9a5da81` plus the volume-lost check, which
+runs only after a failed directory. Elapsed seconds, 6.62 million nodes each,
+every scan complete:
+
+| workers | run 1 | run 2 | run 3 | median |
+|---|---|---|---|---|
+| 2 | 50.23 | 50.04 | 50.27 | **50.23** |
+| 4 | 29.39 | 29.15 | 30.20 | **29.39** |
+| default (10) | 21.40 | 21.75 | 22.61 | **21.75** |
+
+Here the scan scales with workers, close to inversely from 2 to 4 and still
+improving to 10, the opposite of the sparse image. So the sparse-image result
+is a property of that image, not of the engine, and **it is no evidence
+against the default** `clamp(cores, 4, 16)`: on the volume the app will
+actually scan, 10 workers on 10 cores is the best of the three points
+measured. Recommendation: keep the default. Not measured: 16 workers on this
+machine, or any other core count.
 
 For scale, the unit tests' UDIF images scanned 100,000 files in 0.33 to 0.36 s
 in a debug build with 1 to 4 workers (about 290,000 nodes per second),
@@ -118,10 +141,10 @@ see how far the live volume moves on its own.
 
 **Difference, CLI run 1 minus `du`: +67 KiB, or 0.00001%.** Run 2 minus `du`:
 -1,505 KiB, or 0.0002%. The two CLI runs differ from each other by 1,572 KiB
-and `du`, which ran between them, falls between them. So the whole of the
-disagreement is the volume changing under the scans (about 1.5 MB of
-churn in two and a half minutes, on a machine in use), and not a counting
-difference. `du` is a different program reading `st_blocks` through
+and `du`, which ran between them, falls between them. The +67 KiB is well
+inside that observed churn (1,572 KiB run to run, on a machine in use), so
+these runs show no counting difference larger than the churn, though a
+smaller one cannot be excluded. `du` is a different program reading `st_blocks` through
 `lstat`; the CLI reads `ATTR_FILE_ALLOCSIZE` through `getattrlistbulk`.
 
 What the two have in common, which is why they agree:
@@ -161,9 +184,10 @@ local Time Machine snapshots on the volume (blocks they alone hold are
 consumed but in no live file), the 252 unreadable paths, APFS metadata, and
 purgeable space. Clones go the other way: they make the tree larger than the
 blocks used, so the gap is net of an unmeasured clone over-count. Logical
-bytes (3.91 TB) are five times the allocated figure because of sparse files
-(virtual-machine and similar images), which `ATTR_FILE_DATALENGTH` reports at
-their full length.
+bytes (3.91 TB) are five times the allocated figure, probably mostly sparse
+files (virtual-machine and similar images, which `ATTR_FILE_DATALENGTH`
+reports at their full length); clones and compressed files also make logical
+exceed allocated, and nothing here separates the three.
 
 The CLI is five and a half times faster than `du` here (21 s against 120 s),
 and walks 6.6 million nodes against a budget of 25 million.

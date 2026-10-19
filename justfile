@@ -16,12 +16,15 @@ default:
     @just --list
 
 # Every check CI runs, in CI's order.
-gate: lint test deny header ship-lib
+gate: lint test header ship-lib deny
 
 # All tests, including the disk-image integration tests (they attach and
-# detach real images with hdiutil).
+# detach real images with hdiutil), then the one test CI runs on its own:
+# `setrlimit` is process-wide, so that test is `#[ignore]`d in the suite and
+# gets a process and a thread to itself here.
 test:
     cargo test --workspace
+    cargo test -p tesserae-core --lib -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
 
 # Formatting and clippy, for the workspace and for fuzz/ (a separate crate).
 lint:
