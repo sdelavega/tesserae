@@ -33,7 +33,9 @@
 #
 #   1. cargo's own feature resolution for a normal (non-dev) build of
 #      tesserae-ffi does not include the feature;
-#   2. the release archive does not contain the hook's panic message.
+#   2. the release archive does not contain the name of the hooks' marker symbol
+#      (TESSERAE_TEST_HOOKS_PRESENT in tesserae-core's test_hooks.rs, kept by
+#      #[used] and exported by #[no_mangle] so LTO cannot remove it).
 #
 # The second is run against a control first: the same search, on a release
 # build of the same archive with the hooks forced on, must find the message, or
@@ -51,7 +53,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-marker='test-hooks: injected worker panic'
+# The symbol's NAME, not its bytes: in some builds the archive holds LLVM
+# bitcode, which does not store a data constant's bytes contiguously, while
+# both Mach-O and bitcode keep symbol names as plain strings.
+marker='TESSERAE_TEST_HOOKS_PRESENT'
 
 tree="$(cargo tree -p tesserae-ffi -e features --edges normal)"
 if [ "$(printf '%s\n' "$tree" | grep -c 'feature "test-hooks"' || true)" != 0 ]; then
@@ -70,6 +75,22 @@ CARGO_TARGET_DIR="$control_dir" cargo build -p tesserae-ffi --release --tests --
 control="$(find "$control_dir/release/deps" -maxdepth 1 -name 'libtesserae_ffi-*.a' -print -quit)"
 if [ -z "$control" ] || [ "$(grep -ac "$marker" "$control" || true)" = 0 ]; then
     echo "error: control failed: the hooks-on release archive has no '$marker', so this check searches nothing" >&2
+    # Evidence for whoever reads this failure: what was built, and whether
+    # any part of the marker is present.
+    {
+        echo "archives under $control_dir/release/deps:"
+        ls -l "$control_dir"/release/deps/*.a 2>&1 || true
+        if [ -n "$control" ]; then
+            members="$(mktemp -d)"
+            (cd "$members" && ar -x "$control" 2>&1 || true)
+            echo "member types:"
+            file -b "$members"/* 2>/dev/null | sort | uniq -c || true
+            for part in 'tesserae-test-hooks' 'TESSERAE_TEST_HOOKS_PRESENT' 'injected worker panic'; do
+                echo "occurrences of '$part': $(grep -ac "$part" "$control" || true)"
+            done
+            rm -rf "$members"
+        fi
+    } >&2
     exit 1
 fi
 
@@ -80,7 +101,7 @@ if [ ! -f "$lib" ]; then
     exit 1
 fi
 if [ "$(grep -ac "$marker" "$lib" || true)" != 0 ]; then
-    echo "error: $lib contains the test-hooks panic message" >&2
+    echo "error: $lib contains the test-hooks marker" >&2
     exit 1
 fi
 echo "ok: $lib has no test hooks"
