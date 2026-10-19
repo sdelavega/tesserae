@@ -124,14 +124,28 @@ pub fn volume_of(fd: c_int) -> io::Result<VolumeId> {
 fn fstatfs(fd: c_int) -> io::Result<libc::statfs> {
     // SAFETY: `statfs` is plain data for which all-zero is a valid value.
     let mut st: libc::statfs = unsafe { std::mem::zeroed() };
-    loop {
+    retry_eintr(|| {
         // SAFETY: `st` is a live, writable `statfs`.
         if unsafe { libc::fstatfs(fd, &mut st) } == 0 {
-            return Ok(st);
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let err = io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::EINTR) {
-            return Err(err);
+    })?;
+    Ok(st)
+}
+
+/// Run `call` again for as long as it fails with `EINTR`, and return what it
+/// finally returns. `call` must make the system call and turn its failure into
+/// `io::Error::last_os_error()` before anything else can overwrite `errno`.
+///
+/// The one retry loop for an interruptible system call: the descriptor opens
+/// in [`crate::walk`] and the `fstatfs` here go through it.
+pub(crate) fn retry_eintr<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        match call() {
+            Err(err) if err.raw_os_error() == Some(libc::EINTR) => {}
+            done => return done,
         }
     }
 }

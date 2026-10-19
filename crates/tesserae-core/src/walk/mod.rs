@@ -185,23 +185,42 @@
 //! the lane while it lasts. [`Lane`] has the protocol and why it cannot
 //! deadlock; [`WalkOptions::stall_timeout`] has what it buys.
 
-use std::ffi::{CStr, CString, OsStr};
+mod coordination;
+mod errors;
+mod lane;
+mod open;
+
+pub(crate) use coordination::{Halt, NodeBudget, Share, WalkerCtx};
+pub use errors::{os_errno, with_context, Incomplete};
+pub(crate) use lane::Lane;
+#[allow(unused_imports)] // linked from the docs above; the tests elsewhere call it
+pub(crate) use open::open_beneath;
+pub(crate) use open::{open_root, DirOpener, OpenAt};
+
+use std::ffi::OsStr;
 use std::io;
-use std::ops::{Deref, DerefMut};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::raw::c_int;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::arena::{Arena, ArenaError, ScanId, ScanNode, FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
+#[cfg(test)]
+use crate::arena::ArenaError;
+#[cfg(doc)]
+use crate::arena::FLAG_PERM_DENIED;
+use crate::arena::{Arena, ScanId, ScanNode, FLAG_HARDLINK_DUP};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
 use crate::boundary::{should_descend, volume_of, SkipReason, VolumeId};
 use crate::dedup::{InodeSet, ReserveFailed};
 use crate::parse::{entries, ObjType, RawEntry};
-use crate::progress::{Progress, ProgressValues};
+use crate::progress::Progress;
+use coordination::BUDGET_CHUNK;
+use lane::{Dir, Held, Slot};
+use open::{errno, nul_terminated, with_cstr};
 
 /// The default scan root: the user-visible data volume on modern macOS.
 const DEFAULT_ROOT: &str = "/System/Volumes/Data";
@@ -232,12 +251,6 @@ pub(crate) static KEPT_TOO_LONG: AtomicU64 = AtomicU64::new(0);
 /// Test-only and global for the same reason as [`KEPT_TOO_LONG`].
 #[cfg(test)]
 pub(crate) static OOM_INJECTED: AtomicU64 = AtomicU64::new(0);
-/// Nodes a worker draws from the shared [`NodeBudget`] at a time. One atomic
-/// per node would put every worker on the same cache line for the whole scan;
-/// one per thousand is invisible. The cost is that a worker can hold up to
-/// this many unused units when the budget runs out, which at the 25M default
-/// is under a tenth of a percent.
-const BUDGET_CHUNK: u64 = 1024;
 
 #[derive(Debug, Clone)]
 pub struct WalkOptions {
@@ -363,287 +376,6 @@ pub struct WalkStats {
     pub incomplete: Option<Incomplete>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Incomplete {
-    Cancelled,
-    NodeBudget,
-    OutOfMemory,
-    Stalled,
-    /// `openat` failed with `EMFILE` or `ENFILE`: the walk ran out of file
-    /// descriptors. Unlike the races counted in [`WalkStats::errors`], this
-    /// means the result is systematically short, so it is reported here. The
-    /// directory that could not be opened is skipped and the walk carries on
-    /// (popping frames frees descriptors), but every subtree skipped this way
-    /// is missing from the totals.
-    FdExhausted,
-    /// The parser rejected a `getattrlistbulk` batch, so the entries after the
-    /// bad one were never read. [`WalkStats::lost_entries`] says how many.
-    MalformedBatch,
-    /// The volume being scanned went away mid-walk (a disk image detached, a
-    /// drive pulled): the root's descriptor no longer answers `fstatfs`, or
-    /// answers with another volume's identity. Terminal: every other directory
-    /// the walk had yet to read is gone too, so the walk stops where it is and
-    /// the tree is whatever was read before. Raised only after a directory
-    /// failed with an errno that can mean "the volume is gone" (`ENOENT`,
-    /// `ENOTDIR`, `EIO`, `ENXIO`, `ENODEV`, `EBADF`, `ENOTSUP`) *and* a fresh
-    /// `fstatfs` of the root says it is; the same errnos on a live volume stay
-    /// ordinary churn in [`WalkStats::errors`].
-    VolumeLost,
-}
-
-impl From<ArenaError> for Incomplete {
-    fn from(e: ArenaError) -> Self {
-        match e {
-            ArenaError::NodeBudgetExceeded => Incomplete::NodeBudget,
-            ArenaError::OutOfMemory => Incomplete::OutOfMemory,
-        }
-    }
-}
-
-impl Incomplete {
-    /// A nonzero code for [`Halt`]. The match is exhaustive, so a new variant
-    /// is a compile error here rather than a reason that silently stops
-    /// travelling between workers.
-    fn code(self) -> u8 {
-        match self {
-            Incomplete::Cancelled => 1,
-            Incomplete::NodeBudget => 2,
-            Incomplete::OutOfMemory => 3,
-            Incomplete::Stalled => 4,
-            Incomplete::FdExhausted => 5,
-            Incomplete::MalformedBatch => 6,
-            Incomplete::VolumeLost => 7,
-        }
-    }
-
-    fn from_code(code: u8) -> Option<Incomplete> {
-        [
-            Incomplete::Cancelled,
-            Incomplete::NodeBudget,
-            Incomplete::OutOfMemory,
-            Incomplete::Stalled,
-            Incomplete::FdExhausted,
-            Incomplete::MalformedBatch,
-            Incomplete::VolumeLost,
-        ]
-        .into_iter()
-        .find(|i| i.code() == code)
-    }
-
-    /// How strongly this reason describes what *stopped* the walk.
-    ///
-    /// [`Incomplete::FdExhausted`] and [`Incomplete::MalformedBatch`] are
-    /// noticed and walked past, so a reason that ended the walk outranks them.
-    /// This is the precedence a serial walk already has — a terminal reason
-    /// overwrites whatever the walk had flagged — expressed so that merging
-    /// several workers' stats can follow it too.
-    pub(crate) fn rank(self) -> u8 {
-        match self {
-            Incomplete::FdExhausted | Incomplete::MalformedBatch => 1,
-            Incomplete::Cancelled
-            | Incomplete::NodeBudget
-            | Incomplete::OutOfMemory
-            | Incomplete::Stalled
-            | Incomplete::VolumeLost => 2,
-        }
-    }
-}
-
-/// The reason the walk is over, or none yet: one terminal failure in any
-/// worker ends the whole walk.
-///
-/// Only the first reason is kept, and a worker that sees one stops where it is
-/// and reports it. See the module's note on why a push failure cannot be
-/// local.
-pub(crate) struct Halt {
-    /// `0` for "still walking"; otherwise an [`Incomplete::code`].
-    code: AtomicU8,
-}
-
-impl Halt {
-    pub(crate) fn new() -> Self {
-        Halt {
-            code: AtomicU8::new(0),
-        }
-    }
-
-    /// Record `why` unless a reason is already recorded. First writer wins.
-    pub(crate) fn raise(&self, why: Incomplete) {
-        // Release so that whatever the failing worker had written is visible
-        // to a worker that reads the reason; Relaxed on the failure path
-        // because the value is then discarded.
-        let _ = self
-            .code
-            .compare_exchange(0, why.code(), Ordering::Release, Ordering::Relaxed);
-    }
-
-    pub(crate) fn reason(&self) -> Option<Incomplete> {
-        match self.code.load(Ordering::Acquire) {
-            0 => None,
-            code => Incomplete::from_code(code),
-        }
-    }
-}
-
-/// The whole walk's node ceiling.
-///
-/// One counter for every worker, so the limit means what it says however many
-/// threads are drawing on it. A worker takes [`BUDGET_CHUNK`] units at a time
-/// into a local allowance and spends them one node at a time.
-pub(crate) struct NodeBudget {
-    remaining: AtomicU64,
-}
-
-impl NodeBudget {
-    pub(crate) fn new(total: u64) -> Self {
-        NodeBudget {
-            remaining: AtomicU64::new(total),
-        }
-    }
-
-    /// Hand out up to `want` units and return how many were granted, which is
-    /// `0` once the budget is spent. Relaxed throughout: the counter publishes
-    /// no data, and its own modification order is all the accounting needs.
-    fn take(&self, want: u64) -> u64 {
-        let mut now = self.remaining.load(Ordering::Relaxed);
-        loop {
-            let grant = now.min(want);
-            if grant == 0 {
-                return 0;
-            }
-            match self.remaining.compare_exchange_weak(
-                now,
-                now - grant,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return grant,
-                Err(seen) => now = seen,
-            }
-        }
-    }
-}
-
-/// How a worker hands directories to the rest of the pool, and how it reports
-/// a fact about a node another worker's arena holds.
-///
-/// A serial walk has none of this and passes `None`.
-pub(crate) trait Share {
-    /// Whether the pool has room for more stealable directories. A worker that
-    /// is told `false` keeps its remaining subdirectories and descends them
-    /// itself with `openat`.
-    fn wants_work(&self) -> bool;
-
-    /// Offer `node`, the directory at `rel` (relative to the scan root) and at
-    /// absolute depth `depth`, to any worker. The implementation must count
-    /// the task before it can be seen, or the termination protocol could
-    /// observe an empty pool while this directory is still unwalked.
-    fn publish(&self, rel: Arc<Path>, node: ScanId, depth: u16);
-
-    /// Set `flags` on `node`, which belongs to another worker's arena and so
-    /// cannot be touched until the walk has collected every arena. Returns
-    /// `false` if the flag could not be recorded (no memory for it), so the
-    /// caller can say the result is short.
-    fn flag_foreign(&self, node: ScanId, flags: u16) -> bool;
-}
-
-/// How the walker opens a child directory. The one seam in the descent path.
-///
-/// Production uses [`OpenAt`]. Tests substitute an opener that mutates the
-/// tree immediately before delegating to the real one, which is the only
-/// deterministic way to reach the window between a directory being enumerated
-/// and being opened.
-///
-/// `Sync` is a supertrait so that one opener can be handed to every worker of
-/// the parallel walk. That is the whole reason this is a trait rather than a
-/// `cfg(test)` thread-local: a thread-local seam would be invisible to the
-/// worker threads.
-pub(crate) trait DirOpener: Sync {
-    /// Open the directory `name`, a single entry name, relative to the
-    /// directory open as `parent`. Returns the errno on failure.
-    fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int>;
-
-    /// Reopen a directory the parallel walker published: `rel` is a path of
-    /// one or more components relative to `root`, the scan root's descriptor.
-    ///
-    /// The default is [`open_beneath`], which refuses a symlink in *any*
-    /// component. A test opener that intercepts only [`open_dir_at`] gets the
-    /// real reopen; one that wants to reach this window overrides this too.
-    ///
-    /// [`open_dir_at`]: DirOpener::open_dir_at
-    fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
-        open_beneath(root, rel)
-    }
-}
-
-/// Flags for every directory the walk opens below the root.
-const DIR_FLAGS: c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
-
-/// `openat(2)` with `EINTR` retried and the descriptor owned.
-fn openat_retrying(parent: RawFd, name: &CStr, flags: c_int) -> Result<OwnedFd, c_int> {
-    loop {
-        // SAFETY: `name` is a live NUL-terminated string.
-        let fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
-        if fd >= 0 {
-            // SAFETY: `openat` just returned this descriptor and nothing else
-            // owns it.
-            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
-        }
-        match errno() {
-            libc::EINTR => continue,
-            e => return Err(e),
-        }
-    }
-}
-
-/// Open the directory at `rel` beneath `root` without following a symlink in
-/// any component of `rel`.
-///
-/// # The guarantee, as measured
-///
-/// `O_NOFOLLOW` covers only the final component, so a reopen by path with it
-/// alone could be redirected by an ancestor swapped for a symlink between
-/// enumeration and reopen — exactly the race the serial walker's
-/// descriptor-relative descent exists to close. `O_NOFOLLOW_ANY` (macOS 11+;
-/// the deployment target is 13.0) refuses a symlink anywhere in `rel`.
-/// Probed on this machine (macOS 27.2), relative to a directory descriptor:
-///
-/// * no symlink in `rel`: opens;
-/// * an intermediate component is a symlink, including an ancestor swapped
-///   for one after the root was opened: fails with `ELOOP` where plain
-///   `O_NOFOLLOW` follows it and opens the redirect target;
-/// * the final component is a symlink: `ELOOP` (plain `O_NOFOLLOW` with
-///   `O_DIRECTORY` gives `ENOTDIR`);
-/// * symlinks in the path that was used to open `root` itself (fixtures live
-///   under `/var`, a symlink to `private/var`) do not matter: `root` is a
-///   descriptor, so nothing above it is resolved again;
-/// * `..` is still permitted. `rel` is built only from names the kernel
-///   returned for directory entries, which are never `.`, `..` or contain a
-///   `/`, so it cannot climb out of the root.
-///
-/// Either errno lands in [`WalkStats::errors`], as every other open failure
-/// that is neither a denial nor a resource shortfall does: the directory is
-/// recorded but not entered.
-pub(crate) fn open_beneath(root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
-    openat_retrying(root, rel, DIR_FLAGS | libc::O_NOFOLLOW_ANY)
-}
-
-/// The real thing: `openat(2)` that refuses to follow a symlink and refuses
-/// anything that is not a directory.
-pub(crate) struct OpenAt;
-
-impl DirOpener for OpenAt {
-    fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-        openat_retrying(parent, name, DIR_FLAGS | libc::O_NOFOLLOW)
-    }
-}
-
-fn errno() -> c_int {
-    io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
-
 /// Walk `opts.root` on the calling thread.
 ///
 /// Open file descriptors are bounded by tree depth (at most `max_depth + 1`),
@@ -731,113 +463,6 @@ pub(crate) fn root_volume_of(opts: &WalkOptions, root_fd: &OwnedFd) -> io::Resul
         .map_err(|e| with_context(e, format!("fstatfs {}", opts.root.display())))
 }
 
-/// An error with a message naming what was being done, wrapped around the OS
-/// error that caused it.
-///
-/// `io::Error::new(kind, msg)` would discard the OS error number, and the
-/// number matters: `ErrorKind::PermissionDenied` is both `EACCES` (an ordinary
-/// permission) and `EPERM` (on macOS, the privacy layer refusing access to a
-/// protected folder), and which one it was decides whether asking the user for
-/// Full Disk Access could help. So the original error stays reachable as the
-/// source, and [`os_errno`] reads the number back through it. The alternative,
-/// returning the original error unwrapped, would have lost the path from the
-/// message.
-#[derive(Debug)]
-struct Context {
-    msg: String,
-    source: io::Error,
-}
-
-impl std::fmt::Display for Context {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.msg, self.source)
-    }
-}
-
-impl std::error::Error for Context {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
-}
-
-/// `err` with `msg` in front, keeping its kind and its OS error number. Public
-/// so that a test elsewhere can build the error this crate builds.
-pub fn with_context(err: io::Error, msg: String) -> io::Error {
-    io::Error::new(err.kind(), Context { msg, source: err })
-}
-
-/// The OS error number behind `err`, if there is one: its own, or that of the
-/// error [`with_context`] wrapped. Every error this crate returns for a failed
-/// system call keeps its number recoverable this way.
-pub fn os_errno(err: &io::Error) -> Option<i32> {
-    err.raw_os_error().or_else(|| {
-        err.get_ref()
-            .and_then(|inner| inner.downcast_ref::<Context>())
-            .and_then(|c| c.source.raw_os_error())
-    })
-}
-
-/// Open the root by path. Unlike every other directory this one may be reached
-/// through a symlink: the caller named it, so resolving it is what they meant.
-pub(crate) fn open_root(opts: &WalkOptions) -> io::Result<OwnedFd> {
-    let path = CString::new(opts.root.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "root path contains NUL"))?;
-    loop {
-        // SAFETY: `path` is a live NUL-terminated string.
-        let fd = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
-        if fd >= 0 {
-            // SAFETY: `open` just returned this descriptor.
-            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
-        }
-        let err = io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::EINTR) {
-            return Err(with_context(err, format!("open {}", opts.root.display())));
-        }
-    }
-}
-
-/// A directory the walk holds open, and the lane its close is announced on.
-///
-/// Closing a directory is a syscall like any other, and on a hung volume one
-/// can block, so it is announced on the worker's [`Lane`] exactly as an open
-/// is: a worker stuck in `close(2)` is abandoned rather than waited for.
-/// Dropping a `Dir` is how the walk closes every directory it opened, on
-/// every path out — a finished frame popped, a boundary refusal, an early
-/// return that drops the whole stack.
-struct Dir<'a> {
-    /// Always `Some` until the drop takes it.
-    fd: Option<OwnedFd>,
-    id: ScanId,
-    lane: &'a Lane,
-}
-
-impl<'a> Dir<'a> {
-    fn new(fd: OwnedFd, id: ScanId, lane: &'a Lane) -> Self {
-        Dir {
-            fd: Some(fd),
-            id,
-            lane,
-        }
-    }
-
-    fn raw(&self) -> RawFd {
-        self.fd.as_ref().map_or(-1, AsRawFd::as_raw_fd)
-    }
-}
-
-impl Drop for Dir<'_> {
-    fn drop(&mut self) {
-        if let Some(fd) = self.fd.take() {
-            self.lane.during(self.id, || drop(fd));
-        }
-    }
-}
-
 /// One directory being walked.
 struct Frame<'a> {
     /// This directory, open. Dropping the frame closes it.
@@ -847,217 +472,6 @@ struct Frame<'a> {
     children: Vec<ScanId>,
     /// Index into `children` of the next one to enter.
     next: usize,
-}
-
-/// What a worker builds and the walk's result is made of: its arena, its
-/// stats, and how much of them it has published to the shared counters.
-pub(crate) struct Slot {
-    arena: Arena,
-    stats: WalkStats,
-    /// The allocated size of every node pushed, which is what
-    /// [`Progress::bytes`] counts. Hardlink duplicates add their stored zero.
-    bytes: u64,
-    /// What has been added to the walk's [`Progress`] so far.
-    published: ProgressValues,
-    /// A test's injected arena failure: pushes are refused once the arena
-    /// holds this many nodes. See [`Lane::fail_after`].
-    #[cfg(test)]
-    oom_after: u64,
-}
-
-impl Slot {
-    fn counts(&self) -> ProgressValues {
-        ProgressValues {
-            dirs: self.stats.dirs,
-            files: self.stats.files,
-            bytes: self.bytes,
-            errors: self.stats.errors,
-        }
-    }
-}
-
-/// `ScanId::NONE`, as a lane's `busy` reads when its worker is not inside a
-/// syscall. It can never be a real id.
-const IDLE: u64 = ScanId::NONE.to_bits();
-
-/// One worker's [`Slot`] behind a lock, and what the pool's supervisor
-/// watches the worker by.
-///
-/// # Why the arena is locked, and never across a syscall
-///
-/// A worker can block inside a syscall forever (see
-/// [`WalkOptions::stall_timeout`]), and when it does the walk has to return
-/// without it — with its arena, because nodes in every other arena may name
-/// one of its nodes as their parent, and a forest with a dangling parent
-/// cannot be frozen. So the arena cannot live on the worker's stack. It lives
-/// here, and the worker holds the lock only while it is changing the slot:
-/// pushing a batch, recording a failure, reading names. It releases it across
-/// every syscall on a directory — the child `openat`, the reopen beneath the
-/// root, `getattrlistbulk`, `fstatfs` and `close` — and announces each one in
-/// `busy` for exactly as long as it lasts. A worker that is announced is
-/// therefore never holding the lock, and the supervisor can take its slot.
-///
-/// Taking leaves `None` behind. A worker that comes back from its syscall and
-/// finds `None` has been abandoned: it returns without touching anything, and
-/// [`Walker::lock`] checks the walk's halt before it even locks.
-///
-/// # No lock-order cycle
-///
-/// A worker only ever locks its own lane. The supervisor locks other lanes —
-/// to take them, and to climb a stalled directory's path through whichever
-/// arenas hold its ancestors — but one at a time, never holding two. So no
-/// thread ever waits for a lane while holding another, and there is no cycle
-/// to deadlock on.
-///
-/// # The serial walk keeps the lock
-///
-/// A serial walk goes through the same [`Walker`] with a lane of its own that
-/// nothing else ever locks. The alternative, a lock-free twin behind a
-/// generic, would be a second copy of the walk to keep in step with the
-/// first, which is the one thing this module exists to avoid. An uncontended
-/// lock taken a few times per directory costs nanoseconds against the
-/// microseconds of the syscalls between them; the report for this change has
-/// the measurement.
-///
-/// Aligned to 128 bytes, the cache-line size on Apple silicon, so that one
-/// worker's announcements do not share a line with its neighbour's.
-#[repr(align(128))]
-pub(crate) struct Lane {
-    slot: Mutex<Option<Slot>>,
-    /// The [`ScanId`] bits of the directory this worker is inside a syscall
-    /// on, or [`IDLE`].
-    busy: AtomicU64,
-    /// Syscalls this worker has completed. The watchdog's measure of
-    /// progress: unlike the counters it moves even on a run of empty
-    /// directories, so a slow volume that is still answering never looks
-    /// stalled.
-    ticks: AtomicU64,
-}
-
-impl Lane {
-    pub(crate) fn new(arena: Arena) -> Lane {
-        Lane {
-            slot: Mutex::new(Some(Slot {
-                arena,
-                stats: WalkStats::default(),
-                bytes: 0,
-                published: ProgressValues::ZERO,
-                #[cfg(test)]
-                oom_after: u64::MAX,
-            })),
-            busy: AtomicU64::new(IDLE),
-            ticks: AtomicU64::new(0),
-        }
-    }
-
-    /// Make this lane's arena refuse every push once it holds `nodes` nodes,
-    /// with [`ArenaError::OutOfMemory`] — the only way to reach that path on
-    /// purpose, since a real refusal needs the allocator to fail.
-    #[cfg(test)]
-    pub(crate) fn fail_after(&self, nodes: u64) {
-        if let Some(slot) = self.lock_raw().as_deref_mut() {
-            slot.oom_after = nodes;
-        }
-    }
-
-    /// Run `call`, a syscall on directory `on`, announced. The caller must
-    /// not be holding this lane's lock: that is the whole contract, and why
-    /// nothing that can block runs inside a [`Held`].
-    fn during<R>(&self, on: ScanId, call: impl FnOnce() -> R) -> R {
-        self.busy.store(on.to_bits(), Ordering::Release);
-        let r = call();
-        self.busy.store(IDLE, Ordering::Release);
-        // Only this worker writes its ticks, so a load and a store suffice;
-        // no read-modify-write is needed on a line nobody else writes.
-        let ticks = self.ticks.load(Ordering::Relaxed);
-        self.ticks.store(ticks.wrapping_add(1), Ordering::Relaxed);
-        r
-    }
-
-    /// The directory this worker is inside a syscall on, if it is.
-    pub(crate) fn busy_on(&self) -> Option<ScanId> {
-        match self.busy.load(Ordering::Acquire) {
-            IDLE => None,
-            bits => Some(ScanId::from_bits(bits)),
-        }
-    }
-
-    pub(crate) fn ticks(&self) -> u64 {
-        self.ticks.load(Ordering::Relaxed)
-    }
-
-    /// The slot, locked, unless it has been taken. Poisoning is ignored: a
-    /// worker that panicked has its panic resumed on the caller, and the slot
-    /// is consistent between any two statements that change it.
-    fn lock_raw(&self) -> Option<Held<'_>> {
-        let guard = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.is_some().then_some(Held(guard))
-    }
-
-    /// Take the slot: its arena, its stats, and the counts not yet published.
-    /// `None` if it was taken already. After this the worker can never change
-    /// it again.
-    pub(crate) fn take(&self) -> Option<(Arena, WalkStats, ProgressValues)> {
-        let slot = self
-            .slot
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()?;
-        let unpublished = slot.counts().since(slot.published);
-        Some((slot.arena, slot.stats, unpublished))
-    }
-
-    /// Read this lane's arena under its lock. `None` once it has been taken.
-    pub(crate) fn read<R>(&self, f: impl FnOnce(&Arena) -> R) -> Option<R> {
-        self.lock_raw().map(|held| f(&held.arena))
-    }
-}
-
-/// A lane's slot, locked and known to be there.
-struct Held<'a>(MutexGuard<'a, Option<Slot>>);
-
-impl Deref for Held<'_> {
-    type Target = Slot;
-
-    fn deref(&self) -> &Slot {
-        self.0
-            .as_ref()
-            .expect("a Held is only made from a slot that is there")
-    }
-}
-
-impl DerefMut for Held<'_> {
-    fn deref_mut(&mut self) -> &mut Slot {
-        self.0
-            .as_mut()
-            .expect("a Held is only made from a slot that is there")
-    }
-}
-
-/// What every worker of one walk has in common.
-pub(crate) struct WalkerCtx<'a, O> {
-    pub opener: &'a O,
-    /// Inodes already seen with more than one link. One instance for the whole
-    /// walk, however many workers.
-    pub inodes: &'a InodeSet,
-    pub budget: &'a NodeBudget,
-    pub halt: &'a Halt,
-    /// The walk's own counters, which every worker publishes into once per
-    /// batch. The pool's supervisor copies them into the caller's
-    /// [`Progress`]; see [`crate::progress`] for why they are not the same.
-    pub progress: &'a Progress,
-    /// The volume the scan root lives on. Every directory opened is compared
-    /// with it; see `Walker::admit`.
-    pub root_volume: VolumeId,
-    /// The scan root as the caller named it. Reported paths are this joined
-    /// with a path relative to the root; it is never opened again.
-    pub root_path: &'a Path,
-    /// The scan root, open for the whole walk: every published directory is
-    /// reopened relative to it with [`open_beneath`], and it is the descriptor
-    /// asked whether the volume is still there. In a serial walk it is a
-    /// duplicate that is only ever asked the latter; `None` in unit tests that
-    /// build a walker by hand.
-    pub root_dir: Option<BorrowedFd<'a>>,
 }
 
 /// One thread walking. A serial walk has one; the pool has one per worker,
@@ -1692,88 +1106,6 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         })?;
         Ok(Dir::new(fd, node, self.lane))
     }
-
-    /// Account for a failure on directory `id`.
-    fn note_error(&mut self, id: ScanId, errno: c_int) -> Result<(), Incomplete> {
-        // Asked before the slot is locked: it is a syscall, and none may be
-        // made under the lock. Only the errnos a vanished volume can produce
-        // pay for it, and only the `_` arm below can act on the answer.
-        let lost = may_mean_volume_gone(errno) && self.volume_lost(id);
-        let mut slot = self.lock()?;
-        match errno {
-            libc::EPERM | libc::EACCES => {
-                let path = self.report_path_of(&slot, id)?;
-                slot.stats
-                    .unreadable
-                    .try_reserve(1)
-                    .map_err(|_| Incomplete::OutOfMemory)?;
-                slot.stats.unreadable.push(path);
-                // The path list is for the report; the flag is what lets the
-                // node itself render as locked instead of as an empty folder.
-                if let Some(node) = slot.arena.get_mut(id) {
-                    node.flags |= FLAG_PERM_DENIED;
-                } else if let Some(share) = self.share {
-                    // A stolen directory: its node belongs to the worker that
-                    // enumerated the parent, so the flag is recorded and
-                    // applied once the workers have finished. If even that one
-                    // slot cannot be had, the node will render as an empty
-                    // folder rather than a locked one, and the result says so.
-                    if !share.flag_foreign(id, FLAG_PERM_DENIED) {
-                        slot.stats.incomplete.get_or_insert(Incomplete::OutOfMemory);
-                    }
-                }
-            }
-            libc::ENOMEM => {
-                // The kernel, not this process's arena, ran out of memory: a
-                // shortfall, so flagged like descriptor exhaustion.
-                slot.stats.incomplete.get_or_insert(Incomplete::OutOfMemory);
-            }
-            libc::EMFILE | libc::ENFILE => {
-                // Not counted in `errors`: that field holds benign races, and
-                // this one makes the totals wrong. The first reason wins; a
-                // later terminal reason still overwrites it in `walk_serial_with`.
-                slot.stats.incomplete.get_or_insert(Incomplete::FdExhausted);
-            }
-            _ => slot.stats.errors += 1,
-        }
-        self.publish(&mut slot);
-        if lost {
-            // Terminal: `guard` records it and raises the shared halt, so every
-            // other worker stops at its next directory or batch.
-            return Err(Incomplete::VolumeLost);
-        }
-        Ok(())
-    }
-
-    /// Whether the volume the scan began on is gone: the root's descriptor no
-    /// longer answers `fstatfs`, or names a different volume. A walk with no
-    /// root descriptor to ask (some unit tests) can never tell, so says no.
-    fn volume_lost(&self, on: ScanId) -> bool {
-        let Some(root) = self.root_dir else {
-            return false;
-        };
-        match self.lane.during(on, || volume_of(root.as_raw_fd())) {
-            Ok(volume) => volume != self.root_volume,
-            Err(_) => true,
-        }
-    }
-}
-
-/// Whether a failed directory operation with this errno may be the volume
-/// going away rather than something wrong with the one directory: the churn
-/// class (`ENOENT`, `ENOTDIR`) and the I/O class (`EIO`, `ENXIO`, `ENODEV`,
-/// `EBADF`), plus `ENOTSUP`, which is what `fstatfs` says on a detached image.
-fn may_mean_volume_gone(errno: c_int) -> bool {
-    matches!(
-        errno,
-        libc::ENOENT
-            | libc::ENOTDIR
-            | libc::EIO
-            | libc::ENXIO
-            | libc::ENODEV
-            | libc::EBADF
-            | libc::ENOTSUP
-    )
 }
 
 /// `rel` (relative to the scan root, empty for the root itself) as a user
@@ -1792,30 +1124,6 @@ pub(crate) fn join_root(root: &Path, rel: &[u8]) -> Result<PathBuf, Incomplete> 
         bytes.extend_from_slice(rel);
     }
     Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
-}
-
-/// `bytes`, NUL-terminated in `z`.
-///
-/// A heap-allocated `CString` per directory would be an allocation on the
-/// walk's hot path that can fail. Anything longer than `MAX_PATH_BYTES` could
-/// not be opened anyway, so it is `ENAMETOOLONG` here rather than in the
-/// kernel.
-fn nul_terminated<'z>(
-    z: &'z mut [u8; MAX_PATH_BYTES + 1],
-    bytes: &[u8],
-) -> Result<&'z CStr, c_int> {
-    if bytes.len() > MAX_PATH_BYTES {
-        return Err(libc::ENAMETOOLONG);
-    }
-    z[..bytes.len()].copy_from_slice(bytes);
-    z[bytes.len()] = 0;
-    CStr::from_bytes_with_nul(&z[..=bytes.len()]).map_err(|_| libc::EINVAL)
-}
-
-/// Call `f` with `bytes` NUL-terminated on the stack; see [`nul_terminated`].
-fn with_cstr<R>(bytes: &[u8], f: impl FnOnce(&CStr) -> Result<R, c_int>) -> Result<R, c_int> {
-    let mut z = [0u8; MAX_PATH_BYTES + 1];
-    f(nul_terminated(&mut z, bytes)?)
 }
 
 /// The path of node `id`: the names from `id` up to but not including `stop`,
@@ -1837,18 +1145,34 @@ fn node_path(arena: &Arena, id: ScanId, base: &Path, stop: ScanId) -> Result<Pat
         parts.push(arena.name_bytes(n.name));
         cur = n.parent;
     }
-    let base = base.as_os_str().as_bytes();
-    let len = base.len() + parts.iter().map(|p| p.len() + 1).sum::<usize>();
+    assemble_path(base.as_os_str().as_bytes(), &parts)
+}
+
+/// `base` with `leaf_first` appended in reverse, `/`-separated: the names a
+/// climb from a node towards the root yields, leaf first, as a path.
+///
+/// The one place a path is put together from arena names, shared by
+/// [`node_path`] and the pool's stalled-directory report. Allocation is
+/// fallible, like the rest of the walk's per-directory work.
+pub(crate) fn assemble_path<P: AsRef<[u8]>>(
+    base: &[u8],
+    leaf_first: &[P],
+) -> Result<PathBuf, Incomplete> {
+    let len = base.len()
+        + leaf_first
+            .iter()
+            .map(|p| p.as_ref().len() + 1)
+            .sum::<usize>();
     let mut bytes: Vec<u8> = Vec::new();
     bytes
         .try_reserve_exact(len)
         .map_err(|_| Incomplete::OutOfMemory)?;
     bytes.extend_from_slice(base);
-    for part in parts.iter().rev() {
+    for part in leaf_first.iter().rev() {
         if !bytes.is_empty() && bytes.last() != Some(&b'/') {
             bytes.push(b'/');
         }
-        bytes.extend_from_slice(part);
+        bytes.extend_from_slice(part.as_ref());
     }
     Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
@@ -1856,12 +1180,14 @@ fn node_path(arena: &Arena, id: ScanId, base: &Path, stop: ScanId) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arena::FLAG_PERM_DENIED;
+    use std::ffi::{CStr, CString};
     use std::fs::{self, File};
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, AtomicU32};
+    use std::sync::atomic::AtomicU32;
     use tesserae_testutil::{DiskImage, Fixture};
 
-    fn opts(root: &Path) -> WalkOptions {
+    pub(super) fn opts(root: &Path) -> WalkOptions {
         WalkOptions {
             root: root.to_path_buf(),
             ..WalkOptions::default()
@@ -2088,212 +1414,6 @@ mod tests {
         assert_eq!(stats.errors, 1);
         assert_eq!(stats.files, 1, "other/f.bin once, not again via victim");
         assert_eq!(stats.incomplete, None);
-    }
-
-    /// Fails the open of the directory `victim` with a fixed errno.
-    struct FailOpen(c_int);
-
-    impl DirOpener for FailOpen {
-        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if name.to_bytes() == b"victim" {
-                return Err(self.0);
-            }
-            OpenAt.open_dir_at(parent, name)
-        }
-    }
-
-    #[test]
-    fn descriptor_exhaustion_is_reported_as_incomplete_not_as_an_error() {
-        for errno in [libc::EMFILE, libc::ENFILE] {
-            let fx = Fixture::new().unwrap();
-            fx.file("victim/inner.bin", 4096).unwrap();
-            fx.file("other/f.bin", 4096).unwrap();
-
-            let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(errno)).unwrap();
-
-            assert_eq!(
-                stats.incomplete,
-                Some(Incomplete::FdExhausted),
-                "errno {errno}"
-            );
-            assert_eq!(stats.errors, 0, "not a benign race (errno {errno})");
-            assert!(stats.unreadable.is_empty());
-            assert_eq!(stats.files, 1, "the walk went on to other/f.bin");
-        }
-    }
-
-    /// Fails the first directory it is asked to open with `EMFILE`, whichever
-    /// that is, and opens every later one for real.
-    struct FailFirstOpen {
-        failed: AtomicBool,
-    }
-
-    impl DirOpener for FailFirstOpen {
-        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if !self.failed.swap(true, Ordering::Relaxed) {
-                return Err(libc::EMFILE);
-            }
-            OpenAt.open_dir_at(parent, name)
-        }
-    }
-
-    #[test]
-    fn a_terminal_reason_overrides_an_earlier_fd_exhaustion() {
-        // Two directories with five files each. Whichever is opened first
-        // fails with EMFILE; the other is entered, and the budget (the root,
-        // both directories and two files) runs out inside it. The field must
-        // name what stopped the walk, not the earlier skip.
-        let fx = Fixture::new().unwrap();
-        for i in 0..5 {
-            fx.file(&format!("a/f{i}.bin"), 1).unwrap();
-            fx.file(&format!("b/f{i}.bin"), 1).unwrap();
-        }
-        let mut o = opts(fx.path());
-        o.node_budget = 5;
-        let opener = FailFirstOpen {
-            failed: AtomicBool::new(false),
-        };
-
-        let (arena, stats) = walk_serial_with(&o, &opener).unwrap();
-
-        assert!(
-            opener.failed.load(Ordering::Relaxed),
-            "the EMFILE must actually have fired"
-        );
-        assert_eq!(arena.len(), 5);
-        assert_eq!(stats.incomplete, Some(Incomplete::NodeBudget));
-    }
-
-    #[test]
-    fn kernel_out_of_memory_is_flagged_not_counted() {
-        let fx = Fixture::new().unwrap();
-        fx.file("victim/inner.bin", 4096).unwrap();
-        fx.file("other/f.bin", 4096).unwrap();
-
-        let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(libc::ENOMEM)).unwrap();
-
-        assert_eq!(stats.incomplete, Some(Incomplete::OutOfMemory));
-        assert_eq!(stats.errors, 0);
-        assert_eq!(stats.files, 1, "the walk went on to other/f.bin");
-    }
-
-    /// Every errno a vanished volume can produce, on a volume that is fine:
-    /// the directory is counted as churn and the walk goes on. This is the
-    /// half of the volume-lost rule that keeps ordinary churn ordinary.
-    #[test]
-    fn volume_gone_errnos_on_a_live_volume_are_churn_not_loss() {
-        for errno in [
-            libc::ENOENT,
-            libc::ENOTDIR,
-            libc::EIO,
-            libc::ENXIO,
-            libc::ENODEV,
-            libc::EBADF,
-            libc::ENOTSUP,
-        ] {
-            assert!(may_mean_volume_gone(errno), "errno {errno}");
-            let fx = Fixture::new().unwrap();
-            fx.file("victim/inner.bin", 4096).unwrap();
-            fx.file("other/f.bin", 4096).unwrap();
-
-            let (_, stats) = walk_serial_with(&opts(fx.path()), &FailOpen(errno)).unwrap();
-
-            assert_eq!(stats.incomplete, None, "errno {errno}");
-            assert_eq!(stats.errors, 1, "errno {errno}");
-            assert_eq!(
-                stats.files, 1,
-                "errno {errno}: the walk went on to other/f.bin"
-            );
-        }
-    }
-
-    /// Detaches its image the first time a directory below the root is
-    /// opened, then opens for real, so that open meets a volume that is gone:
-    /// the same `ENOTDIR` a detach under a real walk produces, with no race
-    /// about when.
-    struct DetachOnFirstOpen {
-        image: std::sync::Mutex<DiskImage>,
-        fired: AtomicBool,
-    }
-
-    impl DetachOnFirstOpen {
-        fn new(image: DiskImage) -> Self {
-            DetachOnFirstOpen {
-                image: std::sync::Mutex::new(image),
-                fired: AtomicBool::new(false),
-            }
-        }
-    }
-
-    impl DirOpener for DetachOnFirstOpen {
-        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if !self.fired.swap(true, Ordering::SeqCst) {
-                self.image.lock().unwrap().force_detach().unwrap();
-            }
-            OpenAt.open_dir_at(parent, name)
-        }
-    }
-
-    #[test]
-    fn a_volume_lost_mid_walk_stops_the_walk_as_volume_lost() {
-        let fx = Fixture::new().unwrap();
-        fx.dir("mnt").unwrap();
-        let mnt = fx.path().join("mnt");
-        let image = DiskImage::attach(&mnt, 16).unwrap();
-        for d in 0..4 {
-            fs::create_dir(mnt.join(format!("d{d}"))).unwrap();
-            File::create(mnt.join(format!("d{d}/f"))).unwrap();
-        }
-        // Precondition: undisturbed, the same walk sees everything and is
-        // complete, so what follows is the detach and nothing else.
-        let (_, whole) = walk_serial(&opts(&mnt)).unwrap();
-        assert_eq!((whole.dirs, whole.files, whole.errors), (5, 4, 0));
-        assert_eq!(whole.incomplete, None);
-
-        let opener = DetachOnFirstOpen::new(image);
-        let (_, stats) = walk_serial_with(&opts(&mnt), &opener).unwrap();
-
-        assert!(opener.fired.load(Ordering::SeqCst), "the detach never ran");
-        assert_eq!(stats.incomplete, Some(Incomplete::VolumeLost));
-        assert!(stats.errors >= 1, "the failing directory is still counted");
-        assert!(
-            stats.files < 4,
-            "{} files from a detached volume",
-            stats.files
-        );
-    }
-
-    /// Hands back a regular file's descriptor for the directory `victim`, so
-    /// the open succeeds and `getattrlistbulk` is what fails (`ENOTDIR`).
-    struct FileForDir(std::path::PathBuf);
-
-    impl DirOpener for FileForDir {
-        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
-            if name.to_bytes() == b"victim" {
-                return Ok(OwnedFd::from(File::open(&self.0).unwrap()));
-            }
-            OpenAt.open_dir_at(parent, name)
-        }
-    }
-
-    #[test]
-    fn an_enumeration_failure_is_absorbed_and_the_walk_continues() {
-        // The `getattrlistbulk` error branch. `chmod 0o111` cannot reach it:
-        // `open(O_RDONLY)` on a directory needs read permission, so that fails
-        // at `openat` (EACCES) before enumeration. A descriptor that opens
-        // fine but is not a directory fails in the syscall itself.
-        let fx = Fixture::new().unwrap();
-        fx.file("victim/inner.bin", 4096).unwrap();
-        fx.file("other/f.bin", 4096).unwrap();
-        fx.file("plain.bin", 1).unwrap();
-        let opener = FileForDir(fx.path().join("plain.bin"));
-
-        let (_, stats) = walk_serial_with(&opts(fx.path()), &opener).unwrap();
-
-        assert_eq!(stats.errors, 1, "ENOTDIR from getattrlistbulk");
-        assert_eq!(stats.incomplete, None);
-        assert!(stats.unreadable.is_empty());
-        assert_eq!(stats.files, 2, "other/f.bin and plain.bin");
     }
 
     #[test]
@@ -2583,51 +1703,6 @@ mod tests {
         o.buffer_bytes = 16;
         let err = walk_serial(&o).err().expect("walk must fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn unreadable_root_is_an_error_not_a_partial_result() {
-        let fx = Fixture::new().unwrap();
-        fx.dir("locked").unwrap();
-        fx.chmod("locked", 0o000).unwrap();
-        let err = walk_serial(&opts(&fx.path().join("locked")))
-            .err()
-            .expect("walk must fail");
-        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-    }
-
-    #[test]
-    fn an_unreadable_root_keeps_its_errno() {
-        let fx = Fixture::new().unwrap();
-        fx.dir("locked").unwrap();
-        fx.chmod("locked", 0o000).unwrap();
-        let err = walk_serial(&opts(&fx.path().join("locked")))
-            .err()
-            .expect("walk must fail");
-        // The number, not the kind: both EACCES and EPERM are PermissionDenied.
-        assert_eq!(os_errno(&err), Some(libc::EACCES));
-        assert!(
-            err.to_string().contains("locked"),
-            "the path is still in the message: {err}"
-        );
-    }
-
-    #[test]
-    fn context_keeps_the_os_error_and_not_only_its_kind() {
-        let wrapped = with_context(io::Error::from_raw_os_error(libc::EPERM), "open /x".into());
-        assert_eq!(wrapped.kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(os_errno(&wrapped), Some(libc::EPERM));
-        assert_ne!(os_errno(&wrapped), Some(libc::EACCES));
-        assert!(wrapped.to_string().starts_with("open /x: "), "{wrapped}");
-        // An unwrapped OS error reports its own number; one with none, none.
-        assert_eq!(
-            os_errno(&io::Error::from_raw_os_error(libc::EBUSY)),
-            Some(libc::EBUSY)
-        );
-        assert_eq!(
-            os_errno(&io::Error::new(io::ErrorKind::InvalidInput, "no errno")),
-            None
-        );
     }
 
     /// A walker with a halt and a budget of its own, for the two tests below.

@@ -134,10 +134,11 @@ use crate::boundary::VolumeId;
 use crate::dedup::InodeSet;
 use crate::progress::Progress;
 use crate::walk::{
-    check_options, join_root, open_root, root_volume_of, with_context, DirOpener, Halt, Incomplete,
-    Lane, NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
+    assemble_path, check_options, join_root, open_root, root_volume_of, with_context, DirOpener,
+    Halt, Incomplete, Lane, NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
 };
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 
 /// Soft `RLIMIT_NOFILE` the walk asks for.
 const NOFILE_TARGET: u64 = 4096;
@@ -611,16 +612,8 @@ fn stalled_path<O>(shared: &Shared<O>, id: ScanId) -> Option<PathBuf> {
         if parent == ScanId::NONE {
             // `name` is the root's, which is the scan root's path as the
             // caller gave it: `join_root` supplies that.
-            let len = names.iter().map(|n| n.len() + 1).sum();
-            let mut rel: Vec<u8> = Vec::new();
-            rel.try_reserve_exact(len).ok()?;
-            for name in names.iter().rev() {
-                if !rel.is_empty() {
-                    rel.push(b'/');
-                }
-                rel.extend_from_slice(name);
-            }
-            return join_root(&shared.opts.root, &rel).ok();
+            let rel = assemble_path(b"", &names).ok()?;
+            return join_root(&shared.opts.root, rel.as_os_str().as_bytes()).ok();
         }
         names.try_reserve(1).ok()?;
         names.push(name);
