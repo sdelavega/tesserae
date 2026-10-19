@@ -164,6 +164,7 @@ jobs:
       - name: Metal toolchain
         run: |
           if ! echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null; then
+            echo "The Metal compiler is missing from this Xcode (a separate component since Xcode 26); downloading MetalToolchain."
             xcodebuild -downloadComponent MetalToolchain
             echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null
           fi

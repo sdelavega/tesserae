@@ -66,8 +66,9 @@ struct TreemapUniforms {
 /// guarded by `DispatchSemaphore(value: 3)`: a frame waits until the GPU has
 /// finished with the buffer it is about to overwrite. If a buffer cannot be
 /// allocated the instance budget is halved and all three are allocated again
-/// (spec §11); tiles beyond the budget are not drawn, and since the list is
-/// breadth-first those are the deepest.
+/// (spec §11); tiles beyond the budget are not drawn (since the list is
+/// breadth-first those are the deepest) and are counted in
+/// `droppedTileCount`.
 public final class TreemapRenderer {
     /// Spec §8's hard instance budget.
     public static let defaultInstanceBudget = 50_000
@@ -89,6 +90,10 @@ public final class TreemapRenderer {
     /// How many tiles a frame draws at most: the spec's budget, halved for
     /// every failed allocation.
     public let instanceBudget: Int
+    /// How many tiles the last `update` dropped because they were past
+    /// `instanceBudget`: shown to the user, since the spec forbids silent
+    /// under-reporting (§11).
+    public private(set) var droppedTileCount = 0
     /// The colour under the tiles (sRGB-encoded, like the palette).
     public var clearColour: SIMD4<Float> = Palette.surface(dark: false)
 
@@ -155,6 +160,7 @@ public final class TreemapRenderer {
     public func update(tiles: [Tile], colourOf: (Tile) -> UInt16, palette: [SIMD4<Float>]) {
         precondition(!palette.isEmpty, "empty palette")
         let n = min(tiles.count, instanceBudget)
+        droppedTileCount = tiles.count - n
         instances = tiles.prefix(n).map { t in
             let idx = colourOf(t)
             precondition(Int(idx) < palette.count, "colour index \(idx) outside a palette of \(palette.count)")

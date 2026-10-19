@@ -67,10 +67,18 @@ final class MetalRendererTests: XCTestCase {
         return Pixel(r: q(c.x), g: q(c.y), b: q(c.z), a: q(c.w))
     }
 
-    /// Within one 8-bit step per channel: the GPU's float-to-unorm8
-    /// conversion is the only rounding between a palette float and the
-    /// stored byte, and Metal allows that conversion to differ from exact
-    /// round-to-nearest by up to one step.
+    /// Palette and clear colours are k/255 floats, which the GPU's
+    /// float-to-unorm8 conversion maps back to exactly k: compared exactly.
+    private func assertExact(
+        _ got: Pixel, _ want: Pixel, _ what: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertEqual(got, want, what, file: file, line: line)
+    }
+
+    /// Within one 8-bit step per channel, for border pixels only: fill × 0.7
+    /// falls between 8-bit steps, and Metal does not require its
+    /// float-to-unorm8 conversion to round to nearest, so a value near a
+    /// half-step may land on either neighbour.
     private func assertClose(
         _ got: Pixel, _ want: Pixel, _ what: String, file: StaticString = #filePath, line: UInt = #line
     ) {
@@ -111,7 +119,7 @@ final class MetalRendererTests: XCTestCase {
             ]
             for (p, i) in probes {
                 let got = bmp[Int(p.x * scale), Int(p.y * scale)]
-                assertClose(got, Self.pixel(colours[i]), "tile \(i) at \(p) scale \(scale)")
+                assertExact(got, Self.pixel(colours[i]), "tile \(i) at \(p) scale \(scale)")
             }
         }
     }
@@ -145,10 +153,10 @@ final class MetalRendererTests: XCTestCase {
             ]
             for e in edges {
                 assertClose(bmp[e.x, e.y], borderPx, "\(e.name) edge pixel at scale \(scale)")
-                assertClose(bmp[e.x + e.dx, e.y + e.dy], fillPx, "pixel inside the \(e.name) edge at scale \(scale)")
-                assertClose(bmp[e.x - e.dx, e.y - e.dy], clearPx, "pixel outside the \(e.name) edge at scale \(scale)")
+                assertExact(bmp[e.x + e.dx, e.y + e.dy], fillPx, "pixel inside the \(e.name) edge at scale \(scale)")
+                assertExact(bmp[e.x - e.dx, e.y - e.dy], clearPx, "pixel outside the \(e.name) edge at scale \(scale)")
             }
-            assertClose(bmp[mid, mid], fillPx, "centre at scale \(scale)")
+            assertExact(bmp[mid, mid], fillPx, "centre at scale \(scale)")
         }
     }
 
@@ -226,6 +234,56 @@ final class MetalRendererTests: XCTestCase {
         let palette = Palette.colours(.depth, dark: false)
         let tile = Tile(rect: CGRect(x: 0, y: 0, width: 20, height: 20), node: 1, depth: 1)
         let bmp = try Self.render(r, [tile], palette: palette, size: CGSize(width: 20, height: 20), scale: 1)
-        assertClose(bmp[10, 10], Self.pixel(palette[Palette.firstColourIndex + 1]), "centre after the retry")
+        assertExact(bmp[10, 10], Self.pixel(palette[Palette.firstColourIndex + 1]), "centre after the retry")
+        XCTAssertEqual(r.droppedTileCount, 0, "precondition: one tile fits the budget")
+
+        // The clamp is reported, not silent: one tile past the halved budget.
+        let many = Array(repeating: tile, count: r.instanceBudget + 1)
+        r.update(tiles: many, colourOf: { _ in UInt16(Palette.firstColourIndex) }, palette: palette)
+        XCTAssertEqual(r.droppedTileCount, many.count - r.instanceBudget)
+        XCTAssertEqual(r.droppedTileCount, 1)
+        // And recomputed on every update.
+        r.update(tiles: [tile], colourOf: { _ in UInt16(Palette.firstColourIndex) }, palette: palette)
+        XCTAssertEqual(r.droppedTileCount, 0)
+    }
+
+    func test_init_fails_when_every_allocation_fails() throws {
+        let d = try device()
+        var requests: [Int] = []
+        let r = TreemapRenderer(device: d, allocator: { _, length in
+            requests.append(length)
+            return nil
+        })
+        XCTAssertNil(r, "no instance buffers at any budget: no renderer")
+        // Precondition: it really tried every halving down to one tile.
+        let stride = MemoryLayout<TileInstance>.stride
+        XCTAssertEqual(requests.first, TreemapRenderer.defaultInstanceBudget * stride)
+        XCTAssertEqual(requests.last, 1 * stride)
+        XCTAssertEqual(requests.count, 16, "50000, 25000, … 3, 1: sixteen halvings tried")
+    }
+
+    func test_tiles_past_the_budget_are_not_drawn() throws {
+        let d = try device()
+        let stride = MemoryLayout<TileInstance>.stride
+        // Fail every buffer larger than three tiles: the budget halves
+        // 50000 → … → 6 → 3.
+        let r = try XCTUnwrap(TreemapRenderer(device: d, allocator: { dev, length in
+            length > 3 * stride ? nil : dev.makeBuffer(length: length, options: .storageModeShared)
+        }))
+        XCTAssertEqual(r.instanceBudget, 3, "precondition: a three-tile budget")
+        let palette = Palette.colours(.depth, dark: false)
+        // Five disjoint tiles in a row, all one colour.
+        let tiles = (0..<5).map { i in
+            Tile(rect: CGRect(x: CGFloat(i) * 20, y: 0, width: 20, height: 20), node: UInt32(i), depth: 0)
+        }
+        let bmp = try Self.render(r, tiles, palette: palette, size: CGSize(width: 100, height: 20), scale: 1)
+        XCTAssertEqual(r.droppedTileCount, 2)
+        let fill = Self.pixel(palette[Palette.firstColourIndex])
+        let clear = Self.pixel(r.clearColour)
+        XCTAssertNotEqual(fill, clear, "precondition: tiles are visible against the background")
+        for i in 0..<5 {
+            let want = i < 3 ? fill : clear
+            assertExact(bmp[i * 20 + 10, 10], want, "tile \(i) \(i < 3 ? "within" : "past") the budget")
+        }
     }
 }
