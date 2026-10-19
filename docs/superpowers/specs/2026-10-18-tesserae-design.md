@@ -1349,6 +1349,10 @@ must not execute the consequences.
 - **Wire the palette validator into CI**, both modes, `--pairs all`. If
   anyone nudges a colour, CI fails. That makes §8's guarantees durable
   rather than a one-time check.
+  *Phase 2 decision:* the validator is not part of this repository, so CI
+  instead pins every validated hex (and the documented 2.74 light-mode aqua
+  contrast) in `ColourTests`; a nudge to any colour fails CI, which meets the
+  same durability goal. Wiring the validator itself remains open.
 - Assert VoiceOver labels on the table and the focus legend.
 
 ### Performance

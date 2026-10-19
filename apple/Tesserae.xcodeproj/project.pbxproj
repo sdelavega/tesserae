@@ -26,6 +26,10 @@
 		D3B2C3D4E5F60718293A4B5C /* LayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B2C3D4E5F60718293A4B5C /* LayoutTests.swift */; };
 		D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift */; };
 		D5B2C3D4E5F60718293A4B5C /* SplitMix64.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B2C3D4E5F60718293A4B5C /* SplitMix64.swift */; };
+		B6B2C3D4E5F60718293A4B5C /* Palette.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B2C3D4E5F60718293A4B5C /* Palette.swift */; };
+		B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */; };
+		B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B2C3D4E5F60718293A4B5C /* FileKind.swift */; };
+		D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -92,6 +96,10 @@
 		C3B2C3D4E5F60718293A4B5C /* LayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutTests.swift; sourceTree = "<group>"; };
 		C4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticTree.swift; sourceTree = "<group>"; };
 		C5B2C3D4E5F60718293A4B5C /* SplitMix64.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitMix64.swift; sourceTree = "<group>"; };
+		A6B2C3D4E5F60718293A4B5C /* Palette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Palette.swift; sourceTree = "<group>"; };
+		A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourMode.swift; sourceTree = "<group>"; };
+		A8B2C3D4E5F60718293A4B5C /* FileKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileKind.swift; sourceTree = "<group>"; };
+		C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +139,7 @@
 				C1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift */,
 				C2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift */,
 				C3B2C3D4E5F60718293A4B5C /* LayoutTests.swift */,
+				C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
 			path = TesseraeKitTests;
@@ -163,6 +172,7 @@
 				A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */,
 				A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */,
 				E1B2C3D4E5F60718293A4B5C /* Layout */,
+				E6B2C3D4E5F60718293A4B5C /* Colour */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -186,6 +196,16 @@
 				A5B2C3D4E5F60718293A4B5C /* Tile.swift */,
 			);
 			path = Layout;
+			sourceTree = "<group>";
+		};
+		E6B2C3D4E5F60718293A4B5C /* Colour */ = {
+			isa = PBXGroup;
+			children = (
+				A6B2C3D4E5F60718293A4B5C /* Palette.swift */,
+				A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */,
+				A8B2C3D4E5F60718293A4B5C /* FileKind.swift */,
+			);
+			path = Colour;
 			sourceTree = "<group>";
 		};
 		E2B2C3D4E5F60718293A4B5C /* Support */ = {
@@ -356,6 +376,9 @@
 				B3B2C3D4E5F60718293A4B5C /* TreeSource.swift in Sources */,
 				B4B2C3D4E5F60718293A4B5C /* SquarifiedLayout.swift in Sources */,
 				B5B2C3D4E5F60718293A4B5C /* Tile.swift in Sources */,
+				B6B2C3D4E5F60718293A4B5C /* Palette.swift in Sources */,
+				B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */,
+				B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -376,6 +399,7 @@
 				D1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift in Sources */,
 				D2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift in Sources */,
 				D3B2C3D4E5F60718293A4B5C /* LayoutTests.swift in Sources */,
+				D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */,
 				D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */,
 				D5B2C3D4E5F60718293A4B5C /* SplitMix64.swift in Sources */,
 			);
