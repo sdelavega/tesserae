@@ -23,6 +23,16 @@
 //! frozen snapshot: one immutable allocation the app reads through
 //! `tess_snapshot_view` until it calls `tess_snapshot_release`.
 //!
+//! # Building the library the app links
+//!
+//! Build it with exactly `cargo build -p tesserae-ffi --release`. The tests
+//! turn on tesserae-core's `test-hooks` feature through a dev-dependency, and
+//! cargo's feature resolution only keeps that out of a build that does not
+//! build test targets: `--all-targets`, `--tests` or `cargo test --release`
+//! would unify the hooks into the library (inert unless armed, but every worker
+//! task would then take a lock). `scripts/check-shipped-lib.sh` verifies the
+//! result.
+//!
 //! # Panics never cross the boundary
 //!
 //! Every `extern "C"` body runs inside `catch_unwind`, and so does the scan
@@ -48,7 +58,7 @@ use std::time::Duration;
 use tesserae_core::freeze::try_freeze;
 use tesserae_core::node::{Snapshot, TessNode};
 use tesserae_core::progress::{walk_with_progress, Progress};
-use tesserae_core::walk::{Incomplete, WalkOptions, WalkStats};
+use tesserae_core::walk::{os_errno, Incomplete, WalkOptions, WalkStats};
 
 /// The version of this ABI. Bumped on any change to a struct layout, a
 /// function signature or the meaning of a constant. The app compares it with
@@ -157,10 +167,14 @@ pub struct TessProgress {
 pub struct TessScanOptions {
     /// The deepest level recorded; the root is depth 0. 0 means 512.
     pub max_depth: u16,
-    /// Whether to descend into network and other non-local mounts. Another
-    /// local volume is never entered either way.
-    pub include_non_local: bool,
-    /// Worker thread count. 0 means one per core, between 4 and 16.
+    /// Whether to descend into network and other non-local mounts: 0 means no
+    /// (the default), any other value yes. Another local volume is never
+    /// entered either way. A byte, not a C `bool`, so that no value a C caller
+    /// can write is invalid.
+    pub include_non_local: u8,
+    /// Worker thread count. 0 means one per core, between 4 and 16. A larger
+    /// value is capped at 64, and fewer are run if the descriptor limit cannot
+    /// feed that many.
     pub workers: u32,
     /// Most nodes the scan may store. 0 means 25 million.
     pub node_budget: u64,
@@ -311,6 +325,9 @@ pub unsafe extern "C" fn tess_scan_cancel(scan: *mut TessScan) {
 /// Whether the scan is done: `TESS_STATUS_RUNNING` (0), `TESS_STATUS_FINISHED`
 /// (1; `tess_scan_finish` will not block), or a negated errno if the scan
 /// failed (`tess_scan_finish` will return null). A null `scan` is `-EINVAL`.
+/// For a root that could not be opened the errno is the one the operating
+/// system reported, so `-EPERM` (macOS refusing access to a protected folder)
+/// and `-EACCES` (ordinary file permissions) stay distinct.
 ///
 /// A scan that failed because its walk panicked is `-EIO`. Poll this rather
 /// than blocking in `tess_scan_finish`: after a cancel, finish is prompt except
@@ -497,7 +514,7 @@ fn walk_options(root: &OsStr, options: Option<&TessScanOptions>) -> WalkOptions 
     if o.max_depth != 0 {
         walk.max_depth = o.max_depth;
     }
-    walk.include_non_local = o.include_non_local;
+    walk.include_non_local = o.include_non_local != 0;
     if o.workers != 0 {
         walk.workers = o.workers as usize;
     }
@@ -544,17 +561,21 @@ fn scan_stats(walk: &WalkStats) -> TessScanStats {
     }
 }
 
-/// A negated errno for a failed scan. Core wraps most of its errors with a
-/// message naming the path, and that discards the OS error number, so the kind
-/// is read when there is none.
+/// A negated errno for a failed scan: the OS error number if the error carries
+/// one, directly or inside the context core wraps around it (see
+/// `tesserae_core::walk::os_errno`), otherwise one chosen from its kind.
+///
+/// The number is what the app needs, not the kind: `EACCES` and `EPERM` are
+/// both `PermissionDenied`, and on macOS only `EPERM` is the privacy layer
+/// refusing access, which Full Disk Access can fix. So a `PermissionDenied`
+/// that has lost its number is `EIO` ("unknown"), not a guess at `EACCES`; the
+/// kinds that follow are each one errno.
 fn errno_of(e: &io::Error) -> i32 {
     use io::ErrorKind::*;
-    let errno = e
-        .raw_os_error()
+    let errno = os_errno(e)
         .filter(|&n| n > 0)
         .unwrap_or_else(|| match e.kind() {
             NotFound => libc::ENOENT,
-            PermissionDenied => libc::EACCES,
             NotADirectory => libc::ENOTDIR,
             InvalidInput => libc::EINVAL,
             OutOfMemory => libc::ENOMEM,
@@ -614,6 +635,7 @@ mod tests {
     use std::path::Path;
     use std::time::Instant;
     use tesserae_core::test_hooks::{arm, Action};
+    use tesserae_core::walk::with_context;
     use tesserae_testutil::{DiskImage, Fixture};
 
     /// Longest any test waits for a scan to leave `running`. Generous: it is
@@ -838,6 +860,11 @@ mod tests {
         let fx = tree();
         let snapshot = scan(fx.path(), None);
         let before = view(snapshot);
+        // The view points at the snapshot's own arrays, not at a copy of them.
+        // SAFETY: `snapshot` is live until the release at the end.
+        let frozen = unsafe { &(*snapshot).0 };
+        assert_eq!(before.nodes, frozen.nodes.as_ptr());
+        assert_eq!(before.names, frozen.names.as_ptr());
         let first = nodes(&before)[0];
         let first_name = name_of(&before, &first).to_vec();
         assert!(!first_name.is_empty(), "nothing to compare the names with");
@@ -966,7 +993,7 @@ mod tests {
     fn zero_options() -> TessScanOptions {
         TessScanOptions {
             max_depth: 0,
-            include_non_local: false,
+            include_non_local: 0,
             workers: 0,
             node_budget: 0,
             buffer_bytes: 0,
@@ -1067,7 +1094,7 @@ mod tests {
         }
         let set = TessScanOptions {
             max_depth: 7,
-            include_non_local: true,
+            include_non_local: 2,
             workers: 3,
             node_budget: 11,
             buffer_bytes: 4096,
@@ -1151,6 +1178,37 @@ mod tests {
     }
 
     #[test]
+    fn a_permission_denied_root_reports_eacces_not_just_permission_denied() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("locked").unwrap();
+        // Restored when `fx` drops, so the fixture can be removed.
+        fx.chmod("locked", 0o000).unwrap();
+        let scan = begin(&fx.path().join("locked"), None);
+        assert_eq!(wait(scan), -libc::EACCES);
+        assert!(finish(scan).is_null());
+    }
+
+    #[test]
+    fn a_wrapped_eperm_is_eperm_not_eacces() {
+        // EPERM and EACCES are both `PermissionDenied`; on macOS only EPERM is
+        // the privacy layer refusing, which Full Disk Access can fix.
+        let wrapped = with_context(
+            io::Error::from_raw_os_error(libc::EPERM),
+            "open /Users/x/Library/Mail".into(),
+        );
+        assert_eq!(wrapped.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(errno_of(&wrapped), -libc::EPERM);
+        assert_ne!(errno_of(&wrapped), -libc::EACCES);
+        assert_eq!(
+            errno_of(&io::Error::from_raw_os_error(libc::EPERM)),
+            -libc::EPERM
+        );
+        // Without a number it is unknown, not a guess between the two.
+        let unnumbered = io::Error::new(io::ErrorKind::PermissionDenied, "no number");
+        assert_eq!(errno_of(&unnumbered), -libc::EIO);
+    }
+
+    #[test]
     fn io_errors_map_to_negated_errnos() {
         // An errno the kind fallback would have mapped to EIO.
         let raw = io::Error::from_raw_os_error(libc::EBUSY);
@@ -1159,7 +1217,6 @@ mod tests {
         // the kind is what is left to read.
         for (kind, want) in [
             (io::ErrorKind::NotFound, libc::ENOENT),
-            (io::ErrorKind::PermissionDenied, libc::EACCES),
             (io::ErrorKind::NotADirectory, libc::ENOTDIR),
             (io::ErrorKind::InvalidInput, libc::EINVAL),
             (io::ErrorKind::OutOfMemory, libc::ENOMEM),

@@ -19,7 +19,8 @@ libc = "0.2"
 # The fault-injection hooks (panic and delay in the worker loop) exist only
 # behind this feature, and a dev-dependency feature is not enabled for a normal
 # build: the shipped static library never contains them. CI checks that with
-# `cargo tree`.
+# `cargo tree`. That holds for `cargo build -p tesserae-ffi --release` only:
+# building test targets (--all-targets, `cargo test --release`) enables it.
 tesserae-core = { path = "../tesserae-core", features = ["test-hooks"] }
 tesserae-testutil = { path = "../tesserae-testutil" }
 tempfile = "3.27.0"

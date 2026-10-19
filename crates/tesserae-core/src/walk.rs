@@ -689,7 +689,53 @@ pub(crate) fn check_options(opts: &WalkOptions) -> io::Result<()> {
 /// The volume the scan root is on, with the root's path in the error.
 pub(crate) fn root_volume_of(opts: &WalkOptions, root_fd: &OwnedFd) -> io::Result<VolumeId> {
     volume_of(root_fd.as_raw_fd())
-        .map_err(|e| io::Error::new(e.kind(), format!("fstatfs {}: {e}", opts.root.display())))
+        .map_err(|e| with_context(e, format!("fstatfs {}", opts.root.display())))
+}
+
+/// An error with a message naming what was being done, wrapped around the OS
+/// error that caused it.
+///
+/// `io::Error::new(kind, msg)` would discard the OS error number, and the
+/// number matters: `ErrorKind::PermissionDenied` is both `EACCES` (an ordinary
+/// permission) and `EPERM` (on macOS, the privacy layer refusing access to a
+/// protected folder), and which one it was decides whether asking the user for
+/// Full Disk Access could help. So the original error stays reachable as the
+/// source, and [`os_errno`] reads the number back through it. The alternative,
+/// returning the original error unwrapped, would have lost the path from the
+/// message.
+#[derive(Debug)]
+struct Context {
+    msg: String,
+    source: io::Error,
+}
+
+impl std::fmt::Display for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.msg, self.source)
+    }
+}
+
+impl std::error::Error for Context {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// `err` with `msg` in front, keeping its kind and its OS error number. Public
+/// so that a test elsewhere can build the error this crate builds.
+pub fn with_context(err: io::Error, msg: String) -> io::Error {
+    io::Error::new(err.kind(), Context { msg, source: err })
+}
+
+/// The OS error number behind `err`, if there is one: its own, or that of the
+/// error [`with_context`] wrapped. Every error this crate returns for a failed
+/// system call keeps its number recoverable this way.
+pub fn os_errno(err: &io::Error) -> Option<i32> {
+    err.raw_os_error().or_else(|| {
+        err.get_ref()
+            .and_then(|inner| inner.downcast_ref::<Context>())
+            .and_then(|c| c.source.raw_os_error())
+    })
 }
 
 /// Open the root by path. Unlike every other directory this one may be reached
@@ -711,10 +757,7 @@ pub(crate) fn open_root(opts: &WalkOptions) -> io::Result<OwnedFd> {
         }
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::EINTR) {
-            return Err(io::Error::new(
-                err.kind(),
-                format!("open {}: {err}", opts.root.display()),
-            ));
+            return Err(with_context(err, format!("open {}", opts.root.display())));
         }
     }
 }
@@ -2385,6 +2428,40 @@ mod tests {
             .err()
             .expect("walk must fail");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn an_unreadable_root_keeps_its_errno() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("locked").unwrap();
+        fx.chmod("locked", 0o000).unwrap();
+        let err = walk_serial(&opts(&fx.path().join("locked")))
+            .err()
+            .expect("walk must fail");
+        // The number, not the kind: both EACCES and EPERM are PermissionDenied.
+        assert_eq!(os_errno(&err), Some(libc::EACCES));
+        assert!(
+            err.to_string().contains("locked"),
+            "the path is still in the message: {err}"
+        );
+    }
+
+    #[test]
+    fn context_keeps_the_os_error_and_not_only_its_kind() {
+        let wrapped = with_context(io::Error::from_raw_os_error(libc::EPERM), "open /x".into());
+        assert_eq!(wrapped.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(os_errno(&wrapped), Some(libc::EPERM));
+        assert_ne!(os_errno(&wrapped), Some(libc::EACCES));
+        assert!(wrapped.to_string().starts_with("open /x: "), "{wrapped}");
+        // An unwrapped OS error reports its own number; one with none, none.
+        assert_eq!(
+            os_errno(&io::Error::from_raw_os_error(libc::EBUSY)),
+            Some(libc::EBUSY)
+        );
+        assert_eq!(
+            os_errno(&io::Error::new(io::ErrorKind::InvalidInput, "no errno")),
+            None
+        );
     }
 
     /// A walker with a halt and a budget of its own, for the two tests below.

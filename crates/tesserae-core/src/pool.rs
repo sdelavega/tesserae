@@ -134,8 +134,8 @@ use crate::boundary::VolumeId;
 use crate::dedup::InodeSet;
 use crate::progress::Progress;
 use crate::walk::{
-    check_options, join_root, open_root, root_volume_of, DirOpener, Halt, Incomplete, Lane,
-    NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
+    check_options, join_root, open_root, root_volume_of, with_context, DirOpener, Halt, Incomplete,
+    Lane, NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
 };
 use std::os::fd::{AsFd, OwnedFd};
 
@@ -389,7 +389,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     // relative to a directory descriptor does not read it.
     let root_task_fd = root_fd
         .try_clone()
-        .map_err(|e| io::Error::new(e.kind(), format!("dup {}: {e}", opts.root.display())))?;
+        .map_err(|e| with_context(e, format!("dup {}", opts.root.display())))?;
 
     let deques: Vec<Worker<Task>> = (0..workers).map(|_| Worker::new_lifo()).collect();
     let seats = (0..workers)
@@ -1720,6 +1720,17 @@ mod tests {
             .err()
             .expect("walk must fail");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn unreadable_root_keeps_its_errno_through_the_pool() {
+        let fx = Fixture::new().unwrap();
+        fx.dir("locked").unwrap();
+        fx.chmod("locked", 0o000).unwrap();
+        let err = walk(&opts(&fx.path().join("locked")))
+            .err()
+            .expect("walk must fail");
+        assert_eq!(crate::walk::os_errno(&err), Some(libc::EACCES));
     }
 
     #[test]

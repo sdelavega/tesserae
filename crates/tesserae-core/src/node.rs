@@ -92,7 +92,8 @@ pub struct TessNode {
     /// The `TESS_FLAG_*` bits: directory, symlink, hardlink duplicate,
     /// permission denied, aggregated.
     pub flags: u16,
-    /// Index of the parent in the node array, or `u32::MAX` for the root.
+    /// Index of the parent in the node array, or `TESS_NODE_NONE` (`u32::MAX`)
+    /// for the root.
     pub parent: u32,
     pub child_start: u32,
     pub child_count: u32,

@@ -133,7 +133,7 @@ abi! {
     }
     TessScanOptions: 32, 8 {
         max_depth = 0, "u16", "uint16_t",
-        include_non_local = 2, "bool", "bool",
+        include_non_local = 2, "u8", "uint8_t",
         workers = 4, "u32", "uint32_t",
         node_budget = 8, "u64", "uint64_t",
         buffer_bytes = 16, "u64", "uint64_t",
