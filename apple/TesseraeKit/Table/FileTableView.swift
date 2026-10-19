@@ -70,6 +70,9 @@ public struct FileTableView: NSViewRepresentable {
             ("kind", "Kind", .kind, 100),
         ]
 
+        /// What the Modified column shows for a stored time of 0 (never read).
+        static let unknownDate = "—"
+
         // The strong reference keeps the borrowed Rust memory alive for the cells.
         private(set) var snapshot: Snapshot
         private(set) var rows: [UInt32]
@@ -122,6 +125,10 @@ public struct FileTableView: NSViewRepresentable {
             select(selection.nodes)
         }
 
+        /// Show `nodes` as the table's selection and scroll the first selected
+        /// row into view. Nodes that are not among the current rows (a
+        /// directory, or a file outside the top-K) are not shown in the table;
+        /// they stay in `selection` until the table itself writes it.
         private func select(_ nodes: Set<UInt32>) {
             guard let table else { return }
             var idx = IndexSet()
@@ -130,6 +137,8 @@ public struct FileTableView: NSViewRepresentable {
             applyingSelection = true
             table.selectRowIndexes(idx, byExtendingSelection: false)
             applyingSelection = false
+            // A selection made elsewhere (the treemap): bring it into view.
+            if let first = idx.first { table.scrollRowToVisible(first) }
         }
 
         // MARK: Text
@@ -137,13 +146,15 @@ public struct FileTableView: NSViewRepresentable {
         /// The text of one cell; the inspector's own formatting, so they agree.
         func text(column id: String, row: Int) -> String {
             let node = rows[row]
+            // Rows and snapshot arrive separately from SwiftUI; never trap on a mismatch.
+            guard Int(node) < snapshot.nodes.count else { return "" }
             let n = snapshot.nodes[Int(node)]
             switch id {
             case "name": return snapshot.name(node)
             case "allocated": return displaySize(n.allocated, locale: locale)
             case "logical": return displaySize(n.logical, locale: locale)
             case "modified":
-                guard n.modified != 0 else { return "—" }
+                guard n.modified != 0 else { return Coordinator.unknownDate }
                 return Date(timeIntervalSince1970: TimeInterval(n.modified))
                     .formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))
             default: return nodeKind(node, in: snapshot).displayName
@@ -154,12 +165,15 @@ public struct FileTableView: NSViewRepresentable {
         /// size ("report.pdf, 4.2 GB"), then what this column adds.
         func accessibilityLabel(column id: String, row: Int) -> String {
             let node = rows[row]
+            guard Int(node) < snapshot.nodes.count else { return "" }
             let base = "\(snapshot.name(node)), \(displaySize(snapshot.allocated(node), locale: locale))"
             switch id {
             case "name": return base
             case "allocated": return base + " allocated"
             case "logical": return base + ", logical \(text(column: id, row: row))"
-            case "modified": return base + ", modified \(text(column: id, row: row))"
+            case "modified":
+                let m = snapshot.nodes[Int(node)].modified
+                return base + (m == 0 ? ", modified unknown" : ", modified \(text(column: id, row: row))")
             default: return base + ", \(text(column: id, row: row))"
             }
         }
@@ -193,7 +207,7 @@ public struct FileTableView: NSViewRepresentable {
 
         public func tableViewSelectionDidChange(_ notification: Notification) {
             guard !applyingSelection, let table else { return }
-            let chosen = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0] : nil })
+            let chosen = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) && Int(rows[$0]) < snapshot.nodes.count ? rows[$0] : nil })
             if chosen != selection.nodes { selection.nodes = chosen }
         }
 

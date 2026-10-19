@@ -19,7 +19,7 @@ import Foundation
 
 /// Whether the caller is on the process's main thread (`Thread.isMainThread`
 /// is unavailable from async contexts).
-func onMainThread() -> Bool { pthread_main_np() != 0 }
+fileprivate func onMainThread() -> Bool { pthread_main_np() != 0 }
 
 /// A column the file table can sort by.
 public enum SortKey: Sendable, Equatable {
@@ -40,16 +40,22 @@ public final class FileTableModel: @unchecked Sendable {
     private let lock = NSLock()
     private var cached: [UInt32]?
 
-    /// Test seam: called on the thread that sorts, with `onMainThread()`.
-    var onSort: (@Sendable (Bool) -> Void)?
+    /// Test seam, injected at `init` (immutable, so never a racy var): called
+    /// on the thread that sorts, with whether that is the main thread.
+    private let onSort: (@Sendable (Bool) -> Void)?
 
     /// The table for the subtree of `scope` (the current navigation root):
     /// its `limit` largest files.
-    public init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit) {
+    public convenience init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit) {
+        self.init(snapshot: snapshot, scope: scope, limit: limit, onSort: nil)
+    }
+
+    init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit, onSort: (@Sendable (Bool) -> Void)?) {
         precondition(Int(scope) < snapshot.nodes.count, "FileTableModel: scope outside the snapshot")
         self.snapshot = snapshot
         self.scope = scope
         self.limit = limit
+        self.onSort = onSort
     }
 
     /// The rows before any column sort: largest first, ties by node index.
@@ -61,6 +67,7 @@ public final class FileTableModel: @unchecked Sendable {
         }
         lock.unlock()
         let rows = topK(limit, files: snapshot, under: scope)
+        if Task.isCancelled { return [] }  // partial: do not cache
         lock.lock()
         cached = rows
         lock.unlock()
@@ -71,15 +78,26 @@ public final class FileTableModel: @unchecked Sendable {
     /// the default order whichever way the sort runs (a stable sort), so
     /// reversing the direction never reverses a run of ties.
     public func sorted(by key: SortKey, ascending: Bool) async -> [UInt32] {
-        let model = self
-        return await Task.detached(priority: .userInitiated) {
-            model.onSort?(onMainThread())
-            return model.sortNow(by: key, ascending: ascending)
-        }.value
+        let work = sortTask(by: key, ascending: ascending)
+        return await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+    }
+
+    /// The detached sort, for a caller that wants to cancel it.
+    func sortTask(by key: SortKey, ascending: Bool) -> Task<[UInt32], Never> {
+        Task.detached(priority: .userInitiated) { [self] in
+            onSort?(onMainThread())
+            return sortNow(by: key, ascending: ascending)
+        }
+    }
+
+    /// The detached default-rows computation, for a caller that wants to cancel it.
+    func defaultRowsTask() -> Task<[UInt32], Never> {
+        Task.detached(priority: .userInitiated) { [self] in defaultRows() }
     }
 
     func sortNow(by key: SortKey, ascending: Bool) -> [UInt32] {
         let rows = defaultRows()
+        if Task.isCancelled { return [] }
         let s = snapshot
         // Keys are computed once per row; the sort then orders positions.
         let order: (Int, Int) -> Int  // <0: a before b, ascending
@@ -121,36 +139,52 @@ public final class FileTableModel: @unchecked Sendable {
     }
 }
 
-/// The rows the table currently shows, and the guard that keeps a slow sort
-/// from landing on a table that has since moved on.
+/// What the table shows: a snapshot and rows that index it. One value, so a
+/// reader can never pair one snapshot with another snapshot's indices.
+public struct FileTableContent: @unchecked Sendable {
+    public let snapshot: Snapshot
+    public let rows: [UInt32]
+}
+
+/// The content the table currently shows, and the guards that keep a slow
+/// sort from landing on a table that has since moved on.
 ///
-/// Every `load` and every sort request takes a new generation number; a
-/// sorted result is applied only if its number is still the latest, so a sort
-/// for an old snapshot, an old scope or an old column click is dropped.
+/// Every `load` and every sort request takes a new generation number and
+/// cancels the work in flight; a result is applied only if its number is still
+/// the latest, so a sort for an old snapshot, scope or column click is dropped.
+/// `content` is swapped atomically: it is cleared when a load starts and set
+/// again only when the new rows are ready.
 @MainActor
 public final class FileTableRows: ObservableObject {
-    @Published public private(set) var rows: [UInt32] = []
+    @Published public private(set) var content: FileTableContent?
     public private(set) var model: FileTableModel?
     private(set) var generation: UInt64 = 0
+    /// The work in flight (cancelled when superseded).
+    private(set) var inFlight: Task<[UInt32], Never>?
 
     public init() {}
+
+    /// The rows shown now; empty while loading.
+    public var rows: [UInt32] { content?.rows ?? [] }
 
     /// Show `model` (nil for none) with its default rows, dropping every sort in flight.
     /// The default rows are computed off the main actor too.
     public func load(_ model: FileTableModel?) async {
+        let mine = beginRequest()
         self.model = model
-        generation &+= 1
-        let mine = generation
-        guard let model else {
-            rows = []
-            return
-        }
-        let result = await Task.detached(priority: .userInitiated) { model.defaultRows() }.value
+        content = nil
+        guard let model else { return }
+        let work = model.defaultRowsTask()
+        inFlight = work
+        let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
         _ = accept(result, generation: mine)
     }
 
-    /// Start a sort; returns the generation its result must present.
-    func beginSort() -> UInt64 {
+    /// Start a request: supersede the work in flight; returns the generation
+    /// its result must present.
+    func beginRequest() -> UInt64 {
+        inFlight?.cancel()
+        inFlight = nil
         generation &+= 1
         return generation
     }
@@ -158,8 +192,8 @@ public final class FileTableRows: ObservableObject {
     /// Apply `result` if `generation` is still the latest. Returns whether it was.
     @discardableResult
     func accept(_ result: [UInt32], generation g: UInt64) -> Bool {
-        guard g == generation else { return false }
-        rows = result
+        guard g == generation, let model else { return false }
+        content = FileTableContent(snapshot: model.snapshot, rows: result)
         return true
     }
 
@@ -168,8 +202,10 @@ public final class FileTableRows: ObservableObject {
     @discardableResult
     public func sort(by key: SortKey, ascending: Bool) async -> Bool {
         guard let model else { return false }
-        let mine = beginSort()
-        let result = await model.sorted(by: key, ascending: ascending)
+        let mine = beginRequest()
+        let work = model.sortTask(by: key, ascending: ascending)
+        inFlight = work
+        let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
         return accept(result, generation: mine)
     }
 }

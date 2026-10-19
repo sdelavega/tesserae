@@ -44,9 +44,8 @@ final class TableTests: XCTestCase {
     func test_sort_orders_indices_not_nodes_for_every_key() async {
         let t = fixture()
         let s = t.snapshot
-        let model = FileTableModel(snapshot: s, scope: 0)
         let ranOnMain = LockedFlags()
-        model.onSort = { ranOnMain.record($0) }
+        let model = FileTableModel(snapshot: s, scope: 0, onSort: { ranOnMain.record($0) })
 
         let cases: [(SortKey, [String])] = [
             (.name, ["A.mov", "b2.txt", "b10.txt", "c.zip", "inner.png", "noext"]),
@@ -183,7 +182,7 @@ final class TableTests: XCTestCase {
         XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"])
 
         // A sort of A is in flight; B is loaded before it lands.
-        let staleToken = rows.beginSort()
+        let staleToken = rows.beginRequest()
         let staleResult = await rows.model!.sorted(by: .allocated, ascending: true)
         XCTAssertEqual(names(staleResult, a.snapshot), ["a1", "a2"], "precondition: the stale result differs from what B shows")
         await rows.load(FileTableModel(snapshot: b.snapshot, scope: 0))
@@ -326,6 +325,118 @@ final class TableTests: XCTestCase {
         let tinyRow = try XCTUnwrap(rows.firstIndex(of: t["tiny"]))
         let undated = try XCTUnwrap(table.view(atColumn: 3, row: tinyRow, makeIfNecessary: true) as? NSTableCellView)
         XCTAssertEqual(undated.textField?.stringValue, "—", "a stored 0 is unknown, not 1970")
+        XCTAssertEqual(undated.accessibilityLabel(), "tiny, 2 kB, modified unknown", "VoiceOver reads words, not a dash")
+    }
+    // MARK: Atomic content, bounds, scrolling, cancellation
+
+    @MainActor
+    func test_loading_never_publishes_a_snapshot_with_another_snapshots_rows() async {
+        let a = TestSnapshot(.dir("/A", [.file("a1", 10), .file("a2", 20)]))
+        let many = (0..<1200).map { TestSnapshot.Spec.file("b\($0)", UInt64($0 + 1)) }
+        let b = TestSnapshot(.dir("/B", many))
+        let rows = FileTableRows()
+        await rows.load(FileTableModel(snapshot: a.snapshot, scope: 0))
+        XCTAssertEqual(rows.rows.count, 2, "precondition: A shown")
+
+        var samples = 0, sawCleared = false, sawB = false
+        func check() {
+            guard let c = rows.content else { sawCleared = true; return }
+            samples += 1
+            let expected = topK(1000, files: c.snapshot, under: 0)
+            XCTAssertTrue(c.rows == expected, "rows are not this snapshot's default rows")
+            for r in c.rows {
+                XCTAssertLessThan(Int(r), c.snapshot.nodes.count, "row outside its own snapshot")
+                let n = c.snapshot.name(r)
+                XCTAssertEqual(n.first, c.snapshot === a.snapshot ? "a" : "b", "\(n) paired with the wrong snapshot")
+            }
+            if c.snapshot === b.snapshot { sawB = true }
+        }
+        let loading = Task { @MainActor in await rows.load(FileTableModel(snapshot: b.snapshot, scope: 0)) }
+        for _ in 0..<2000 {
+            check()
+            await Task.yield()
+            if sawB { break }
+        }
+        await loading.value
+        check()
+        XCTAssertTrue(sawB, "precondition: B's content arrived")
+        XCTAssertEqual(rows.content?.rows.count, 1000)
+        XCTAssertGreaterThan(samples, 0)
+        XCTAssertTrue(sawCleared || samples > 0)
+    }
+
+    @MainActor
+    func test_cells_never_trap_on_rows_outside_the_snapshot() {
+        let t = TestSnapshot(.dir("/R", [.file("a", 40)]))
+        let coord = FileTableView.Coordinator(snapshot: t.snapshot, rows: [1, 9999, UInt32.max - 1], selection: Selection(), locale: en)
+        let table = coord.makeTableView()
+        XCTAssertEqual(table.numberOfRows, 3, "precondition: three rows")
+        XCTAssertEqual(coord.text(column: "name", row: 0), "a")
+        for row in 1...2 {
+            for id in ["name", "allocated", "logical", "modified", "kind"] {
+                XCTAssertEqual(coord.text(column: id, row: row), "")
+                XCTAssertEqual(coord.accessibilityLabel(column: id, row: row), "")
+            }
+        }
+        table.selectRowIndexes(IndexSet([0, 1, 2]), byExtendingSelection: false)
+        XCTAssertEqual(coord.selection.nodes, [1], "invalid rows are not written to the selection")
+    }
+
+    @MainActor
+    func test_a_selection_from_the_treemap_scrolls_into_view() throws {
+        let files = (0..<300).map { TestSnapshot.Spec.file("f\($0)", UInt64(1000 - $0)) }
+        let t = TestSnapshot(.dir("/R", files))
+        let rows = topK(300, files: t.snapshot, under: 0)
+        let selection = Selection()
+        let coord = FileTableView.Coordinator(snapshot: t.snapshot, rows: rows, selection: selection, locale: en)
+        let table = coord.makeTableView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        scroll.documentView = table
+        window.contentView!.addSubview(scroll)
+        scroll.layoutSubtreeIfNeeded()
+        let target = 250
+        XCTAssertFalse(scroll.contentView.bounds.intersects(table.rect(ofRow: target)), "precondition: row 250 is off screen")
+        selection.nodes = [rows[target]]
+        XCTAssertTrue(scroll.contentView.bounds.intersects(table.rect(ofRow: target)), "the selected row was scrolled into view")
+    }
+
+    @MainActor
+    func test_a_superseded_sort_is_cancelled_not_just_ignored() async throws {
+        let a = TestSnapshot(.dir("/A", [.file("a1", 10), .file("a2", 20)]))
+        let gate = DispatchSemaphore(value: 0)
+        let calls = Counter()
+        let model = FileTableModel(snapshot: a.snapshot, scope: 0, onSort: { _ in if calls.next() == 0 { gate.wait() } })
+        let rows = FileTableRows()
+        await rows.load(model)
+        let first = Task { @MainActor in await rows.sort(by: .name, ascending: true) }
+        for _ in 0..<500 where calls.count < 1 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(calls.count, 1, "precondition: the first sort is running, held at the gate")
+        let running = try XCTUnwrap(rows.inFlight)
+        XCTAssertFalse(running.isCancelled)
+        let second = Task { @MainActor in await rows.sort(by: .name, ascending: false) }
+        for _ in 0..<500 where !running.isCancelled { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(running.isCancelled, "starting a new sort cancels the one in flight")
+        gate.signal()
+        let (r1, r2) = (await first.value, await second.value)
+        XCTAssertFalse(r1)
+        XCTAssertTrue(r2)
+        XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"])
+    }
+
+    func test_top_k_stops_when_its_task_is_cancelled() async {
+        let t = TestSnapshot(.dir("/R", (0..<50).map { .file("f\($0)", UInt64($0 + 1)) }))
+        let s = t.snapshot
+        let gate = DispatchSemaphore(value: 0)
+        let task = Task.detached { () -> [UInt32] in
+            block(gate)
+            return topK(5, files: s, under: 0)
+        }
+        task.cancel()
+        gate.signal()
+        let cancelled = await task.value
+        XCTAssertTrue(cancelled.isEmpty, "a cancelled walk returns nothing, not a partial answer")
+        XCTAssertEqual(topK(5, files: s, under: 0).count, 5, "precondition: uncancelled it answers")
     }
 }
 
@@ -336,3 +447,13 @@ private final class LockedFlags: @unchecked Sendable {
     func record(_ v: Bool) { lock.lock(); _values.append(v); lock.unlock() }
     var values: [Bool] { lock.lock(); defer { lock.unlock() }; return _values }
 }
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n - 1 }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+
+/// `DispatchSemaphore.wait` is unavailable in async closures; a sync wrapper is fine.
+private func block(_ g: DispatchSemaphore) { g.wait() }
