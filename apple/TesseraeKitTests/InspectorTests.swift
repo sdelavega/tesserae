@@ -22,6 +22,8 @@ import XCTest
 
 /// The hover inspector (spec §8: "full path, both sizes, type, dates").
 final class InspectorTests: XCTestCase {
+    private let en = Locale(identifier: "en_US")
+
     func test_inspector_reports_both_sizes_kind_and_date() {
         let tiny = (0..<30).map { TestSnapshot.Spec.file("t\($0)", 1024, logical: UInt64(10 + $0), modified: 5) }
         let denied = (0..<17).map { TestSnapshot.Spec.denied("locked\($0)") }
@@ -82,7 +84,7 @@ final class InspectorTests: XCTestCase {
         let n = tiles[agg].aggregateCount
         XCTAssertGreaterThan(n, 1, "precondition: several items collapsed")
         let info = inspect(tileAt: agg, in: tiles, snapshot: s)
-        let bytes = ByteCountFormatter.string(fromByteCount: Int64(n) * 1024, countStyle: .file)
+        let bytes = displaySize(UInt64(n) * 1024, locale: en)
         // The tiny files tie on allocated, so they keep their order and the
         // tail is the last `n` of them.
         let tailLogical = (30 - Int(n)..<30).reduce(UInt64(0)) { $0 + UInt64(10 + $1) }
@@ -92,14 +94,14 @@ final class InspectorTests: XCTestCase {
                 subject: .aggregate(count: n, bytes: UInt64(n) * 1024), allocated: UInt64(n) * 1024,
                 logical: tailLogical, kind: .aggregate, modified: nil))
         XCTAssertNil(info.path)
-        XCTAssertEqual(info.title, "\(n) smaller items — \(bytes)")
+        XCTAssertEqual(info.title(locale: en), "\(n) smaller items — \(bytes)")
         XCTAssertEqual(info.kind.displayName, "Smaller items")
         let lockedInfo = inspect(tileAt: locked, in: tiles, snapshot: s)
         XCTAssertEqual(
             lockedInfo,
             InspectorInfo(subject: .unreadable(count: 17), allocated: 0, logical: 0, kind: .unreadable, modified: nil))
         XCTAssertNil(lockedInfo.path)
-        XCTAssertEqual(lockedInfo.title, "17 unreadable folders")
+        XCTAssertEqual(lockedInfo.title(locale: en), "17 unreadable folders")
         XCTAssertEqual(lockedInfo.kind.displayName, "Unreadable folders")
         let fileTile = tiles.firstIndex { $0.node == t["big.bin"] }!
         XCTAssertEqual(inspect(tileAt: fileTile, in: tiles, snapshot: s), inspect(t["big.bin"], in: s))

@@ -69,27 +69,49 @@ public struct InspectorInfo: Equatable {
         return nil
     }
 
-    /// The heading: the path, "N smaller items — X" or "N unreadable folders".
-    public var title: String {
+    /// The heading: the path, "N smaller items — X" or "N unreadable folders",
+    /// numbers written for the current locale.
+    public var title: String { title(locale: .current) }
+
+    /// `title` with numbers written for `locale`.
+    public func title(locale: Locale) -> String {
         switch subject {
         case .node(let p):
             return p
         case .aggregate(let n, let bytes):
-            return "\(displayCount(n)) smaller \(n == 1 ? "item" : "items") — \(displaySize(bytes))"
+            let (words, size) = InspectorInfo.aggregateParts(count: n, bytes: bytes, locale: locale)
+            return words + InspectorInfo.aggregateSeparator + size
         case .unreadable(let n):
-            return "\(displayCount(n)) unreadable \(n == 1 ? "folder" : "folders")"
+            return InspectorInfo.unreadableWords(count: n, locale: locale)
         }
+    }
+
+    /// What separates the words from the size in an aggregate's title.
+    static let aggregateSeparator = " — "
+
+    /// An aggregate's title in two parts, "N smaller items" and its size, so
+    /// a caller that has to shorten the title can keep the size whole.
+    static func aggregateParts(count n: UInt32, bytes: UInt64, locale: Locale) -> (words: String, size: String) {
+        ("\(displayCount(n, locale: locale)) smaller \(n == 1 ? "item" : "items")", displaySize(bytes, locale: locale))
+    }
+
+    /// "N unreadable folders".
+    static func unreadableWords(count n: UInt32, locale: Locale) -> String {
+        "\(displayCount(n, locale: locale)) unreadable \(n == 1 ? "folder" : "folders")"
     }
 }
 
-/// How the inspector and the tile labels write a byte count ("4.2 GB").
-func displaySize(_ bytes: UInt64) -> String {
-    ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
+/// How the inspector and the tile labels write a byte count ("4.2 GB"), in
+/// `locale`'s digits and unit names (macOS 12+ `ByteCountFormatStyle`;
+/// `ByteCountFormatter` has no locale property).
+func displaySize(_ bytes: UInt64, locale: Locale = .current) -> String {
+    Int64(clamping: bytes).formatted(.byteCount(style: .file).locale(locale))
 }
 
 /// How the inspector and the tile labels write a count ("12,345").
-func displayCount(_ n: UInt32) -> String {
+func displayCount(_ n: UInt32, locale: Locale = .current) -> String {
     let f = NumberFormatter()
+    f.locale = locale
     f.numberStyle = .decimal
     return f.string(from: NSNumber(value: n)) ?? String(n)
 }
