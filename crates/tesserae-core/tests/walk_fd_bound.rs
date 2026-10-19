@@ -26,18 +26,49 @@
 //! a limit of a few dozen; and if it needs one per level, a tree deeper than
 //! the limit must fail. Both are asserted.
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use tesserae_core::walk::{walk_serial, Incomplete, WalkOptions};
 use tesserae_testutil::Fixture;
 
-/// Highest descriptor number currently open in this process.
-fn highest_open_fd() -> u64 {
-    fs::read_dir("/dev/fd")
+/// Descriptor numbers currently open in this process.
+///
+/// Probed with `fcntl(F_GETFD)`, which opens nothing. Listing `/dev/fd` alone
+/// would count the listing's own directory descriptor, which takes the lowest
+/// free number while it is open; the listing is used only for an upper bound.
+fn open_fds() -> BTreeSet<u64> {
+    let bound = fs::read_dir("/dev/fd")
         .unwrap()
         .filter_map(|e| e.unwrap().file_name().to_str()?.parse::<u64>().ok())
         .max()
-        .unwrap()
+        .unwrap();
+    (0..=bound)
+        // SAFETY: F_GETFD only queries the descriptor table; an unused number
+        // returns -1 with EBADF.
+        .filter(|&n| unsafe { libc::fcntl(n as libc::c_int, libc::F_GETFD) } != -1)
+        .collect()
+}
+
+/// The soft limit under which exactly `free` more descriptors can be opened.
+///
+/// The kernel hands out the lowest free number below the limit, so any gap
+/// below the highest open descriptor is a free slot too. Counting from the
+/// highest open one ("highest + n") silently grants extra descriptors in a
+/// process whose numbering has holes, which a test harness can easily have.
+fn limit_leaving_free(free: u64) -> u64 {
+    let open = open_fds();
+    let mut found = 0;
+    let mut n = 0;
+    loop {
+        if !open.contains(&n) {
+            found += 1;
+            if found == free {
+                return n + 1;
+            }
+        }
+        n += 1;
+    }
 }
 
 fn set_soft_nofile(soft: u64) -> libc::rlimit {
@@ -76,12 +107,9 @@ fn open_descriptors_scale_with_depth_not_with_directories_visited() {
         ..WalkOptions::default()
     };
 
-    // Room for about 200 more descriptors than are open now. A thousand
-    // directories cannot fit if each holds one; the 32 a thirty-deep chain
-    // needs fit easily. (The margin is generous on purpose: the kernel does
-    // not honour small soft limits exactly, so this test must not depend on
-    // the last few descriptors.)
-    let original = set_soft_nofile(highest_open_fd() + 1 + 200);
+    // Room for 200 more descriptors. A thousand directories cannot fit if
+    // each holds one; the 32 a thirty-deep chain needs fit easily.
+    let original = set_soft_nofile(limit_leaving_free(200));
     let wide_and_deep = walk_serial(&opts(fx.path().to_path_buf()));
     // Restore before asserting so a failure cannot leave the limit lowered.
     set_soft_nofile(original.rlim_cur);
@@ -99,15 +127,34 @@ fn open_descriptors_scale_with_depth_not_with_directories_visited() {
     // Now give it fewer descriptors than the chain is deep. The depth is what
     // costs descriptors, so this must run out: the walk still returns a
     // result, flagged as incomplete for lack of descriptors.
-    let original = set_soft_nofile(highest_open_fd() + 1 + 10);
+    // Punch holes in the descriptor numbering first, as a test harness can:
+    // 25 free numbers below a still-open one. A limit counted from the
+    // highest open descriptor would grant 35 free slots, enough for the
+    // chain, so this is what makes the test mean the same on every machine.
+    let mut held: Vec<fs::File> = (0..26)
+        .map(|_| fs::File::open("/dev/null").unwrap())
+        .collect();
+    let keep = held.pop().unwrap();
+    drop(held);
+    let open_before = open_fds();
+    let highest = *open_before.iter().max().unwrap();
+    let holes = (0..highest).filter(|n| !open_before.contains(n)).count();
+    assert!(
+        holes >= 25,
+        "the descriptor numbering has {holes} holes, expected at least 25"
+    );
+    let limit = limit_leaving_free(10);
+    let original = set_soft_nofile(limit);
     let too_deep = walk_serial(&opts(fx.path().join("deep")));
     set_soft_nofile(original.rlim_cur);
+    drop(keep);
     let (_, stats) = too_deep.unwrap();
 
     assert_eq!(
         stats.incomplete,
         Some(Incomplete::FdExhausted),
-        "a {DEPTH}-deep chain fitted in 10 descriptors: depth is not what bounds them"
+        "a {DEPTH}-deep chain fitted in 10 descriptors: depth is not what bounds them \
+         (soft limit {limit}; open before the walk: {open_before:?})"
     );
     assert_eq!(
         stats.errors, 0,
