@@ -209,6 +209,12 @@ public final class Snapshot {
     public func isDirectory(_ i: UInt32) -> Bool {
         node(i).flags & UInt16(TESS_FLAG_DIR) != 0
     }
+
+    /// Bytes of disk node `i` occupies; for a directory, rolled up over
+    /// everything beneath it, so it equals the sum over its children.
+    public func allocated(_ i: UInt32) -> UInt64 {
+        node(i).allocated
+    }
 }
 
 /// Immutable after `init` (the Rust snapshot never mutates), so it may be

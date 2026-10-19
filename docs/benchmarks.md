@@ -303,3 +303,43 @@ volume scan above, which is kernel-bound: freeze took 0.71 to 0.85 s of
 The before figures are a little slower than Phase 1's own (7.6 ns, 47 ns,
 17.7 us, 3.40 ms) on the same machine, as the volume scans were: the machine
 is busier today.
+
+## Phase 2: squarified layout
+
+`squarify` (`apple/TesseraeKit/Layout/SquarifiedLayout.swift`) on a real
+snapshot, timed by `LayoutTests.test_measure_squarify_on_the_snapshot_root`
+and `test_measure_squarify_on_the_largest_directory`. Both skip unless
+`TESSERAE_BENCH_ROOT` names a directory to scan, so CI never scans its
+runner's disk. Run on 2026-10-19 (same machine as above, Xcode 27.2, load
+average about 6) at commit `57f5967` plus this change:
+
+```
+TEST_RUNNER_TESSERAE_BENCH_ROOT=/System/Volumes/Data xcodebuild test \
+  -project apple/Tesserae.xcodeproj -scheme TesseraeKit SWIFT_OPTIMIZATION_LEVEL=-O \
+  -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath apple/build/DerivedData-bench \
+  -only-testing:TesseraeKitTests/LayoutTests/test_measure_squarify_on_the_snapshot_root \
+  -only-testing:TesseraeKitTests/LayoutTests/test_measure_squarify_on_the_largest_directory
+```
+
+The build is the Debug configuration compiled with `-O`: the test bundle
+uses Debug-only `Snapshot` hooks, so a Release test build does not compile.
+That keeps the Debug-only liveness check (a lock taken on every `Snapshot`
+node access), so these figures are an upper bound on the shipped cost.
+
+The snapshot: `/System/Volumes/Data`, 5,322,925 nodes, scanned in 21.2 s by
+the test itself. Bounds 1440 x 900 pt, default parameters (subdivide below
+24 pt, cull below 16 pt², budget 50,000).
+
+| layout root | children | tiles emitted | aggregates | deepest tile | 50 runs: min / median / max | `measure` (10 runs) average |
+|---|---|---|---|---|---|---|
+| the volume root | 20 | 7,463 | 822 | depth 18 | 0.282 / 0.286 / 0.346 ms | 1.0 ms (first run 2.1 ms, last 0.7 ms) |
+| the directory with the most children (`target/debug/deps` of this repo) | 140,276 | 7,603 | 1 | depth 1 | 0.162 / 0.164 / 0.340 ms | 0.38 ms |
+
+What the numbers say: the layout touches only what it emits. The root lays
+out 7,463 tiles out of 5.3 million nodes; the 140,276-entry directory costs
+less than the root because its tail (all but 7,601 entries) is found by a
+binary search and summed from the rollup, never visited. Both are far below
+a 16.7 ms frame, which the zoom animation does not need anyway (it lays out
+once per zoom, not per frame; spec §8). The `measure` averages run higher
+than the hand-timed loop because XCTest's first iterations include warm-up
+(the root's ten values fall from 2.1 ms to 0.7 ms).
