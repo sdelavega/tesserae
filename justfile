@@ -23,15 +23,15 @@ gate: lint test header ship-lib deny
 # `setrlimit` is process-wide, so that test is `#[ignore]`d in the suite and
 # gets a process and a thread to itself here.
 test:
-    cargo test --workspace
-    cargo test -p tesserae-core --lib -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
+    cargo test --workspace --locked
+    cargo test -p tesserae-core --lib --locked -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
 
 # Formatting and clippy, for the workspace and for fuzz/ (a separate crate).
 lint:
     cargo fmt --check
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo fmt --check --manifest-path fuzz/Cargo.toml
-    cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
 
 # Licences, for the workspace and for fuzz/.
 deny:
