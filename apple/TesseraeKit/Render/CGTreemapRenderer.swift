@@ -25,7 +25,7 @@ import Foundation
 /// * **Fill** is the palette value, sRGB-encoded, written unconverted into an
 ///   8-bit sRGB image (each byte is the palette's hex value).
 /// * **Border** is one *device* pixel wide, inside the rect, coloured the
-///   fill's RGB times `TreemapRenderer.borderShade`, rounded to nearest 8-bit.
+///   fill's RGB times `TreemapRenderer.borderShade`, rounded as the GPU's unorm store does (see `quantised`).
 /// * **Order** is array order (painter's order), under `clearColour`.
 ///
 /// **Rasterisation rule.** Like the GPU, a device pixel belongs to a tile when
@@ -37,8 +37,10 @@ import Foundation
 /// of a pixel centre.)
 ///
 /// Tiles with a non-finite rect are skipped, and a size that rounds to zero
-/// produces a 1×1 image of the clear colour: the renderer never traps or
-/// emits NaN.
+/// produces a 1×1 image of the clear colour; huge rects are clamped, so no
+/// geometry can trap or emit NaN. What does trap (preconditions): a colour
+/// index outside `colours`, and failure to allocate the bitmap (sizes are
+/// capped at 32,768 px per side).
 public struct CGTreemapRenderer {
     /// The colour under the tiles (sRGB-encoded, like the palette).
     public var clearColour: SIMD4<Float>
@@ -137,7 +139,12 @@ public struct CGTreemapRenderer {
     /// store, as an exact k/255 colour so CoreGraphics adds no rounding of its
     /// own. Alpha is `c.w` (the palette is opaque).
     private static func quantised(_ c: SIMD4<Float>, _ shade: Float) -> SIMD4<Float> {
-        func q(_ v: Float) -> Float { min(max((v * shade * 255).rounded(), 0), 255) / 255 }
+        // The shader's `Float` product, then the exact (not Float-rounded)
+        // scale to 0...255, rounded ties-to-even: Metal's float-to-unorm8.
+        func q(_ v: Float) -> Float {
+            let stored = Double(v * shade) * 255
+            return Float(min(max(stored.rounded(.toNearestOrEven), 0), 255)) / 255
+        }
         return SIMD4(q(c.x), q(c.y), q(c.z), min(max(c.w, 0), 1))
     }
 }

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import CoreGraphics
 import ImageIO
 import Metal
@@ -266,6 +267,7 @@ final class RenderSnapshotTests: XCTestCase {
         let tree = Self.fixedTree()
         let palette = Palette.colours(.depth, dark: false)
         var checkedRects = 0
+        let metal = MTLCreateSystemDefaultDevice().flatMap { TreemapRenderer(device: $0) }
         for side: CGFloat in [0, 0.5, 1] {
             let b = CGRect(x: 0, y: 0, width: side, height: side)
             let tiles = squarify(tree, root: tree.rootIndex, in: b)
@@ -298,7 +300,7 @@ final class RenderSnapshotTests: XCTestCase {
                     r.rgba(0, 0), [Int((want.x * 255).rounded()), Int((want.y * 255).rounded()),
                                    Int((want.z * 255).rounded()), 255], "side \(side): the huge tile's fill")
             }
-            if let device = MTLCreateSystemDefaultDevice(), let metal = TreemapRenderer(device: device) {
+            if let metal = metal {
                 metal.update(tiles: tiles + nasty, colourOf: Self.depthIndex, palette: palette)
                 let image = metal.renderOffscreen(size: b.size, scale: 1)
                 XCTAssertGreaterThanOrEqual(image.width, 1, "Metal side \(side)")
@@ -306,38 +308,94 @@ final class RenderSnapshotTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(checkedRects, 0, "precondition: the 1×1 layout produced tiles to check")
+        if metal == nil { throw XCTSkip("no Metal device: the CoreGraphics half ran, the Metal half did not") }
     }
 
     // MARK: Metal cross-check
 
     /// The fallback must not drift from the real renderer: same tiles, same
-    /// bytes. Integral rects, so rasterisation is unambiguous.
-    func test_metal_and_coregraphics_agree_on_pixels() throws {
+    /// bytes, for every shipped palette entry. One 20×20 tile per palette
+    /// index (integral rects, so rasterisation is unambiguous); the status
+    /// colour comes from a real `permDenied` tile. Border bytes are
+    /// fill × 0.7, which lands on exact .5 for several shipped channels
+    /// (0x19, 0xaf, 0xcd, 0x55, ...), so this also pins the tie-rounding mode.
+    func test_metal_and_coregraphics_agree_on_every_palette() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
         let metal = try XCTUnwrap(TreemapRenderer(device: device))
-        let tiles = Self.tiles(of: Self.fixedTree()).map { t -> Tile in
-            var t = t
-            t.rect = t.rect.integral  // whole points
-            return t
-        }
-        XCTAssertGreaterThan(tiles.count, 12, "precondition")
-        let palette = Palette.colours(.depth, dark: false)
-        for scale: CGFloat in [1, 2] {
-            metal.update(tiles: tiles, colourOf: Self.depthIndex, palette: palette)
-            let m = Raster(metal.renderOffscreen(size: Self.bounds.size, scale: scale))
-            let c = Raster(render(tiles, palette, Self.depthIndex, dark: false, scale: scale))
-            XCTAssertEqual(m.width, c.width)
-            XCTAssertEqual(m.height, c.height)
-            var maxDelta = 0, off = 0
-            for i in 0..<(m.width * m.height * 4) {
-                let d = abs(Int(m.bytes[i]) - Int(c.bytes[i]))
-                maxDelta = max(maxDelta, d)
-                if d != 0 { off += 1 }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let modes: [(String, ColourMode)] = [
+            ("depth", .depth), ("age", .age(now: now)), ("typeFocus", .typeFocus([]))
+        ]
+        var mismatches: [String] = []
+        var checkedColours = 0
+        for (modeName, mode) in modes {
+            for dark in [false, true] {
+                let palette = Palette.colours(mode, dark: dark)
+                var tiles: [Tile] = []
+                for i in 0..<palette.count {
+                    let rect = CGRect(x: (i % 6) * 20, y: (i / 6) * 20, width: 20, height: 20)
+                    let flags = i == Palette.statusIndex ? Tile.Flag.permDenied : 0
+                    tiles.append(Tile(rect: rect, node: UInt32(i), depth: 0, flags: flags))
+                }
+                XCTAssertTrue(tiles.contains { $0.isPermissionDenied }, "precondition: a permDenied tile")
+                let colourOf: (Tile) -> UInt16 = {
+                    $0.isPermissionDenied ? UInt16(Palette.statusIndex) : UInt16($0.node)
+                }
+                let size = CGSize(width: 120, height: CGFloat((palette.count + 5) / 6 * 20))
+                for scale: CGFloat in [1, 2] {
+                    metal.clearColour = Palette.surface(dark: dark)
+                    metal.update(tiles: tiles, colourOf: colourOf, palette: palette)
+                    let m = Raster(metal.renderOffscreen(size: size, scale: scale))
+                    let c = Raster(render(tiles, palette, colourOf, dark: dark, size: size, scale: scale))
+                    XCTAssertEqual(m.width, c.width)
+                    XCTAssertEqual(m.height, c.height)
+                    var bad = Set<String>()
+                    for t in tiles {
+                        // Probe every pixel of the tile, which covers fill and border.
+                        let x0 = Int(t.rect.minX * scale), y0 = Int(t.rect.minY * scale)
+                        for y in y0..<(y0 + Int(20 * scale)) {
+                            for x in x0..<(x0 + Int(20 * scale)) where m.rgba(x, y) != c.rgba(x, y) {
+                                bad.insert("\(modeName)\(dark ? "-dark" : "") index \(t.node): "
+                                    + "Metal \(m.rgba(x, y)) CG \(c.rgba(x, y))")
+                            }
+                        }
+                    }
+                    mismatches += bad.sorted().map { "\($0) @\(scale)x" }
+                    checkedColours += tiles.count
+                }
             }
-            XCTAssertGreaterThan(Set(m.bytes.enumerated().filter { $0.offset % 4 == 0 }.map(\.element)).count, 4,
-                "precondition: the image has several colours")
-            print("Metal vs CG at \(scale)x: \(off) differing bytes, max delta \(maxDelta)")
-            XCTAssertEqual(maxDelta, 0, "scale \(scale): \(off) bytes differ")
         }
+        XCTAssertGreaterThan(checkedColours, 60, "precondition: all palettes were compared")
+        XCTAssertEqual(mismatches, [], "Metal and CoreGraphics bytes differ")
+    }
+
+    // MARK: Fallback view caching
+
+    @MainActor
+    func test_fallback_view_rerenders_on_scale_change_but_not_on_unchanged_update() throws {
+        let view = TreemapView.FallbackView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        let tiles = [Tile(rect: CGRect(x: 0, y: 0, width: 120, height: 80), node: 0, depth: 0)]
+        let palette = Palette.colours(.depth, dark: false)
+        let colourOf: (Tile) -> UInt16 = { _ in 2 }
+        view.scaleOverride = 1
+        let base = view.renderCount  // the empty view's own render
+        view.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: false)
+        XCTAssertEqual(view.renderCount, base + 1, "first set renders")
+        let first = try XCTUnwrap(view.layer?.contents as! CGImage?)
+        XCTAssertEqual(first.width, 120)
+
+        view.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: false)
+        view.layout()
+        XCTAssertEqual(view.renderCount, base + 1, "an unchanged update does not re-render")
+
+        view.scaleOverride = 2
+        XCTAssertEqual(view.renderCount, base + 2, "a scale change re-renders")
+        let second = try XCTUnwrap(view.layer?.contents as! CGImage?)
+        XCTAssertEqual(second.width, 240)
+
+        view.set(tiles: tiles, palette: palette, colourOf: { _ in 3 }, dark: false)
+        XCTAssertEqual(view.renderCount, base + 3, "different colour indices re-render")
+        view.set(tiles: tiles, palette: palette, colourOf: { _ in 3 }, dark: true)
+        XCTAssertEqual(view.renderCount, base + 4, "light/dark re-renders")
     }
 }
