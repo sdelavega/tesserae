@@ -1,0 +1,25 @@
+[package]
+name = "tesserae-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "C ABI over the Tesserae scan engine, for the SwiftUI app"
+
+[lib]
+# `staticlib` is what the app links; `rlib` is what this crate's own tests and
+# any other Rust consumer use.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+tesserae-core = { path = "../tesserae-core" }
+libc = "0.2"
+
+[dev-dependencies]
+# The fault-injection hooks (panic and delay in the worker loop) exist only
+# behind this feature, and a dev-dependency feature is not enabled for a normal
+# build: the shipped static library never contains them. CI checks that with
+# `cargo tree`.
+tesserae-core = { path = "../tesserae-core", features = ["test-hooks"] }
+tesserae-testutil = { path = "../tesserae-testutil" }
+tempfile = "3.27.0"

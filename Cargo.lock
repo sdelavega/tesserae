@@ -395,6 +395,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tesserae-ffi"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "tesserae-core",
+ "tesserae-testutil",
+]
+
+[[package]]
 name = "tesserae-testutil"
 version = "0.1.0"
 dependencies = [

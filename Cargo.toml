@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/tesserae-core", "crates/tesserae-testutil"]
+members = [
+    "crates/tesserae-core",
+    "crates/tesserae-ffi",
+    "crates/tesserae-testutil",
+]
 
 [workspace.package]
 version = "0.1.0"
