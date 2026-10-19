@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn dedup_flag_is_bit_two_and_collides_with_nothing() {
-        // Spec section 6 order: dir=0, symlink=1, clone=2, perm_denied=3.
+        // Spec section 6 order: dir=0, symlink=1, hardlink_dup=2, perm_denied=3.
         assert_eq!(FLAG_HARDLINK_DUP, 1 << 2);
         assert_eq!(FLAG_PERM_DENIED, 1 << 3);
         assert_eq!(FLAG_HARDLINK_DUP & FLAG_PERM_DENIED, 0);

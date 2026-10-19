@@ -80,20 +80,29 @@
 //!    parser that assumed they did would read a directory's name bytes as its
 //!    link count and allocated size. The numbers would look plausible.
 //!
-//! So a slot's value is used only when two independent gates agree:
+//! So an entry must first have one of the two measured shapes, and a slot's
+//! value is then used only when two independent gates agree:
 //!
-//! * **The layout gate.** The name's `attr_dataoffset` marks where the
+//! * **The shape gate.** The name's `attr_dataoffset` marks where the
 //!   variable-length region begins, which makes it the kernel's own statement
-//!   of where the fixed-field region ends. A slot that does not fit entirely
-//!   before it is not a field, and is reported as its default.
+//!   of where the fixed-field region ends. Over a full scan of a Data volume
+//!   (6.7 million entries: directories, regular files, symlinks, sockets and
+//!   fifos) and on HFS+, exFAT and FAT32 images, that end was only ever 52
+//!   with the `fileattr` word zero (every directory) or 72 with it non-zero
+//!   (everything else). Any other size, or a size that disagrees with the
+//!   `fileattr` word, is [`ParseError::UnexpectedLayout`]: a kernel that
+//!   packed this mask differently would put a neighbour's bytes under the
+//!   constant offsets, so the entry is refused rather than read.
+//! * **The layout gate.** A slot that does not fit entirely before the end of
+//!   the fixed region is not a field, and is reported as its default.
 //! * **The returned-attributes gate.** `ATTR_CMN_RETURNED_ATTRS` says whether
 //!   a present slot holds a real value. A slot whose bit is clear is reported
 //!   as its default, which is what `FSOPT_PACK_INVAL_ATTRS` asks a caller to
 //!   do with a zero-filled invalid attribute.
 //!
-//! Field offsets are compile-time constants in either case, so neither gate
-//! can shift a later read: a surprise yields a default, never another field's
-//! bytes.
+//! Field offsets are compile-time constants in either shape, so no gate can
+//! shift a later read: a surprise yields a default or a refused entry, never
+//! another field's bytes.
 //!
 //! The name reference is the one slot that cannot be handled that way, because
 //! its own value is what locates the fixed region's end and therefore gates
@@ -123,6 +132,8 @@ pub struct RawEntry<'a> {
     pub obj_type: ObjType,
     pub file_id: u64,
     pub dev_id: i32,
+    /// `ATTR_CMN_FLAGS` (`st_flags`). Unread in Phase 1; see
+    /// [`crate::attrs::COMMON_MASK`] for why it is requested.
     pub flags: u32,
     /// `ATTR_FILE_DATALENGTH`: the data fork's logical size.
     pub logical: u64,
@@ -160,6 +171,11 @@ pub enum ParseError {
     /// be established, so no field is reported rather than some being read
     /// from a shifted offset.
     NameOutOfBounds,
+    /// The fixed-field region is not one of the two layouts measured for this
+    /// mask: 52 bytes with no `fileattr` attribute returned (a directory), or
+    /// 72 bytes with at least one (everything else). The constant offsets
+    /// describe only those two, so no field is read from any other.
+    UnexpectedLayout,
 }
 
 /// Iterator over a `getattrlistbulk` buffer. See [`entries`].
@@ -244,6 +260,14 @@ const MIN_ENTRY_LEN: usize = OFF_NAME_REF + 8;
 /// after the name reference itself. Requiring this also keeps the name slice
 /// from ever overlapping the fields parsed above it.
 const MIN_NAME_START: usize = OFF_NAME_REF + 8;
+
+/// Where the fixed-field region ends, and so the name begins, in the two
+/// measured layouts: without the `fileattr` group (a directory) and with it.
+/// No other region size has been observed for this mask -- not over a full
+/// scan of a 6.7-million-entry Data volume, nor on HFS+, exFAT or FAT32 -- and
+/// the parser accepts no other.
+const DIR_FIXED_END: usize = OFF_LINKCOUNT;
+const FILE_FIXED_END: usize = OFF_DATALENGTH + 8;
 
 /// `fsobj_type_t` values from `enum vtype` in `<sys/vnode.h>`:
 /// `VNON, VREG, VDIR, VBLK, VCHR, VLNK, VSOCK, VFIFO, VBAD, VSTR, VCPLX`.
@@ -359,8 +383,16 @@ fn parse_entry(rest: &[u8]) -> Result<(RawEntry<'_>, usize), ParseError> {
 
     // (4) The fixed-field region ends where the variable-length region
     // begins. This is the kernel's own account of the layout, and it is what
-    // tells a directory's entry (no `fileattr` group) from a file's.
-    let fixed_end = name_start.min(len);
+    // tells a directory's entry (no `fileattr` group) from a file's. Only the
+    // two measured shapes are accepted: a region of any other size, or one
+    // whose size disagrees with the returned `fileattr` word, is a packing
+    // these offsets do not describe, and reading it would be the plausible
+    // wrong number this module exists to prevent.
+    let fixed_end = match (name_start, returned.file) {
+        (DIR_FIXED_END, 0) => DIR_FIXED_END,
+        (FILE_FIXED_END, file) if file != 0 => FILE_FIXED_END,
+        _ => return Err(ParseError::UnexpectedLayout),
+    };
 
     let obj_type = match returned
         .has_common(RET_OBJTYPE)
@@ -472,6 +504,10 @@ mod tests {
         name_length: Option<u32>,
         /// Override the leading entry length.
         entry_length: Option<u32>,
+        /// Override where the fixed-field region ends and the name begins.
+        /// Slots past it are cut off; bytes added before it are 0xA5. Builds
+        /// the region sizes no measured kernel produces.
+        fixed_end: Option<usize>,
     }
 
     impl Default for Synth {
@@ -491,18 +527,19 @@ mod tests {
                 name_offset: None,
                 name_length: None,
                 entry_length: None,
+                fixed_end: None,
             }
         }
     }
 
     impl Synth {
         fn build(&self) -> Vec<u8> {
-            let fixed_end = if self.file_group {
-                OFF_DATALENGTH + 8
+            let fixed_end = self.fixed_end.unwrap_or(if self.file_group {
+                FILE_FIXED_END
             } else {
-                OFF_LINKCOUNT
-            };
-            let mut e = vec![0u8; fixed_end];
+                DIR_FIXED_END
+            });
+            let mut e = vec![0u8; fixed_end.max(FILE_FIXED_END)];
             e[OFF_RETURNED_COMMON..][..4].copy_from_slice(&self.returned_common.to_le_bytes());
             e[OFF_RETURNED_FILE..][..4].copy_from_slice(&self.returned_file.to_le_bytes());
             let data_offset = self
@@ -520,9 +557,12 @@ mod tests {
                 e[OFF_ALLOCSIZE..][..8].copy_from_slice(&self.allocated.to_le_bytes());
                 e[OFF_DATALENGTH..][..8].copy_from_slice(&self.logical.to_le_bytes());
             }
+            // Cut back to the region, or pad it out to an overridden length.
+            e.resize(FILE_FIXED_END.min(fixed_end), 0);
+            e.resize(fixed_end, 0xA5);
             e.extend_from_slice(&self.name);
             e.push(0);
-            while e.len() % 8 != 0 {
+            while !e.len().is_multiple_of(8) {
                 e.push(0);
             }
             let len = self.entry_length.unwrap_or(e.len() as u32);
@@ -725,15 +765,14 @@ mod tests {
             assert!(entries(&[], 0).next().is_none());
         }
 
-        /// The gate that does the real work for directories: even if the returned
-        /// set claimed the `fileattr` attributes were supplied, the slots are not
-        /// in the fixed region, so they are never read out of the name bytes.
+        /// The layout a directory's entry has: no `fileattr` group, and the
+        /// returned set agreeing that none was supplied. Its file fields are
+        /// defaults, never read out of the name bytes.
         #[test]
         fn absent_file_group_is_not_read_from_the_name_bytes() {
             let buf = Synth {
                 file_group: false,
-                // Deliberately inconsistent: the layout gate must still win.
-                returned_file: FILE_MASK,
+                returned_file: 0,
                 obj_type: VDIR,
                 name: b"directory-name-long-enough-to-look-like-numbers".to_vec(),
                 ..Default::default()
@@ -752,6 +791,85 @@ mod tests {
             // The common fields, which do fit, are still read correctly.
             assert_eq!(entry.file_id, 0x0123_4567_89AB_CDEF);
             assert_eq!(entry.dev_id, 0x0100_000F);
+        }
+
+        /// The two fixed-region sizes measured over a full scan of a Data volume
+        /// and on HFS+, exFAT and FAT32 images are 52 (directories) and 72
+        /// (everything else). Any other size is a layout this parser has never
+        /// seen, where the constant offsets could land on a neighbour's bytes,
+        /// so the entry is refused instead of read.
+        #[test]
+        fn rejects_fixed_regions_of_unmeasured_size() {
+            // Controls: the builder's override makes entries the parser takes
+            // at exactly the two measured sizes, so a rejection below is the
+            // size and nothing else about the entry.
+            for (fixed_end, file_group, returned_file) in
+                [(DIR_FIXED_END, false, 0), (FILE_FIXED_END, true, FILE_MASK)]
+            {
+                let buf = Synth {
+                    fixed_end: Some(fixed_end),
+                    file_group,
+                    returned_file,
+                    ..Default::default()
+                }
+                .build();
+                assert_eq!(one(&buf).name, b"synthetic.bin", "control {fixed_end}");
+            }
+            for fixed_end in [32, 40, 44, 48, 56, 60, 64, 68, 76, 80, 88, 128] {
+                for (file_group, returned_file) in [(true, FILE_MASK), (false, 0)] {
+                    let buf = Synth {
+                        fixed_end: Some(fixed_end),
+                        file_group,
+                        returned_file,
+                        ..Default::default()
+                    }
+                    .build();
+                    assert_eq!(
+                        entries(&buf, 1).next(),
+                        Some(Err(ParseError::UnexpectedLayout)),
+                        "fixed region of {fixed_end} bytes, returned.file {returned_file:#x}"
+                    );
+                }
+            }
+        }
+
+        /// The size alone is not the layout: a 52-byte region that claims any
+        /// `fileattr` attribute would report that attribute as zero (its slot
+        /// cannot fit), and a 72-byte region claiming none is a shape no
+        /// measured kernel produced. Both are refused.
+        #[test]
+        fn rejects_a_region_size_that_disagrees_with_the_returned_file_word() {
+            for bit in [
+                libc::ATTR_FILE_LINKCOUNT,
+                libc::ATTR_FILE_ALLOCSIZE,
+                libc::ATTR_FILE_DATALENGTH,
+                FILE_MASK,
+            ] {
+                let dir = Synth {
+                    file_group: false,
+                    returned_file: bit,
+                    obj_type: VDIR,
+                    ..Default::default()
+                }
+                .build();
+                assert_eq!(
+                    entries(&dir, 1).next(),
+                    Some(Err(ParseError::UnexpectedLayout)),
+                    "52-byte region claiming file bit {bit:#x}"
+                );
+            }
+            let file = Synth {
+                returned_file: 0,
+                ..Default::default()
+            }
+            .build();
+            assert_eq!(
+                entries(&file, 1).next(),
+                Some(Err(ParseError::UnexpectedLayout)),
+                "72-byte region claiming no file attribute"
+            );
+            // A partial word at 72 is the returned-attributes gate's business,
+            // not the layout's: `absent_attribute_yields_default_not_shifted_read`.
         }
 
         /// The gate bits are taken from the right `attrlist` group.
@@ -804,12 +922,13 @@ mod tests {
             }
         }
 
-        /// The accept side of the same boundary, and the only entry shape that can
+        /// The other side of the same boundary, and the only entry shape that can
         /// be exactly `MIN_ENTRY_LEN` long: the name must then start at 32 with
-        /// `attr_length == 0`, so the field is empty and no attribute slot fits.
-        /// Every field is its default and nothing is read out of bounds.
+        /// `attr_length == 0`. Its length and name reference are well formed,
+        /// but a 32-byte fixed region is not a measured layout, so it is
+        /// refused rather than parsed as an entry with every field defaulted.
         #[test]
-        fn accepts_the_shortest_possible_entry_with_an_empty_name() {
+        fn rejects_the_shortest_possible_entry_as_an_unmeasured_layout() {
             let mut buf = vec![0u8; MIN_ENTRY_LEN];
             buf[OFF_LENGTH..][..4].copy_from_slice(&(MIN_ENTRY_LEN as u32).to_le_bytes());
             buf[OFF_RETURNED_COMMON..][..4].copy_from_slice(&COMMON_MASK.to_le_bytes());
@@ -820,21 +939,7 @@ mod tests {
             buf[OFF_NAME_REF + 4..][..4].copy_from_slice(&0u32.to_le_bytes());
 
             let mut it = entries(&buf, 1);
-            let entry = it.next().expect("one entry").expect("must parse");
-            assert_eq!(entry.name, b"");
-            assert_eq!(entry.obj_type, ObjType::Other);
-            assert_eq!(
-                (
-                    entry.file_id,
-                    entry.dev_id,
-                    entry.flags,
-                    entry.logical,
-                    entry.allocated,
-                    entry.link_count
-                ),
-                (0, 0, 0, 0, 0, 0),
-                "no attribute slot fits before the name, so all are defaults"
-            );
+            assert_eq!(it.next(), Some(Err(ParseError::UnexpectedLayout)));
             assert!(it.next().is_none());
         }
 
@@ -916,6 +1021,7 @@ mod tests {
                 Synth::default(),
                 Synth {
                     file_group: false,
+                    returned_file: 0,
                     obj_type: VDIR,
                     name: b"dir".to_vec(),
                     ..Default::default()
@@ -923,6 +1029,9 @@ mod tests {
             ] {
                 buf.extend_from_slice(&s.build());
             }
+            // Precondition: unmutated, both entries parse, so the walk below
+            // starts from a valid file and a valid directory.
+            assert_eq!(entries(&buf, 2).filter(Result::is_ok).count(), 2);
             mutate_and_drain(&buf, 2);
         }
     }

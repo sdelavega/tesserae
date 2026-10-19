@@ -42,6 +42,12 @@ pub const SCAN_OPTIONS: u64 = (libc::FSOPT_PACK_INVAL_ATTRS | libc::FSOPT_NOFOLL
 
 /// Common attributes: returned-attrs set, name, device, object type, flags,
 /// file id.
+///
+/// `ATTR_CMN_FLAGS` is parsed but nothing in Phase 1 reads it. It is kept
+/// because Phase 2 needs it: `SF_DATALESS` marks dataless (iCloud "Optimize
+/// Storage") objects, whose enumeration can trigger downloads, and
+/// `UF_COMPRESSED` marks compressed files for the size reconciliation. Dropping
+/// it now and adding it back then would change the packed layout twice.
 pub const COMMON_MASK: u32 = libc::ATTR_CMN_RETURNED_ATTRS
     | libc::ATTR_CMN_NAME
     | libc::ATTR_CMN_DEVID
