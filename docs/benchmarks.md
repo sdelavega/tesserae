@@ -191,3 +191,38 @@ exceed allocated, and nothing here separates the three.
 
 The CLI is five and a half times faster than `du` here (21 s against 120 s),
 and walks 6.6 million nodes against a budget of 25 million.
+
+### Rescan after the parser accepts only measured layouts
+
+Commit `d39d0e3`, the same machine and day, 23:22 to 23:25, load average
+about 2: the parser now refuses any fixed-region size other than the two a
+census of this volume found (52 bytes for a directory, 72 for everything
+else), so a layout it does not know would surface as `MalformedBatch`. The
+same sequence as above: the CLI, then `du -sxk`, then the CLI again.
+
+| | CLI run 1 | `du -sxk` | CLI run 2 |
+|---|---|---|---|
+| started | 23:22:23 | 23:22:44 | 23:24:46 |
+| wall time | **20.8 s** (walk 20.0, freeze 0.6) | **121.9 s** | **20.7 s** (walk 20.1, freeze 0.6) |
+| CPU | 1.9 s user, 95.1 s sys | 1.8 s user, 57.7 s sys | 2.1 s user, 101.4 s sys |
+| exit status | 0 (complete) | 1 (252 unreadable paths) | 0 (complete) |
+| allocated in KiB | 748,326,352 | **748,320,641** | 748,324,100 |
+| dirs / files | 844,062 / 5,863,764 | | 844,062 / 5,863,768 |
+| `MalformedBatch` / `lost_entries` / `errors` | none / 0 / 0 | | none / 0 / 0 |
+| unreadable / `hardlink_dups` | 252 / 217,036 | | 252 / 217,036 |
+
+**CLI minus `du`: +5,711 KiB (run 1) and +3,459 KiB (run 2), or 0.0008% and
+0.0005%.** The two CLI runs differ by 2,252 KiB. This time `du` does not
+fall between them: both runs are above it, by up to two and a half times the
+run-to-run movement, on a scan that took `du` two minutes of a live volume.
+That is still no counting difference beyond a few MiB, but it is not
+bracketed by observed churn the way the first comparison was.
+
+Against the first run above, the tree grew by 1,996,468 KiB (1.9 GiB),
+3,938 directories and 88,576 files in an hour and a half. Part of that is
+the fix session's own writes to the same volume, made in the half hour
+before the rescan: about 0.7 GB in 2,818 build files under the repository's
+target directories (counted by logical size, some of them replacing older
+files) and 0.4 GB in 4,296 entries of a scratch directory. The rest was not
+traced. This is not a regression signal: no entry was refused and nothing
+was lost.
