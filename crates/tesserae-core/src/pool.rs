@@ -585,7 +585,8 @@ fn supervise<O>(shared: &Shared<O>, progress: &Progress) -> Option<PathBuf> {
     stalled_at
 }
 
-/// The absolute path of `id`, by climbing from it to the root through
+/// The path of `id` (the scan root as given, joined with the names below it),
+/// by climbing from it to the root through
 /// whichever arenas hold its ancestors: a stolen directory's node is in the
 /// arena of the worker that enumerated its parent, not the one walking it.
 ///

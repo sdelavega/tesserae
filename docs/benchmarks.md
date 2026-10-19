@@ -123,7 +123,7 @@ three times faster per node than the sparse image above. Image type matters.
 ## Phase exit: `/System/Volumes/Data`
 
 The phase-exit criterion is that `tesserae-cli scan /System/Volumes/Data`
-completes and its totals reconcile with `du -sh` within clone-explained
+completes and its totals reconcile with `du -sxk` within clone-explained
 variance. Run read-only from a terminal with Full Disk Access, one after the
 other so they do not compete: the CLI, then `du -sxk`, then the CLI again, to
 see how far the live volume moves on its own.

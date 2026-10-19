@@ -265,7 +265,7 @@ pub struct WalkOptions {
     /// A hanging local volume blocks `openat` uninterruptibly (spec section
     /// 11). When no worker has finished an open, a read, an `fstatfs` or a
     /// close for this long and one of them is still inside one, the walk
-    /// records that directory's absolute path in [`WalkStats::stalled_at`],
+    /// records that directory's path in [`WalkStats::stalled_at`],
     /// sets [`Incomplete::Stalled`], and returns what it has.
     ///
     /// # The blocked thread is abandoned, not stopped
@@ -354,8 +354,9 @@ pub struct WalkStats {
     /// in `files`: the entry exists, it just adds nothing to the total.
     pub hardlink_dups: u64,
     /// The directory a worker was blocked inside a syscall on when the
-    /// watchdog declared the walk stalled, as an absolute path (the scan root
-    /// as the caller named it, joined with the path below it). Set only with
+    /// watchdog declared the walk stalled: the scan root as the caller named
+    /// it, joined with the path below it. Absolute only if the root was; the
+    /// root is not canonicalised. Set only with
     /// [`Incomplete::Stalled`]; see [`WalkOptions::stall_timeout`].
     pub stalled_at: Option<PathBuf>,
     /// `Some` if the result is partial and why.

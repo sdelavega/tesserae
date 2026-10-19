@@ -90,7 +90,14 @@ pub const TESS_INCOMPLETE_NONE: u32 = 0;
 pub const TESS_INCOMPLETE_CANCELLED: u32 = 1;
 /// `TessScanStats.incomplete`: the scan reached its node budget and stopped.
 pub const TESS_INCOMPLETE_NODE_BUDGET: u32 = 2;
-/// `TessScanStats.incomplete`: the scan ran out of memory and stopped.
+/// `TessScanStats.incomplete`: memory ran out, in one of two ways. If the
+/// scan's own storage (its node arenas, names or path lists) could not grow,
+/// the scan stopped there and the snapshot is partial. Three shortfalls are
+/// recorded instead while the scan goes on: the kernel answering `ENOMEM` for
+/// a directory (that directory's contents are missing); a hardlink that could
+/// not be recorded for dedup (that link keeps its bytes, so totals err high);
+/// and a lost `TESS_FLAG_PERM_DENIED` on a directory read by another worker
+/// (it shows as empty rather than locked).
 pub const TESS_INCOMPLETE_OUT_OF_MEMORY: u32 = 3;
 /// `TessScanStats.incomplete`: a volume hung, and the scan gave up on it. See
 /// `tess_snapshot_stalled_at`.
@@ -149,6 +156,9 @@ pub struct TessView {
     pub names: *const u8,
     pub names_len: u64,
     /// Index of the root node, or `TESS_NODE_NONE` if there are no nodes.
+    /// The root node's name is the scan root path exactly as it was given to
+    /// `tess_scan_begin` (`/System/Volumes/Data`, or a relative path if one
+    /// was given), not a single path component like every other node's name.
     pub root: u32,
 }
 
@@ -447,11 +457,14 @@ pub unsafe extern "C" fn tess_snapshot_stats(
     })
 }
 
-/// The directory a hung volume stopped the scan at, as an absolute path, when
-/// `TessScanStats.incomplete` is `TESS_INCOMPLETE_STALLED`. Returns a pointer
-/// to `*len_out` bytes borrowed from the snapshot, valid until
-/// `tess_snapshot_release`. The bytes are a path, not text: not NUL-terminated,
-/// and not necessarily UTF-8.
+/// The directory a hung volume stopped the scan at, when
+/// `TessScanStats.incomplete` is `TESS_INCOMPLETE_STALLED`: the scan root
+/// exactly as given to `tess_scan_begin`, joined with the path below it. It is
+/// absolute only if that root was; the root is not canonicalised.
+///
+/// Returns a pointer to `*len_out` bytes borrowed from the snapshot, valid
+/// until `tess_snapshot_release`. The bytes are a path, not text: not
+/// NUL-terminated, and not necessarily UTF-8.
 ///
 /// Returns null, with `*len_out` set to 0, when there is no such path (and when
 /// `snapshot` is null). Returns null if `len_out` is null.
@@ -1218,8 +1231,8 @@ mod tests {
         // An errno the kind fallback would have mapped to EIO.
         let raw = io::Error::from_raw_os_error(libc::EBUSY);
         assert_eq!(errno_of(&raw), -libc::EBUSY);
-        // The core wraps most failures with a message, which drops the errno;
-        // the kind is what is left to read.
+        // An error that carries no OS number (one built from a kind and a
+        // message rather than from a syscall's errno) falls back to its kind.
         for (kind, want) in [
             (io::ErrorKind::NotFound, libc::ENOENT),
             (io::ErrorKind::NotADirectory, libc::ENOTDIR),
