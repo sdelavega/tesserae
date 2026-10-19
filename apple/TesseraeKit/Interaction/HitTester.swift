@@ -35,7 +35,9 @@ import CoreGraphics
 /// later tile whose centre lies inside it; a non-descendant is disjoint from
 /// it, so its centre cannot). A *leaf* hit is cached: while the pointer stays
 /// inside it, later queries return it without scanning. The cache is keyed
-/// on the tile itself and the list's length, and `invalidate()` drops it.
+/// on the tile itself and the list's length, which cannot tell every new
+/// list from the old one: call `invalidate()` whenever the tiles change
+/// (`TreemapInteraction.setTiles` does).
 public struct HitTester {
     private var cached: (index: Int, tile: Tile, count: Int)?
     /// Full scans run so far (for tests).

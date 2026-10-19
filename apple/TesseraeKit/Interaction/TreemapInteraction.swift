@@ -19,17 +19,25 @@ import CoreGraphics
 
 /// What `TreemapView` does with the pointer and the keyboard (spec §8), apart
 /// from drawing: hover, click and keys in, navigation and hover reports out.
+/// Points are in the tiles' coordinates (points, origin top-left); the views
+/// convert with `tilePoint(_:viewHeight:)`.
 ///
 /// * Hover hit-tests the tiles and reports the tile index (or nil) to
 ///   `onHover` when it changes; the caller turns it into an `InspectorInfo`
-///   with `inspect(tileAt:in:snapshot:)`.
-/// * A click on a directory descends into it; on a file, an aggregate or a
-///   placeholder it does nothing. Return descends into the hovered tile, or
-///   failing that the first tile flagged selected. ⌘↑ ascends; ← / → move
-///   to the previous / next sibling.
+///   with `inspect(tileAt:in:snapshot:)`. When new tiles arrive, the last
+///   pointer position is hit-tested again, so Return works without moving
+///   the mouse.
+/// * A click (`press` then `release` on the same tile) on a directory
+///   descends into it; on a file, an aggregate or a placeholder, or when the
+///   button is released over another tile, it does nothing. Return descends
+///   into the first descendable of the hovered tile and the first tile
+///   flagged selected. ⌘↑ ascends; ← / → move to the previous / next sibling.
 /// * A descend records the clicked rect. The navigator's owner lays out the
 ///   new root and hands the view the new tiles; `setTiles` then returns that
-///   rect once, which is what the view zooms from.
+///   rect once, which is what the view zooms from, but only if the tiles are
+///   rooted at the node descended into. Any other tiles change, and any other move (ascend, a
+///   sibling, a different navigator, a resize via `cancelPendingZoom`) drops
+///   the rect, so a later tiles change never zooms from a stale one.
 @MainActor
 final class TreemapInteraction {
     enum Key {
@@ -48,42 +56,67 @@ final class TreemapInteraction {
         }
     }
 
-    var navigator: Navigator?
+    /// A point in an unflipped view's coordinates (origin bottom-left, as
+    /// AppKit reports events) in the tiles' coordinates (origin top-left).
+    /// The views stay unflipped so that nothing about their layers' geometry
+    /// changes; the flip happens only here.
+    static func tilePoint(_ p: CGPoint, viewHeight: CGFloat) -> CGPoint {
+        CGPoint(x: p.x, y: viewHeight - p.y)
+    }
+
+    var navigator: Navigator? {
+        didSet { if oldValue !== navigator { pendingZoom = nil } }
+    }
     var onHover: ((Int?) -> Void)?
     private(set) var tiles: [Tile] = []
     private(set) var hovered: Int?
+    /// What `onHover` was last told.
+    private var reported: Int?
+    private var pointer: CGPoint?
+    private var pressed: Int?
     private var hitTester = HitTester()
-    private var pendingZoom: CGRect?
+    /// The rect a descend started from, and the node it descended into.
+    private(set) var pendingZoom: (rect: CGRect, target: UInt32)?
 
-    /// Installs the tiles to hit-test. If they differ from the last ones and
-    /// a descend is pending, returns the rect it started from (once).
+    /// Installs the tiles to hit-test. If they differ from the last ones, a
+    /// descend is pending, and they are the layout of the node it descended
+    /// into (their first tile is the layout root), returns the rect it
+    /// started from; the pending descend is dropped either way.
     func setTiles(_ new: [Tile]) -> CGRect? {
-        let zoom = pendingZoom
         guard new != tiles else { return nil }
+        let zoom = pendingZoom.flatMap { new.first?.node == $0.target ? $0.rect : nil }
         pendingZoom = nil
+        pressed = nil
         tiles = new
         hitTester.invalidate()
+        hovered = pointer.flatMap { hitTester.tile(at: $0, in: tiles) }
         // Reported after the view update that installed the tiles: the
         // report may change SwiftUI state, which an update must not do.
-        if hovered != nil {
-            hovered = nil
-            Task { @MainActor [weak self] in
-                // Unless the pointer has hovered something since.
-                if let self, self.hovered == nil { self.onHover?(nil) }
-            }
-        }
+        Task { @MainActor [weak self] in self?.report() }
         return zoom
     }
 
-    /// The pointer is at `p` (view points, origin top-left), or left the view.
+    /// Drops a recorded descend rect (the view resized, so it is stale).
+    func cancelPendingZoom() { pendingZoom = nil }
+
+    /// The pointer is at `p`, or left the view.
     func hover(at p: CGPoint?) {
-        setHovered(p.flatMap { hitTester.tile(at: $0, in: tiles) })
+        pointer = p
+        hovered = p.flatMap { hitTester.tile(at: $0, in: tiles) }
+        report()
     }
 
-    /// A click at `p`. True if it descended.
+    /// The button went down at `p`.
+    func press(at p: CGPoint) {
+        pressed = hitTester.tile(at: p, in: tiles)
+    }
+
+    /// The button came up at `p`: a click if it is over the tile it went
+    /// down on. True if it descended.
     @discardableResult
-    func click(at p: CGPoint) -> Bool {
-        guard let i = hitTester.tile(at: p, in: tiles) else { return false }
+    func release(at p: CGPoint) -> Bool {
+        defer { pressed = nil }
+        guard let i = hitTester.tile(at: p, in: tiles), i == pressed else { return false }
         return descend(into: i)
     }
 
@@ -92,11 +125,18 @@ final class TreemapInteraction {
     func key(_ k: Key) -> Bool {
         guard let nav = navigator else { return false }
         switch k {
-        case .ascend: nav.ascend()
-        case .previousSibling: nav.sibling(-1)
-        case .nextSibling: nav.sibling(1)
+        case .ascend:
+            pendingZoom = nil
+            nav.ascend()
+        case .previousSibling:
+            pendingZoom = nil
+            nav.sibling(-1)
+        case .nextSibling:
+            pendingZoom = nil
+            nav.sibling(1)
         case .descend:
-            if let i = hovered ?? tiles.firstIndex(where: { $0.flags & Tile.Flag.selected != 0 }) {
+            let selected = tiles.firstIndex { $0.flags & Tile.Flag.selected != 0 }
+            if let i = [hovered, selected].compactMap({ $0 }).first(where: { nav.canDescend(into: tiles[$0].node) }) {
                 descend(into: i)
             }
         }
@@ -106,14 +146,14 @@ final class TreemapInteraction {
     @discardableResult
     private func descend(into i: Int) -> Bool {
         guard let nav = navigator, nav.canDescend(into: tiles[i].node) else { return false }
-        pendingZoom = tiles[i].rect
+        pendingZoom = (tiles[i].rect, tiles[i].node)
         nav.descend(into: tiles[i].node)
         return true
     }
 
-    private func setHovered(_ i: Int?) {
-        guard i != hovered else { return }
-        hovered = i
-        onHover?(i)
+    private func report() {
+        guard hovered != reported else { return }
+        reported = hovered
+        onHover?(hovered)
     }
 }

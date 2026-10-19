@@ -105,8 +105,16 @@ public struct TreemapView: NSViewRepresentable {
         nsView.needsDisplay = true
     }
 
-    /// Forwards pointer and key events to a `TreemapInteraction`. Flipped,
-    /// so event locations are in the tiles' top-left-origin points.
+    /// An event's location in the tiles' coordinates (top-left origin).
+    /// The views are not flipped (so their layers draw as before); the y
+    /// axis is turned over here instead.
+    @MainActor
+    static func tilePoint(_ event: NSEvent, in view: NSView) -> CGPoint {
+        TreemapInteraction.tilePoint(view.convert(event.locationInWindow, from: nil), viewHeight: view.bounds.height)
+    }
+
+    /// Mouse tracking for the views that forward pointer and key events to
+    /// a `TreemapInteraction`.
     @MainActor
     static func installTracking(on view: NSView) {
         view.addTrackingArea(
@@ -125,16 +133,14 @@ public struct TreemapView: NSViewRepresentable {
 
         required init(coder: NSCoder) { fatalError("InteractiveMTKView is not decoded from a nib") }
 
-        override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
-        override func mouseMoved(with event: NSEvent) {
-            interaction?.hover(at: convert(event.locationInWindow, from: nil))
-        }
+        override func mouseMoved(with event: NSEvent) { interaction?.hover(at: TreemapView.tilePoint(event, in: self)) }
         override func mouseExited(with event: NSEvent) { interaction?.hover(at: nil) }
-        override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
-        override func mouseUp(with event: NSEvent) {
-            interaction?.click(at: convert(event.locationInWindow, from: nil))
+        override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(self)
+            interaction?.press(at: TreemapView.tilePoint(event, in: self))
         }
+        override func mouseUp(with event: NSEvent) { interaction?.release(at: TreemapView.tilePoint(event, in: self)) }
         override func keyDown(with event: NSEvent) {
             guard let k = TreemapInteraction.Key(event), interaction?.key(k) == true else {
                 return super.keyDown(with: event)
@@ -178,16 +184,14 @@ public struct TreemapView: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError("FallbackView is not decoded from a nib") }
 
-        override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
-        override func mouseMoved(with event: NSEvent) {
-            interaction?.hover(at: convert(event.locationInWindow, from: nil))
-        }
+        override func mouseMoved(with event: NSEvent) { interaction?.hover(at: TreemapView.tilePoint(event, in: self)) }
         override func mouseExited(with event: NSEvent) { interaction?.hover(at: nil) }
-        override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
-        override func mouseUp(with event: NSEvent) {
-            interaction?.click(at: convert(event.locationInWindow, from: nil))
+        override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(self)
+            interaction?.press(at: TreemapView.tilePoint(event, in: self))
         }
+        override func mouseUp(with event: NSEvent) { interaction?.release(at: TreemapView.tilePoint(event, in: self)) }
         override func keyDown(with event: NSEvent) {
             guard let k = TreemapInteraction.Key(event), interaction?.key(k) == true else {
                 return super.keyDown(with: event)
@@ -259,6 +263,8 @@ public struct TreemapView: NSViewRepresentable {
         }
 
         public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+            // A descend not yet laid out must not zoom the resized layout.
+            interaction.cancelPendingZoom()
             player.resize(to: CGRect(origin: .zero, size: view.bounds.size))
             if !player.isRunning, renderer?.isZooming == true { stopZoom(view) }
             view.needsDisplay = true

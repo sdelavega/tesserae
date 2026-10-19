@@ -19,22 +19,67 @@ import Foundation
 
 /// What the hover inspector shows (spec §8: "full path, both sizes, type, dates").
 ///
-/// For a node, `path` is its full path. For a tile that stands for several
-/// nodes it is a description instead, since there is no single path:
-/// "N smaller items — X" for an aggregate, "N unreadable folders" for the
-/// collapsed placeholder of a strip.
+/// `subject` says what the tile stands for. Only a `.node` has a path, and
+/// `path` is nil for everything else, so an action that needs a real file
+/// (copy path, reveal in Finder, staging for deletion) can never act on
+/// display text: gate it on `path`. `title` is what to show as the heading.
 public struct InspectorInfo: Equatable {
-    public var path: String
+    public enum Subject: Equatable {
+        /// One node, by its full path.
+        case node(path: String)
+        /// An aggregate tile: `count` collapsed siblings of `bytes` in all.
+        case aggregate(count: UInt32, bytes: UInt64)
+        /// The collapsed placeholder of `count` unreadable folders.
+        case unreadable(count: UInt32)
+    }
+
+    public enum Kind: Equatable {
+        case folder, file
+        case fileKind(FileKind)
+        case aggregate, unreadable
+
+        public var displayName: String {
+            switch self {
+            case .folder: return "Folder"
+            case .file: return "File"
+            case .fileKind(let k): return k.displayName
+            case .aggregate: return "Smaller items"
+            case .unreadable: return "Unreadable folders"
+            }
+        }
+    }
+
+    public var subject: Subject
     public var allocated, logical: UInt64
-    public var kind: String
+    public var kind: Kind
+    /// Nil when unknown: no single node, or a stored time of 0 (never read).
     public var modified: Date?
 
-    public init(path: String, allocated: UInt64, logical: UInt64, kind: String, modified: Date?) {
-        self.path = path
+    public init(subject: Subject, allocated: UInt64, logical: UInt64, kind: Kind, modified: Date?) {
+        self.subject = subject
         self.allocated = allocated
         self.logical = logical
         self.kind = kind
         self.modified = modified
+    }
+
+    /// The node's full path; nil for a tile that is not one node.
+    public var path: String? {
+        if case .node(let p) = subject { return p }
+        return nil
+    }
+
+    /// The heading: the path, "N smaller items — X" or "N unreadable folders".
+    public var title: String {
+        switch subject {
+        case .node(let p):
+            return p
+        case .aggregate(let n, let bytes):
+            let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
+            return "\(n) smaller \(n == 1 ? "item" : "items") — \(size)"
+        case .unreadable(let n):
+            return "\(n) unreadable \(n == 1 ? "folder" : "folders")"
+        }
     }
 }
 
@@ -54,52 +99,52 @@ extension FileKind {
 /// The inspector's view of node `node`.
 ///
 /// * Sizes are the node's own: for a directory, rolled up over its subtree.
-/// * `kind` is "Folder" for a directory, the `FileKind` display name for a
-///   file whose extension has one, and "File" otherwise.
+/// * `kind` is `.folder` for a directory, `.fileKind` for a file whose
+///   extension has a `FileKind`, and `.file` otherwise.
 /// * `modified` is the node's time as the snapshot holds it: a file's own
 ///   time as read; a directory's, the latest in its subtree not later than
-///   the scan's start (the freeze's rollup).
+///   the scan's start (the freeze's rollup). A stored 0 is what the scan
+///   records when it got no time (the attribute was not returned), so it is
+///   reported as unknown (nil), not as 1 January 1970.
 public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
     precondition(Int(node) < s.nodes.count, "inspect: node \(node) outside the snapshot")
     let n = s.nodes[Int(node)]
-    let kind: String
+    let kind: InspectorInfo.Kind
     if s.isDirectory(node) {
-        kind = "Folder"
+        kind = .folder
     } else {
-        kind = FileKind.kind(forName: s.nameBytes(node))?.displayName ?? "File"
+        kind = FileKind.kind(forName: s.nameBytes(node)).map { .fileKind($0) } ?? .file
     }
     return InspectorInfo(
-        path: s.path(node), allocated: n.allocated, logical: n.logical, kind: kind,
-        modified: Date(timeIntervalSince1970: TimeInterval(n.modified)))
+        subject: .node(path: s.path(node)), allocated: n.allocated, logical: n.logical, kind: kind,
+        modified: n.modified == 0 ? nil : Date(timeIntervalSince1970: TimeInterval(n.modified)))
 }
 
 /// The inspector's view of `tiles[index]`, which may stand for no single
-/// node: an aggregate reports the collapsed siblings ("N smaller items — X",
-/// their bytes, their logical size summed from the snapshot); the collapsed
-/// permission-denied placeholder reports "N unreadable folders". Neither has
-/// a date.
+/// node: an aggregate reports the collapsed siblings (their count and bytes,
+/// their logical size summed from the snapshot); the collapsed
+/// permission-denied placeholder reports how many folders it stands for.
+/// Neither has a path or a date.
 public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot) -> InspectorInfo {
     precondition(tiles.indices.contains(index), "inspect: tile \(index) outside the list")
     let t = tiles[index]
     if t.node != Tile.noNode { return inspect(t.node, in: s) }
     if t.isPermissionDenied {
-        let n = t.aggregateCount
         return InspectorInfo(
-            path: "\(n) unreadable \(n == 1 ? "folder" : "folders")", allocated: 0, logical: 0,
-            kind: "Unreadable folders", modified: nil)
+            subject: .unreadable(count: t.aggregateCount), allocated: 0, logical: 0, kind: .unreadable,
+            modified: nil)
     }
-    let bytes = ByteCountFormatter.string(fromByteCount: Int64(clamping: t.aggregateBytes), countStyle: .file)
     return InspectorInfo(
-        path: "\(t.aggregateCount) smaller \(t.aggregateCount == 1 ? "item" : "items") — \(bytes)",
-        allocated: t.aggregateBytes, logical: aggregateLogical(index, tiles, s), kind: "Smaller items",
-        modified: nil)
+        subject: .aggregate(count: t.aggregateCount, bytes: t.aggregateBytes), allocated: t.aggregateBytes,
+        logical: aggregateLogical(index, tiles, s), kind: .aggregate, modified: nil)
 }
 
 /// The logical bytes behind aggregate `tiles[index]`: its parent is the
 /// nearest earlier node tile one level up that contains it, and the tail it
 /// collapses is the last `aggregateCount` positive-size children of that
-/// parent (children are sorted by size, the zero-size ones last). 0 if the
-/// parent cannot be found.
+/// parent (children are sorted by size, the zero-size ones last). This
+/// mirrors `squarify`'s collapse rule (SquarifiedLayout.swift, "the tail is a
+/// suffix"): change the two together. 0 if the parent cannot be found.
 private func aggregateLogical(_ index: Int, _ tiles: [Tile], _ s: Snapshot) -> UInt64 {
     let t = tiles[index]
     let centre = CGPoint(x: t.rect.midX, y: t.rect.midY)

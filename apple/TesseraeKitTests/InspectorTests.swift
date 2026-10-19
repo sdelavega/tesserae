@@ -35,6 +35,7 @@ final class InspectorTests: XCTestCase {
                             .file("clip.MOV", 8_192_000, logical: 8_000_123, modified: 1_700_000_900),
                             .file("notes", 4096, logical: 12, modified: 1_600_000_000),
                             .file("data.xyz", 8192, logical: 5000, modified: -86_400),
+                            .file("undated.pdf", 4096, logical: 100, modified: 0),
                         ]),
                     .file("big.bin", 20_000_000, logical: 19_999_999, modified: 1_650_000_000),
                 ] + tiny + denied))
@@ -44,25 +45,36 @@ final class InspectorTests: XCTestCase {
         XCTAssertEqual(
             clip,
             InspectorInfo(
-                path: "/Volumes/X/media/clip.MOV", allocated: 8_192_000, logical: 8_000_123, kind: "Video",
-                modified: Date(timeIntervalSince1970: 1_700_000_900)))
+                subject: .node(path: "/Volumes/X/media/clip.MOV"), allocated: 8_192_000, logical: 8_000_123,
+                kind: .fileKind(.video), modified: Date(timeIntervalSince1970: 1_700_000_900)))
+        XCTAssertEqual(clip.path, "/Volumes/X/media/clip.MOV")
+        XCTAssertEqual(clip.title, "/Volumes/X/media/clip.MOV")
+        XCTAssertEqual(clip.kind.displayName, "Video")
         XCTAssertNotEqual(clip.allocated, clip.logical, "precondition: the two sizes differ")
-        XCTAssertEqual(inspect(t["notes"], in: s).kind, "File", "no extension")
+        XCTAssertEqual(inspect(t["notes"], in: s).kind, .file, "no extension")
         let xyz = inspect(t["data.xyz"], in: s)
-        XCTAssertEqual(xyz.kind, "File", "an extension of no kind")
+        XCTAssertEqual(xyz.kind, .file, "an extension of no kind")
+        XCTAssertEqual(xyz.kind.displayName, "File")
         XCTAssertEqual(xyz.modified, Date(timeIntervalSince1970: -86_400), "a time before 1970")
+        let undated = inspect(t["undated.pdf"], in: s)
+        XCTAssertEqual(undated.kind, .fileKind(.documents))
+        XCTAssertNil(undated.modified, "a stored 0 is no time, not 1970")
 
         let media = inspect(t["media"], in: s)
-        XCTAssertEqual(media.kind, "Folder")
+        XCTAssertEqual(media.kind, .folder)
+        XCTAssertEqual(media.kind.displayName, "Folder")
         XCTAssertEqual(media.path, "/Volumes/X/media")
-        XCTAssertEqual(media.allocated, 8_192_000 + 4096 + 8192, "rolled up")
-        XCTAssertEqual(media.logical, 8_000_123 + 12 + 5000, "rolled up")
+        XCTAssertEqual(media.allocated, 8_192_000 + 4096 + 8192 + 4096, "rolled up")
+        XCTAssertEqual(media.logical, 8_000_123 + 12 + 5000 + 100, "rolled up")
         XCTAssertEqual(media.modified, Date(timeIntervalSince1970: 1_700_000_900), "the rolled-up time")
-        XCTAssertEqual(inspect(t["locked3"], in: s).kind, "Folder")
+        let locked3 = inspect(t["locked3"], in: s)
+        XCTAssertEqual(locked3.kind, .folder)
+        XCTAssertNil(locked3.modified, "an unreadable folder has no time")
         XCTAssertEqual(
             FileKind.allCases.map(\.displayName), ["Video", "Image", "Audio", "Archive", "Document"])
 
-        // Tiles that stand for several nodes: no single path, no date.
+        // Tiles that stand for several nodes: no path (so no action can take
+        // the display text for one), a title, no date.
         let tiles = squarify(s, root: s.root, in: CGRect(x: 0, y: 0, width: 400, height: 300))
         let agg = tiles.indices.first { tiles[$0].isAggregate && !tiles[$0].isPermissionDenied }
         let locked = tiles.indices.first { tiles[$0].isAggregate && tiles[$0].isPermissionDenied }
@@ -77,11 +89,18 @@ final class InspectorTests: XCTestCase {
         XCTAssertEqual(
             info,
             InspectorInfo(
-                path: "\(n) smaller items — \(bytes)", allocated: UInt64(n) * 1024, logical: tailLogical,
-                kind: "Smaller items", modified: nil))
+                subject: .aggregate(count: n, bytes: UInt64(n) * 1024), allocated: UInt64(n) * 1024,
+                logical: tailLogical, kind: .aggregate, modified: nil))
+        XCTAssertNil(info.path)
+        XCTAssertEqual(info.title, "\(n) smaller items — \(bytes)")
+        XCTAssertEqual(info.kind.displayName, "Smaller items")
+        let lockedInfo = inspect(tileAt: locked, in: tiles, snapshot: s)
         XCTAssertEqual(
-            inspect(tileAt: locked, in: tiles, snapshot: s),
-            InspectorInfo(path: "17 unreadable folders", allocated: 0, logical: 0, kind: "Unreadable folders", modified: nil))
+            lockedInfo,
+            InspectorInfo(subject: .unreadable(count: 17), allocated: 0, logical: 0, kind: .unreadable, modified: nil))
+        XCTAssertNil(lockedInfo.path)
+        XCTAssertEqual(lockedInfo.title, "17 unreadable folders")
+        XCTAssertEqual(lockedInfo.kind.displayName, "Unreadable folders")
         let fileTile = tiles.firstIndex { $0.node == t["big.bin"] }!
         XCTAssertEqual(inspect(tileAt: fileTile, in: tiles, snapshot: s), inspect(t["big.bin"], in: s))
     }
