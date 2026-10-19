@@ -46,6 +46,9 @@
 		F2A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */; };
 		F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */; };
 		F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */; };
+		F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */; };
+		F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */; };
+		F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -132,6 +135,9 @@
 		F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HitTesterTests.swift; sourceTree = "<group>"; };
 		F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorTests.swift; sourceTree = "<group>"; };
 		F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSnapshot.swift; sourceTree = "<group>"; };
+		F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPlacer.swift; sourceTree = "<group>"; };
+		F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelsOverlay.swift; sourceTree = "<group>"; };
+		F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -178,6 +184,7 @@
 				F1A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift */,
 				F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */,
 				F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */,
+				F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
 			path = TesseraeKitTests;
@@ -214,6 +221,7 @@
 				E7B2C3D4E5F60718293A4B5C /* Render */,
 				F3A0010000000000000000A1 /* Navigation */,
 				F3A0020000000000000000A2 /* Interaction */,
+				F3A0030000000000000000A3 /* Labels */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -268,6 +276,15 @@
 				F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */,
 			);
 			path = Support;
+			sourceTree = "<group>";
+		};
+		F3A0030000000000000000A3 /* Labels */ = {
+			isa = PBXGroup;
+			children = (
+				F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */,
+				F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */,
+			);
+			path = Labels;
 			sourceTree = "<group>";
 		};
 		F3A0010000000000000000A1 /* Navigation */ = {
@@ -459,6 +476,8 @@
 				F2A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift in Sources */,
 				F2A0031D2E3F4A5B6C7D8E /* HitTester.swift in Sources */,
 				F2A0041D2E3F4A5B6C7D8E /* Inspector.swift in Sources */,
+				F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */,
+				F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */,
 				F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -489,6 +508,7 @@
 				F2A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift in Sources */,
 				F2A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift in Sources */,
 				F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */,
+				F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */,
 				F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

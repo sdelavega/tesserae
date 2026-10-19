@@ -75,12 +75,23 @@ public struct InspectorInfo: Equatable {
         case .node(let p):
             return p
         case .aggregate(let n, let bytes):
-            let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
-            return "\(n) smaller \(n == 1 ? "item" : "items") — \(size)"
+            return "\(displayCount(n)) smaller \(n == 1 ? "item" : "items") — \(displaySize(bytes))"
         case .unreadable(let n):
-            return "\(n) unreadable \(n == 1 ? "folder" : "folders")"
+            return "\(displayCount(n)) unreadable \(n == 1 ? "folder" : "folders")"
         }
     }
+}
+
+/// How the inspector and the tile labels write a byte count ("4.2 GB").
+func displaySize(_ bytes: UInt64) -> String {
+    ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
+}
+
+/// How the inspector and the tile labels write a count ("12,345").
+func displayCount(_ n: UInt32) -> String {
+    let f = NumberFormatter()
+    f.numberStyle = .decimal
+    return f.string(from: NSNumber(value: n)) ?? String(n)
 }
 
 extension FileKind {
