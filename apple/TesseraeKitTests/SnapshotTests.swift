@@ -254,16 +254,44 @@ final class SnapshotTests: XCTestCase {
 
     private static let childEnv = "TESSERAE_SNAPSHOT_TRAP_CHILD"
 
-    /// Runs only inside the child process the next test spawns.
+    /// Runs only inside the child process the trap tests spawn. The env value
+    /// is "<kind>:<control|trap>"; "control" does the same work legally.
     func test_child_only_access_after_release() throws {
         guard let mode = ProcessInfo.processInfo.environment[Self.childEnv] else { return }
-        let (snap, _) = try makeSnapshot()
-        if mode == "trap" {
-            snap.debugReleaseEarly()
+        let parts = mode.split(separator: ":").map(String.init)
+        let kind = parts[0]
+        let trap = parts[1] == "trap"
+        if kind == "release" {
+            let (snap, _) = try makeSnapshot()
+            if trap { snap.debugReleaseEarly() }
+            _ = snap.generation
+            _ = snap.name(snap.root)
+        } else {
+            // Hand-built nodes (leaked on purpose; the child is short-lived).
+            let nodes = UnsafeMutablePointer<TessNode>.allocate(capacity: 1)
+            var node = TessNode()
+            node.parent = UInt32.max
+            node.name_len = 1
+            switch kind {
+            case "name": if trap { node.name_len = 9 }
+            case "children":
+                node.child_start = 0
+                node.child_count = trap ? 5 : 0
+            default: break
+            }
+            nodes.initialize(to: node)
+            let names = UnsafeMutablePointer<UInt8>.allocate(capacity: 1)
+            names.initialize(to: 0x72)
+            let snap = Snapshot(
+                testingNodes: UnsafeBufferPointer(start: nodes, count: 1),
+                names: UnsafeRawBufferPointer(start: names, count: 1), root: 0)
+            switch kind {
+            case "index": _ = snap.name(trap ? 5 : 0)
+            case "name": _ = snap.name(0)
+            case "children": _ = snap.children(0)
+            default: XCTFail("unknown kind \(kind)")
+            }
         }
-        // In "control" mode the same access is legal; in "trap" mode it must trap.
-        _ = snap.generation
-        _ = snap.name(snap.root)
         print("CHILD-SURVIVED-ACCESS")
     }
 
@@ -273,7 +301,7 @@ final class SnapshotTests: XCTestCase {
         let output: String
     }
 
-    private func runChild(mode: String) throws -> ChildResult {
+    private func runChild(_ mode: String) throws -> ChildResult {
         let bundle = Bundle(for: SnapshotTests.self)
         let bundlePath = bundle.bundlePath
         let frameworksDir = (bundlePath as NSString).deletingLastPathComponent
@@ -297,7 +325,14 @@ final class SnapshotTests: XCTestCase {
         p.standardError = pipe
         try p.run()
         // A watchdog so a hung child fails the test instead of the run.
-        let watchdog = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        let watchdog = DispatchWorkItem {
+            guard p.isRunning else { return }
+            p.terminate()
+            // If SIGTERM does not end it, SIGKILL after a few seconds.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: watchdog)
         defer { watchdog.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -307,27 +342,68 @@ final class SnapshotTests: XCTestCase {
             output: String(decoding: data, as: UTF8.self))
     }
 
-    func test_access_after_release_traps_in_debug() throws {
-        #if DEBUG
-        // Control: the identical child run, minus the release, exits cleanly
-        // and really executed the test. Without this a launch failure would
-        // look like a crash.
-        let control = try runChild(mode: "control")
+    /// Run the child twice: legal (must exit 0 having run the test) and
+    /// illegal (must start the test, print the precondition message, and die
+    /// by SIGILL/SIGTRAP without reaching the survive marker).
+    private func assertTraps(kind: String, message: String) throws {
+        let control = try runChild("\(kind):control")
         XCTAssertEqual(control.reason, .exit, control.output)
         XCTAssertEqual(control.status, 0, control.output)
         XCTAssertTrue(control.output.contains("CHILD-SURVIVED-ACCESS"), control.output)
         XCTAssertTrue(control.output.contains("Executed 1 test"), control.output)
 
-        let trapped = try runChild(mode: "trap")
+        let trapped = try runChild("\(kind):trap")
         XCTAssertTrue(
             trapped.output.contains("test_child_only_access_after_release"),
             "the child never started the test: \(trapped.output)")
         XCTAssertFalse(trapped.output.contains("CHILD-SURVIVED-ACCESS"), trapped.output)
         XCTAssertEqual(trapped.reason, .uncaughtSignal, "child did not crash: \(trapped.output)")
         XCTAssertTrue([SIGILL, SIGTRAP].contains(trapped.status), "signal \(trapped.status)")
+        XCTAssertTrue(trapped.output.contains(message), "missing '\(message)' in: \(trapped.output)")
+    }
+
+    func test_access_after_release_traps_in_debug() throws {
+        #if DEBUG
+        try assertTraps(
+            kind: "release", message: "Snapshot accessed after its Rust memory was released")
         #else
         throw XCTSkip("the generation check exists in Debug builds only")
         #endif
+    }
+
+    func test_node_index_out_of_range_traps() throws {
+        try assertTraps(kind: "index", message: "Snapshot node index out of range")
+    }
+
+    func test_name_range_out_of_range_traps() throws {
+        try assertTraps(kind: "name", message: "Snapshot name range out of range")
+    }
+
+    func test_children_range_out_of_range_traps() throws {
+        try assertTraps(kind: "children", message: "Snapshot children range out of range")
+    }
+
+    func test_path_of_an_empty_snapshot_is_empty() {
+        let snap = Snapshot(
+            testingNodes: UnsafeBufferPointer(start: nil, count: 0),
+            names: UnsafeRawBufferPointer(start: nil, count: 0), root: UInt32.max)
+        XCTAssertEqual(snap.path(0), "")
+    }
+
+    func test_path_under_a_slash_root_has_a_single_slash() {
+        // root "/" with one child "usr"
+        var nodes = [TessNode](repeating: TessNode(), count: 2)
+        nodes[0].name_off = 0; nodes[0].name_len = 1; nodes[0].parent = UInt32.max
+        nodes[0].child_start = 1; nodes[0].child_count = 1; nodes[0].flags = UInt16(TESS_FLAG_DIR)
+        nodes[1].name_off = 1; nodes[1].name_len = 3; nodes[1].parent = 0
+        let names = Array("/usr".utf8)
+        nodes.withUnsafeBufferPointer { nb in
+            names.withUnsafeBytes { rb in
+                let snap = Snapshot(testingNodes: nb, names: rb, root: 0)
+                XCTAssertEqual(snap.path(0), "/")
+                XCTAssertEqual(snap.path(1), "/usr")
+            }
+        }
     }
 }
 

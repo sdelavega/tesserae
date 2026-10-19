@@ -28,7 +28,8 @@ public final class Snapshot {
     public let stats: TessScanStats
     public let stalledAt: Data?
 
-    private let handle: OpaquePointer
+    /// nil only for snapshots built over caller-owned buffers by the test seam.
+    private let handle: OpaquePointer?
     private let _nodes: UnsafeBufferPointer<TessNode>
     private let _names: UnsafeRawBufferPointer
 
@@ -46,8 +47,9 @@ public final class Snapshot {
         return counter
     }
 
-    /// The process-wide release count when this snapshot was made. Reading it
-    /// asserts the snapshot is still live.
+    /// A birth tag: the process-wide release count when this snapshot was
+    /// made. Detection of use-after-release is driven by `released`, not by
+    /// this value; reading it merely asserts the snapshot is still live.
     public var generation: UInt64 {
         assertLive()
         return bornAt
@@ -72,7 +74,7 @@ public final class Snapshot {
         released = true
         lock.unlock()
         guard !already else { return }
-        tess_snapshot_release(handle)
+        if let handle { tess_snapshot_release(handle) }
         Snapshot.counterLock.lock()
         Snapshot.counter += 1
         Snapshot.counterLock.unlock()
@@ -103,11 +105,25 @@ public final class Snapshot {
         #endif
     }
 
+    /// Test seam: a snapshot over caller-owned buffers (no Rust handle), so
+    /// tests can present malformed nodes to the accessors' bounds checks.
+    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32) {
+        handle = nil
+        _nodes = nodes
+        _names = names
+        self.root = root
+        stats = TessScanStats()
+        stalledAt = nil
+        #if DEBUG
+        bornAt = 0
+        #endif
+    }
+
     deinit {
         #if DEBUG
         releaseOnce()
         #else
-        tess_snapshot_release(handle)
+        if let handle { tess_snapshot_release(handle) }
         #endif
     }
 
@@ -125,11 +141,21 @@ public final class Snapshot {
         return _names
     }
 
+    /// Trap (in every build) unless `i` indexes a node.
+    private func node(_ i: UInt32) -> TessNode {
+        let all = nodes
+        precondition(Int(i) < all.count, "Snapshot node index out of range")
+        return all[Int(i)]
+    }
+
     /// The raw bytes of node `i`'s name; not necessarily UTF-8.
     public func nameBytes(_ i: UInt32) -> Data {
-        let n = nodes[Int(i)]
+        let n = node(i)
+        let all = names
+        precondition(
+            Int(n.name_off) + Int(n.name_len) <= all.count, "Snapshot name range out of range")
         guard n.name_len > 0 else { return Data() }
-        return Data(names[Int(n.name_off)..<Int(n.name_off) + Int(n.name_len)])
+        return Data(all[Int(n.name_off)..<Int(n.name_off) + Int(n.name_len)])
     }
 
     /// Lossy UTF-8 name with C0 control characters replaced by U+FFFD; never empty.
@@ -149,18 +175,22 @@ public final class Snapshot {
 
     /// The children of node `i`, contiguous in `nodes`; empty for a leaf.
     public func children(_ i: UInt32) -> Range<UInt32> {
-        let n = nodes[Int(i)]
+        let n = node(i)
         guard n.child_count > 0 else { return 0..<0 }
+        precondition(
+            Int(n.child_start) + Int(n.child_count) <= nodes.count,
+            "Snapshot children range out of range")
         return n.child_start..<(n.child_start + n.child_count)
     }
 
     /// The path of node `i`: the root's name (the scan root as given) joined
     /// with each name down to `i`.
     public func path(_ i: UInt32) -> String {
+        if root == UInt32.max { return "" }
         var parts: [String] = []
         var cur = i
         while true {
-            let n = nodes[Int(cur)]
+            let n = node(cur)
             if n.parent == UInt32.max {
                 parts.append(name(cur))
                 break
@@ -177,7 +207,7 @@ public final class Snapshot {
     }
 
     public func isDirectory(_ i: UInt32) -> Bool {
-        nodes[Int(i)].flags & UInt16(TESS_FLAG_DIR) != 0
+        node(i).flags & UInt16(TESS_FLAG_DIR) != 0
     }
 }
 
