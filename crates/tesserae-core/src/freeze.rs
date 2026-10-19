@@ -27,6 +27,10 @@
 //!   become the sum of everything beneath it only here. Nothing in this module
 //!   adds, subtracts or estimates anything else: a node starts from its own
 //!   figures and gains its children's.
+//! * **A directory's modification time is a rollup too**, but of the
+//!   maximum rather than the sum: the latest of its own time and every
+//!   descendant's, so the treemap's age colouring shows when anything inside
+//!   it last changed.
 //!
 //! # Passes
 //!
@@ -38,7 +42,8 @@
 //!    child-index array. A parent with no children gets an empty range.
 //! 3. **Scatter.** Place every node in its parent's range.
 //! 4. **Roll up.** Walk from the root to get an order in which parents precede
-//!    children, then sum sizes bottom-up along the reverse of it.
+//!    children, then sum sizes, and take the latest modification time,
+//!    bottom-up along the reverse of it.
 //! 5. **Sort.** Order each parent's range descending by rolled-up `allocated`.
 //!    This must come *after* the rollup: before it every directory reads zero
 //!    and would sort to the end.
@@ -138,7 +143,7 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 
 /// [`freeze`], with allocation failure reported instead of fatal.
 ///
-/// Every allocation (about 40 bytes per node for the snapshot, and roughly as
+/// Every allocation (about 48 bytes per node for the snapshot, and roughly as
 /// much again for working arrays while the arenas are still alive, so around
 /// 2 GB at the 25M-node budget) goes through `try_reserve_exact`.
 /// `tests/freeze_oom.rs` fails each allocation in turn to hold that to account.
@@ -259,6 +264,8 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
     logical.extend(src.iter().map(|x| x.logical));
     let mut allocated: Vec<u64> = reserved(n)?;
     allocated.extend(src.iter().map(|x| x.allocated));
+    let mut modified: Vec<i64> = reserved(n)?;
+    modified.extend(src.iter().map(|x| x.modified));
     for &v in order.iter().rev() {
         let p = parent[v as usize];
         if p != NODE_NONE {
@@ -270,6 +277,9 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             allocated[p as usize] = allocated[p as usize]
                 .checked_add(allocated[v as usize])
                 .expect("a directory's allocated size overflows u64");
+            // Every child is final before its parent is read (reverse
+            // breadth-first order), so this is the max over the subtree.
+            modified[p as usize] = modified[p as usize].max(modified[v as usize]);
         }
     }
     drop(order);
@@ -339,6 +349,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             child_count: off[v + 1] - off[v],
             logical: logical[v],
             allocated: allocated[v],
+            modified: modified[v],
         });
     }
     Ok(Snapshot {
@@ -456,6 +467,20 @@ mod tests {
         logical: u64,
         allocated: u64,
     ) -> ScanId {
+        push_modified(arena, parent, name, obj_type, flags, logical, allocated, 0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_modified(
+        arena: &mut Arena,
+        parent: ScanId,
+        name: &[u8],
+        obj_type: ObjType,
+        flags: u16,
+        logical: u64,
+        allocated: u64,
+        modified: i64,
+    ) -> ScanId {
         let name = arena.push_name(name).expect("name fits");
         arena
             .push_node(ScanNode {
@@ -465,6 +490,7 @@ mod tests {
                 flags,
                 logical,
                 allocated,
+                modified,
             })
             .expect("node fits")
     }
@@ -520,8 +546,8 @@ mod tests {
     // -------------------------------------------------------------- unit tests
 
     #[test]
-    fn tess_node_is_forty_bytes() {
-        assert_eq!(size_of::<TessNode>(), 40);
+    fn tess_node_is_48_bytes_with_modified_last() {
+        assert_eq!(size_of::<TessNode>(), 48);
         assert_eq!(align_of::<TessNode>(), 8);
         // Phase 2 reads this across the C ABI, so the offsets are the contract
         // and not just the total.
@@ -533,6 +559,77 @@ mod tests {
         assert_eq!(offset_of!(TessNode, child_count), 16);
         assert_eq!(offset_of!(TessNode, logical), 24);
         assert_eq!(offset_of!(TessNode, allocated), 32);
+        assert_eq!(offset_of!(TessNode, modified), 40);
+        // Last: nothing follows it, and no padding either.
+        assert_eq!(offset_of!(TessNode, modified) + size_of::<i64>(), 48);
+        // A signed 64-bit `time_t`, so a pre-1970 time is representable.
+        let node = TessNode {
+            name_off: 0,
+            name_len: 0,
+            flags: 0,
+            parent: NODE_NONE,
+            child_start: 0,
+            child_count: 0,
+            logical: 0,
+            allocated: 0,
+            modified: -1,
+        };
+        let _: i64 = node.modified;
+    }
+
+    /// A directory's `modified` is the latest of its own time and every
+    /// descendant's, so its tile ages with its most recently touched content.
+    /// A file's is its own, untouched. Built across two arenas, with a child
+    /// pushed before its parent's other children, so the rollup cannot be
+    /// relying on arena order; and with a directory whose own time is the
+    /// newest, so "max" cannot be "max of children only".
+    #[test]
+    fn directory_modified_is_the_max_over_its_subtree() {
+        let mut a0 = Arena::new(0, u64::MAX);
+        let mut a1 = Arena::new(1, u64::MAX);
+        let root = push_modified(&mut a0, ScanId::NONE, b"root", ObjType::Dir, 0, 0, 0, 100);
+        // deep/ is old itself, but holds the newest file two levels down.
+        let deep = push_modified(&mut a1, root, b"deep", ObjType::Dir, 0, 0, 0, 50);
+        let mid = push_modified(&mut a0, deep, b"mid", ObjType::Dir, 0, 0, 0, 60);
+        push_modified(&mut a1, mid, b"newest.bin", ObjType::Reg, 0, 1, 1, 9_000);
+        push_modified(&mut a0, deep, b"old.bin", ObjType::Reg, 0, 1, 1, 10);
+        // fresh/ was itself touched after anything inside it.
+        let fresh = push_modified(&mut a1, root, b"fresh", ObjType::Dir, 0, 0, 0, 5_000);
+        push_modified(&mut a0, fresh, b"inner.bin", ObjType::Reg, 0, 1, 1, 20);
+        push_modified(&mut a1, fresh, b"link", ObjType::Lnk, 0, 0, 0, 30);
+        // Empty: nothing beneath it, so its own time stands.
+        push_modified(&mut a0, root, b"empty", ObjType::Dir, 0, 0, 0, 70);
+        // Pre-1970: negative times are ordered like any others.
+        let ancient = push_modified(&mut a1, root, b"ancient", ObjType::Dir, 0, 0, 0, -500);
+        push_modified(&mut a0, ancient, b"older.bin", ObjType::Reg, 0, 1, 1, -900);
+        push_modified(&mut a1, ancient, b"newer.bin", ObjType::Reg, 0, 1, 1, -100);
+
+        let s = freeze(vec![a0, a1], WalkStats::default());
+        // Precondition: every node made it, so a missing one cannot pass.
+        assert_eq!(s.nodes.len(), 12);
+        let m = |name: &[u8]| s.nodes[find(&s, name)].modified;
+        // Leaves keep their own time.
+        for (name, own) in [
+            (&b"newest.bin"[..], 9_000),
+            (b"old.bin", 10),
+            (b"inner.bin", 20),
+            (b"link", 30),
+            (b"older.bin", -900),
+            (b"newer.bin", -100),
+        ] {
+            assert_eq!(m(name), own, "{}", String::from_utf8_lossy(name));
+        }
+        assert_eq!(
+            m(b"mid"),
+            9_000,
+            "a file below beats the directory's own time"
+        );
+        assert_eq!(m(b"deep"), 9_000, "the max reaches up more than one level");
+        assert_eq!(m(b"fresh"), 5_000, "the directory's own time counts too");
+        assert_eq!(m(b"empty"), 70);
+        assert_eq!(m(b"ancient"), -100);
+        assert_eq!(m(b"root"), 9_000);
+        assert_eq!(s.nodes[s.root as usize].modified, 9_000);
     }
 
     #[test]
@@ -995,6 +1092,7 @@ mod tests {
         flags: u16,
         logical: u64,
         allocated: u64,
+        modified: i64,
         arena: usize,
     }
 
@@ -1024,7 +1122,7 @@ mod tests {
             for n in &self.nodes {
                 let parent = n.parent.map_or(ScanId::NONE, |p| ids[p]);
                 let arena = arenas[n.arena].as_mut().expect("arena present");
-                ids.push(push(
+                ids.push(push_modified(
                     arena,
                     parent,
                     &n.name,
@@ -1032,6 +1130,7 @@ mod tests {
                     n.flags,
                     n.logical,
                     n.allocated,
+                    n.modified,
                 ));
             }
             order
@@ -1063,6 +1162,20 @@ mod tests {
             tot
         }
 
+        /// Independent of the freeze: raise every ancestor to each node's own
+        /// modification time by walking parent links one node at a time.
+        fn expected_modified(&self) -> Vec<i64> {
+            let mut latest: Vec<i64> = self.nodes.iter().map(|n| n.modified).collect();
+            for n in &self.nodes {
+                let mut p = n.parent;
+                while let Some(q) = p {
+                    latest[q] = latest[q].max(n.modified);
+                    p = self.nodes[q].parent;
+                }
+            }
+            latest
+        }
+
         fn by_name(&self) -> HashMap<Vec<u8>, usize> {
             self.nodes
                 .iter()
@@ -1076,7 +1189,13 @@ mod tests {
         }
     }
 
-    type Entry = (usize, bool, u8, u8, u64, u64, usize, Vec<u8>);
+    type Entry = (usize, bool, u8, u8, u64, u64, usize, Vec<u8>, i64);
+
+    fn arb_modified() -> impl Strategy<Value = i64> {
+        // Few distinct values around zero force ties and negatives; the full
+        // range covers the extremes of a signed `time_t`.
+        prop_oneof![-3i64..3, any::<i64>()]
+    }
 
     fn arb_size() -> impl Strategy<Value = u64> {
         // Few distinct small values force ties; the rest give spread.
@@ -1093,6 +1212,7 @@ mod tests {
             arb_size(),
             any::<usize>(),
             prop::collection::vec(any::<u8>(), 0..6),
+            arb_modified(),
         )
     }
 
@@ -1103,8 +1223,9 @@ mod tests {
                 Just((0..k).collect::<Vec<usize>>()).prop_shuffle(),
                 prop::collection::vec(arb_entry(), 0..80),
                 any::<usize>(),
+                arb_modified(),
             )
-                .prop_map(move |(tags, order, entries, root_arena)| {
+                .prop_map(move |(tags, order, entries, root_arena, root_modified)| {
                     let mut nodes = vec![MNode {
                         parent: None,
                         obj_type: ObjType::Dir,
@@ -1112,10 +1233,13 @@ mod tests {
                         flags: 0,
                         logical: 0,
                         allocated: 0,
+                        modified: root_modified,
                         arena: root_arena % k,
                     }];
                     let mut dirs = vec![0usize];
-                    for (pick, is_dir, kind, fl, logical, allocated, arena, mut name) in entries {
+                    for (pick, is_dir, kind, fl, logical, allocated, arena, mut name, modified) in
+                        entries
+                    {
                         let idx = nodes.len();
                         name.extend_from_slice(&(idx as u32).to_le_bytes());
                         let flags = [
@@ -1138,6 +1262,7 @@ mod tests {
                             flags,
                             logical,
                             allocated,
+                            modified,
                             arena: arena % k,
                         });
                         if is_dir {
@@ -1230,6 +1355,18 @@ mod tests {
             // ranges tile 1..n with no gaps and no overlaps.
             for (i, was_child) in seen.iter().enumerate() {
                 prop_assert_eq!(*was_child, i != s.root as usize, "index {}", i);
+            }
+        }
+
+        #[test]
+        fn modified_rollup_matches_independent_max(t in arb_tree()) {
+            let s = frozen(&t);
+            let by_name = t.by_name();
+            let want = t.expected_modified();
+            prop_assert_eq!(s.nodes.len(), t.nodes.len());
+            for node in &s.nodes {
+                let m = by_name[name_of(&s, node)];
+                prop_assert_eq!(node.modified, want[m], "node {:?}", t.nodes[m].name);
             }
         }
 

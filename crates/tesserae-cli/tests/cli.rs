@@ -120,6 +120,7 @@ fn json_carries_every_incompleteness_field_even_when_clean() {
             "incomplete",
             "logical_bytes",
             "lost_entries",
+            "modified",
             "path",
             "skipped_mounts",
             "stalled_at",
@@ -211,6 +212,42 @@ fn a_mount_inside_the_tree_is_reported_with_its_reason() {
     );
     // The mount point is still a directory node: the root and `mnt`.
     assert_eq!(json["dirs"], 2);
+}
+
+/// The root's `modified`, as the app's inspector would show it: the newest
+/// modification time anywhere beneath it, as seconds in JSON and as a UTC
+/// date in text.
+#[test]
+fn the_roots_modified_time_is_the_newest_beneath_it_in_json_and_text() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let fx = small_tree();
+    let newest = 2_000_000_000u64; // 2033-05-18 03:33:20 UTC
+    std::fs::File::options()
+        .write(true)
+        .open(fx.path().join("a/b/two.bin"))
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(newest))
+        .unwrap();
+    // Precondition: the clock is behind it, so nothing the fixture's own
+    // creation stamped can be newer, and the root's own time is not it.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(now < newest);
+
+    let (code, json) = scan_json(fx.path(), &[]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["modified"], newest, "{json}");
+
+    let out = cli(&["scan", fx.path().to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.lines()
+            .any(|l| l == "modified:       2033-05-18 03:33:20 UTC (2000000000)"),
+        "no modified line in:\n{text}"
+    );
 }
 
 #[test]

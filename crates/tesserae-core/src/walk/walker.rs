@@ -176,10 +176,24 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         self.task_root = ScanId::NONE;
         self.task_rel = Arc::from(Path::new(""));
         let root_name = self.root_path.as_os_str().as_bytes();
+        // The root has no `getattrlistbulk` entry (nothing enumerated it), so
+        // its own modification time comes from the descriptor already open.
+        // Every other field is what a directory's entry would give it.
+        let root_entry = RawEntry {
+            name: root_name,
+            obj_type: ObjType::Dir,
+            file_id: 0,
+            dev_id: 0,
+            flags: 0,
+            modified: own_mtime(root_fd.as_raw_fd()),
+            logical: 0,
+            allocated: 0,
+            link_count: 0,
+        };
         self.guard(|w| {
             let root = {
                 let mut slot = w.lock()?;
-                let root = w.push(&mut slot, root_name, ScanId::NONE, None)?;
+                let root = w.push(&mut slot, root_name, ScanId::NONE, Some(&root_entry))?;
                 if w.max_depth == 0 {
                     slot.stats.depth_capped += 1;
                 }
@@ -548,8 +562,9 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         Ok(())
     }
 
-    /// Store a node and count it. `entry` is `None` for the root, which has no
-    /// entry of its own; every other node takes the parser's numbers verbatim.
+    /// Store a node and count it. Every node takes the entry's numbers
+    /// verbatim; `run_root` builds the root's from `fstat`. `None` stores a
+    /// directory with every figure zero, its modification time included.
     pub(super) fn push(
         &mut self,
         slot: &mut Slot,
@@ -589,6 +604,9 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                     flags: if dup { FLAG_HARDLINK_DUP } else { 0 },
                     logical: if dup { 0 } else { e.logical },
                     allocated: if dup { 0 } else { e.allocated },
+                    // A hardlink duplicate keeps its time: it is the same
+                    // inode, and only its bytes are counted elsewhere.
+                    modified: e.modified,
                 }
             }
             None => ScanNode {
@@ -598,6 +616,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                 flags: 0,
                 logical: 0,
                 allocated: 0,
+                modified: 0,
             },
         };
         let (is_dir, allocated) = (node.obj_type == ObjType::Dir, node.allocated);
@@ -691,4 +710,19 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         })?;
         Ok(Dir::new(fd, node, self.lane))
     }
+}
+
+/// The modification time, in seconds, of the object open as `fd`, or `0`
+/// when `fstat` fails. Zero is "unknown": a directory's time is rolled up as
+/// the latest of its own and its descendants', so an unknown root still
+/// reports the newest thing beneath it.
+fn own_mtime(fd: RawFd) -> i64 {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `st` is a valid out-pointer for one `stat`; `fstat` either
+    // fills it and returns 0 or leaves it unread by us.
+    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+        return 0;
+    }
+    // SAFETY: `fstat` returned 0, so it initialised `st`.
+    unsafe { st.assume_init() }.st_mtime
 }

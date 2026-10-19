@@ -145,7 +145,7 @@ typedef struct {
   uint64_t errors;
 } TessProgress;
 
-// One entry of the frozen tree. 40 bytes, C layout.
+// One entry of the frozen tree. 48 bytes, C layout.
 //
 // A directory's children are the entries `child_start` up to
 // `child_start + child_count` of the node array, sorted descending by
@@ -176,6 +176,13 @@ typedef struct {
   // everything beneath it: a directory carries no size of its own, so this
   // figure exists only because the freeze rolled it up.
   uint64_t allocated;
+  // Last modification, in seconds since the Unix epoch (UTC); negative
+  // before 1970. For a file or symlink, its own `ATTR_CMN_MODTIME`. For a
+  // directory, the latest of its own and every descendant's, rolled up
+  // at freeze like the sizes, so a directory is as recent as the most
+  // recently touched thing inside it. Last in the struct: appended in
+  // Phase 2 without moving any earlier field.
+  int64_t modified;
 } TessNode;
 
 // A borrowed view of a snapshot's arrays. The pointers stay valid until

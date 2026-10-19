@@ -40,8 +40,14 @@
 /// symlinks.
 pub const SCAN_OPTIONS: u64 = (libc::FSOPT_PACK_INVAL_ATTRS | libc::FSOPT_NOFOLLOW) as u64;
 
-/// Common attributes: returned-attrs set, name, device, object type, flags,
-/// file id.
+/// Common attributes: returned-attrs set, name, device, object type,
+/// modification time, flags, file id.
+///
+/// `ATTR_CMN_MODTIME` (`0x400` in `sys/attr.h`, a `struct timespec`) was added
+/// in Phase 2 for the treemap's age colouring and the inspector. It is a common
+/// attribute, so a directory's entry carries it too, and it sits between
+/// `ATTR_CMN_OBJTYPE` and `ATTR_CMN_FLAGS` in the packed buffer, moving every
+/// later slot by 16 bytes: see `crate::parse` for the re-measured layout.
 ///
 /// `ATTR_CMN_FLAGS` is parsed but nothing in Phase 1 reads it. It is kept
 /// because Phase 2 needs it: `SF_DATALESS` marks dataless (iCloud "Optimize
@@ -52,6 +58,7 @@ pub const COMMON_MASK: u32 = libc::ATTR_CMN_RETURNED_ATTRS
     | libc::ATTR_CMN_NAME
     | libc::ATTR_CMN_DEVID
     | libc::ATTR_CMN_OBJTYPE
+    | libc::ATTR_CMN_MODTIME
     | libc::ATTR_CMN_FLAGS
     | libc::ATTR_CMN_FILEID;
 
@@ -62,7 +69,7 @@ pub const COMMON_MASK: u32 = libc::ATTR_CMN_RETURNED_ATTRS
 pub const FILE_MASK: u32 =
     libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE | libc::ATTR_FILE_DATALENGTH;
 
-/// The attribute request: the nine attributes in [`COMMON_MASK`] and
+/// The attribute request: the ten attributes in [`COMMON_MASK`] and
 /// [`FILE_MASK`].
 pub fn scan_attrlist() -> libc::attrlist {
     libc::attrlist {
@@ -102,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn attrlist_requests_the_nine_spec_attributes() {
+    fn attrlist_requests_the_ten_spec_attributes() {
         let a = scan_attrlist();
         for bit in [
             libc::ATTR_CMN_RETURNED_ATTRS,
@@ -111,6 +118,7 @@ mod tests {
             libc::ATTR_CMN_FILEID,
             libc::ATTR_CMN_DEVID,
             libc::ATTR_CMN_FLAGS,
+            libc::ATTR_CMN_MODTIME,
         ] {
             assert_eq!(a.commonattr & bit, bit, "common bit {bit:#x} missing");
         }
@@ -123,12 +131,21 @@ mod tests {
         }
     }
 
+    /// The nine Phase 1 attributes plus `ATTR_CMN_MODTIME`, and nothing else.
     #[test]
-    fn attrlist_requests_exactly_the_nine_attributes_and_no_others() {
+    fn attrlist_requests_exactly_the_ten_attributes_and_no_others() {
         let a = scan_attrlist();
+        // `ATTR_CMN_MODTIME` is `0x0000_0400` in `sys/attr.h`; pinned as a
+        // literal so a wrong `libc` constant cannot satisfy this test.
+        assert_eq!(libc::ATTR_CMN_MODTIME, 0x0000_0400);
+        assert_eq!(
+            a.commonattr & 0x0000_0400,
+            0x0000_0400,
+            "ATTR_CMN_MODTIME must be requested"
+        );
         assert_eq!(
             a.commonattr.count_ones() + a.fileattr.count_ones(),
-            9,
+            10,
             "the mask fixes the buffer layout; an extra bit changes it"
         );
         assert_eq!(a.volattr, 0);
@@ -150,9 +167,9 @@ mod tests {
     /// (`$(xcrun --show-sdk-path)/usr/include/sys/attr.h`).
     #[test]
     fn masks_are_pinned_to_the_sdk_header_values() {
-        assert_eq!(COMMON_MASK, 0x8204_000B);
+        assert_eq!(COMMON_MASK, 0x8204_040B);
         assert_eq!(FILE_MASK, 0x0000_0205);
-        assert_eq!(scan_attrlist().commonattr, 0x8204_000B);
+        assert_eq!(scan_attrlist().commonattr, 0x8204_040B);
         assert_eq!(scan_attrlist().fileattr, 0x0000_0205);
     }
 

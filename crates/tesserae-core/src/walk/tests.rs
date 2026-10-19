@@ -134,6 +134,85 @@ fn single_call_entry_count(dir: &Path, buf_len: usize) -> i32 {
     single_call(dir, buf_len).1
 }
 
+/// Set `rel`'s modification time to `sec` seconds, without following a
+/// symlink.
+fn set_mtime(root: &Path, rel: &str, sec: i64) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = CString::new(root.join(rel).as_os_str().as_bytes()).unwrap();
+    let times = [
+        // Access time left alone.
+        libc::timespec {
+            tv_sec: 0,
+            tv_nsec: libc::UTIME_OMIT,
+        },
+        libc::timespec {
+            tv_sec: sec,
+            tv_nsec: 0,
+        },
+    ];
+    // SAFETY: `c` is NUL-terminated and `times` holds the two timespecs
+    // `utimensat` reads.
+    let rc = unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "utimensat {rel}: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+/// The walker copies each entry's `ATTR_CMN_MODTIME` into its node, and gives
+/// the root (which has no entry of its own) the time `fstat` reports for it.
+/// Freezing then rolls the newest time up, so this is the whole path from the
+/// kernel's buffer to the snapshot.
+#[test]
+fn walk_records_each_entrys_modified_time_and_the_roots_own() {
+    let fx = Fixture::new().unwrap();
+    fx.file("a.bin", 10).unwrap();
+    fx.file("d/b.bin", 10).unwrap();
+    fx.symlink("a.bin", "lnk").unwrap();
+    // Children first: creating an entry updates its directory's time.
+    set_mtime(fx.path(), "a.bin", 1_000_000_000);
+    set_mtime(fx.path(), "d/b.bin", 1_500_000_000);
+    set_mtime(fx.path(), "lnk", 1_200_000_000);
+    set_mtime(fx.path(), "d", 1_100_000_000);
+    set_mtime(fx.path(), "", 1_300_000_000);
+
+    let (arena, stats) = walk_serial(&opts(fx.path())).unwrap();
+    assert_eq!(stats.incomplete, None);
+    assert_eq!((stats.files, stats.dirs), (3, 2), "precondition: the tree");
+    for (name, want) in [
+        (&b"a.bin"[..], 1_000_000_000),
+        (b"b.bin", 1_500_000_000),
+        (b"lnk", 1_200_000_000),
+        (b"d", 1_100_000_000),
+    ] {
+        let hits = find(&arena, name);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].modified, want, "{}", String::from_utf8_lossy(name));
+    }
+    let root = arena
+        .iter()
+        .map(|(_, n)| n)
+        .find(|n| n.parent == ScanId::NONE)
+        .expect("a root");
+    assert_eq!(
+        root.modified, 1_300_000_000,
+        "the root's own time, from fstat"
+    );
+
+    let snap = crate::freeze::freeze(vec![arena], stats);
+    let root = &snap.nodes[snap.root as usize];
+    assert_eq!(root.modified, 1_500_000_000, "rolled up from d/b.bin");
+}
+
 #[test]
 fn counts_files_and_sums_allocated_size() {
     let fx = Fixture::new().unwrap();

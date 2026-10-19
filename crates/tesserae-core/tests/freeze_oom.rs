@@ -103,6 +103,7 @@ fn arenas() -> Vec<Arena> {
                 flags: 0,
                 logical: size,
                 allocated: size,
+                modified: 0,
             })
             .unwrap()
     };

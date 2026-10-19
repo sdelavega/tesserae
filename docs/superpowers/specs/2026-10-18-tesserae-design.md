@@ -237,10 +237,22 @@ pub struct TessNode {
     pub child_count: u32,   // 0 for files
     pub logical:     u64,   // sum of data length (st_size)
     pub allocated:   u64,   // sum of allocated size (st_blocks * 512)
+    pub modified:    i64,   // seconds since the Unix epoch, UTC; max over a directory's subtree
 }
 ```
 
-40 bytes aligned. 1–3M files costs 40–120 MB; 10M files costs 400 MB.
+48 bytes aligned. 1–3M files costs 48–144 MB; 10M files costs 480 MB.
+
+**`modified`** was added in Phase 2 for the treemap's Age colour mode and the
+inspector, growing the node from 40 to 48 bytes; it is appended after
+`allocated`, so no earlier field moved, and `TESS_ABI_VERSION` stays 1
+because ABI 1 had not shipped. It is `ATTR_CMN_MODTIME`'s `tv_sec` (§7),
+signed like `time_t`, so a time before 1970 is negative; the nanoseconds are
+dropped. For a file or symlink it is the object's own time. For a directory
+it is the **latest of its own time and every descendant's**, rolled up at
+freeze like the sizes, so a directory's tile ages with the most recently
+touched thing inside it. The scan root, which no `getattrlistbulk` entry
+describes, takes its own time from `fstat` on its open descriptor.
 
 **Flag bits**, as `node.rs` and `arena.rs` define them and `tesserae.h`
 exports them: `DIR = 1 << 0`, `SYMLINK = 1 << 1`, `HARDLINK_DUP = 1 << 2`,
@@ -265,7 +277,7 @@ The cache win is theoretical; the complexity is not.
 After the parallel scan lands nodes in per-thread arenas:
 
 1. count children per parent, prefix-sum, scatter into each parent's range
-2. roll sizes up bottom-up
+2. roll sizes up bottom-up (sums), and modification times (maxima)
 3. sort each sibling range descending by `allocated`
 4. emit the sorted tree breadth-first, so every parent's children are one
    contiguous slice of the final array
@@ -406,7 +418,10 @@ Rust memory. It is closed structurally, not by discipline:
 
 ### Attribute set
 
-Kept lean, because every additional attribute costs scan time.
+Kept lean, because every additional attribute costs scan time. Ten
+attributes: the nine of Phase 1 and `ATTR_CMN_MODTIME`, added in Phase 2 at a
+measured cost of about 2% on the Data volume (22.4 s against a same-day
+22.0 s at 10 workers; `docs/benchmarks.md`).
 `ATTR_CMN_RETURNED_ATTRS` is requested first so per-entry absence is
 detectable rather than guessed — which it must be, because absence is real
 and structural (see below). `FSOPT_PACK_INVAL_ATTRS` asks the kernel to
@@ -421,6 +436,7 @@ unresolved.
 | `ATTR_CMN_OBJTYPE` | file / dir / symlink |
 | `ATTR_CMN_FILEID` | inode, for hardlink dedup |
 | `ATTR_CMN_DEVID` | device half of the hardlink key; **not** the volume boundary (see Boundaries) |
+| `ATTR_CMN_MODTIME` | modification time (`struct timespec`; `tv_sec` kept) for Age colouring and the inspector |
 | `ATTR_CMN_FLAGS` | `UF_COMPRESSED`, `SF_RESTRICTED`, immutability |
 | `ATTR_FILE_DATALENGTH` | logical size |
 | `ATTR_FILE_ALLOCSIZE` | allocated size |
@@ -429,16 +445,35 @@ unresolved.
 The table lists what is *requested*. It is not what every entry carries.
 
 **File attributes are absent from a directory's entry, not zero-filled.**
-Measured on APFS: a regular file's entry is 80 bytes with
-`returned.fileattr == 0x205`, while the directory beside it is 56 bytes with
-`returned.fileattr == 0` and its name beginning at offset 52 — the three
-`ATTR_FILE_*` slots are not there at any offset, since the fixed fields
-would need 72 bytes. `man 2 getattrlist` states the rule for the mirror
+Measured on APFS with the ten-attribute mask: a regular file's entry is 96
+bytes with `returned.fileattr == 0x205`, while the directory beside it is 72
+bytes with `returned.fileattr == 0` and its name beginning at offset 68 — the
+three `ATTR_FILE_*` slots are not there at any offset, since the fixed
+fields would need 88 bytes. (With Phase 1's nine attributes the same entries
+were 80 and 56 bytes, the name at 52 and the fixed fields 72:
+`ATTR_CMN_MODTIME`'s 16 bytes sit at offset 40, between `ATTR_CMN_OBJTYPE`
+and `ATTR_CMN_FLAGS`, and move every later slot.) `man 2 getattrlist` states the rule for the mirror
 case: *"Requested directory attributes are not returned for file system
 objects that are not directories."* Setting or clearing
-`FSOPT_PACK_INVAL_ATTRS` changes nothing, and the behaviour is identical on
-APFS, HFS+, exFAT and FAT32, so it is VFS-level rather than one
-filesystem's quirk.
+`FSOPT_PACK_INVAL_ATTRS` changes nothing, and the behaviour was identical on
+APFS, HFS+, exFAT and FAT32 for the nine-attribute mask, so it is VFS-level
+rather than one filesystem's quirk. The ten-attribute layout has been
+re-measured on APFS only.
+
+**The parser accepts exactly two fixed-region sizes**, the two a census
+found. Over a full read-only scan of `/System/Volumes/Data` (6.78 million
+entries, run twice), the fixed region ended at 68 bytes for every directory
+(843,385 in the first run, no `fileattr` group) and at 88 bytes for every
+other entry (5,794,266 regular files, 137,123 symlinks, 941 sockets, 20
+fifos), and every entry's modification time, inode, link count, allocated
+size and data length agreed with `fstatat(2)` on the same name with 18
+exceptions, the same both runs and all kernel behaviour: 11 mount points,
+where the bulk entry describes the covered directory and `fstatat` the
+mounted root; and 7 hidden `.AssetData` directories of MobileAsset bundles,
+for which `getattrlistbulk` reports the parent directory's modification
+time while `getattrlist` and `fstatat` agree on the directory's own (same
+inode). Any other region size is refused as `UnexpectedLayout` rather than
+read.
 
 Two consequences bind every consumer of the buffer:
 

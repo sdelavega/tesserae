@@ -837,6 +837,20 @@ mod tests {
         assert!(root.allocated > 0, "an empty root proves nothing below");
         // The root is named by the path it was scanned under.
         assert_eq!(name_of(&v, root), fx.path().as_os_str().as_bytes());
+        // Every node carries a real modification time across the ABI: the
+        // fixture was built moments ago, so each is within the last hour.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        for n in all {
+            assert!(
+                (now - 3600..=now + 60).contains(&n.modified),
+                "{:?}: modified {} is not about now ({now})",
+                String::from_utf8_lossy(name_of(&v, n)),
+                n.modified
+            );
+        }
 
         // Every directory's children are the contiguous slice it names, they
         // point back at it, and their sizes add up to its own.
@@ -849,6 +863,8 @@ mod tests {
             assert!(!kids.is_empty(), "every directory here has an entry");
             assert!(kids.iter().all(|k| k.parent as usize == i));
             assert_eq!(kids.iter().map(|k| k.allocated).sum::<u64>(), dir.allocated);
+            // And a directory is as recent as anything inside it.
+            assert!(kids.iter().all(|k| k.modified <= dir.modified));
         }
 
         let s = stats(snapshot);

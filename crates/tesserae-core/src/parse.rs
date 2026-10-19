@@ -28,9 +28,24 @@
 //! Every offset below was derived from captured buffers, not from reasoning
 //! about bit values. The method: request one attribute at a time alongside the
 //! two `ATTR_BULK_REQUIRED` attributes, identify the single value by comparing
-//! it against `lstat(2)` ground truth, then request all nine together and
+//! it against `lstat(2)` ground truth, then request all of them together and
 //! match each slot against the values already known. The golden fixtures in
 //! `tests/fixtures/` are the recorded evidence.
+//!
+//! Phase 2 added `ATTR_CMN_MODTIME` and re-measured the same way. Requested
+//! alone with the two required attributes it is 16 bytes, `tv_sec` then
+//! `tv_nsec`, directly after the name reference. In the full ten-attribute
+//! mask its seconds sit at offset 40. Over two full scans of a Data volume
+//! (6.78 million entries each), every entry's slots at 40, 60, 68, 72 and 80
+//! agreed with `fstatat(2)` on the same name, with the same 18 exceptions
+//! both times, all kernel behaviour rather than layout: 11 mount points,
+//! where the bulk entry describes the covered directory and `fstatat` the
+//! mounted root (a different inode); and 7 hidden `.AssetData` directories
+//! of MobileAsset bundles, for which `getattrlistbulk` reports the *parent*
+//! directory's modification time while `getattrlist(2)` and `fstatat` on the
+//! path agree on the directory's own (same inode). Such a directory's own
+//! time is therefore its parent's; the freeze's rollup still raises it to
+//! the newest thing inside it.
 //!
 //! For the mask in [`crate::attrs`] the measured order happens to be ascending
 //! bit order within each group, with `ATTR_CMN_RETURNED_ATTRS` hoisted out of
@@ -51,29 +66,32 @@
 //!  24     8  ATTR_CMN_NAME                              attrreference_t
 //!  32     4  ATTR_CMN_DEVID                             i32  (dev_t)
 //!  36     4  ATTR_CMN_OBJTYPE                           u32  (fsobj_type_t)
-//!  40     4  ATTR_CMN_FLAGS                             u32
-//!  44     8  ATTR_CMN_FILEID                            u64  (NOT 8-aligned)
-//!  52     4  ATTR_FILE_LINKCOUNT                        u32
-//!  56     8  ATTR_FILE_ALLOCSIZE                        u64  (off_t)
-//!  64     8  ATTR_FILE_DATALENGTH                       u64  (off_t)
-//!  72    ..  variable-length region: the name bytes
+//!  40    16  ATTR_CMN_MODTIME                           struct timespec
+//!                                                       (i64 tv_sec, i64 tv_nsec)
+//!  56     4  ATTR_CMN_FLAGS                             u32
+//!  60     8  ATTR_CMN_FILEID                            u64  (NOT 8-aligned)
+//!  68     4  ATTR_FILE_LINKCOUNT                        u32
+//!  72     8  ATTR_FILE_ALLOCSIZE                        u64  (off_t)
+//!  80     8  ATTR_FILE_DATALENGTH                       u64  (off_t)
+//!  88    ..  variable-length region: the name bytes
 //! ```
 //!
 //! Two measured facts drive the whole design, and one of them contradicts the
 //! documentation:
 //!
-//! 1. `ATTR_CMN_FILEID` lands at offset 44, which is 4 modulo 8. The kernel
+//! 1. `ATTR_CMN_FILEID` lands at offset 60, which is 4 modulo 8. The kernel
 //!    packs these fields with no alignment padding whatsoever, so every
 //!    multi-byte read here must be an unaligned-safe byte copy.
 //!
 //! 2. **A directory's entry carries no `fileattr` group at all.** A regular
-//!    file's entry is 80 bytes with `returned.fileattr == 0x205`, while the
-//!    directory beside it is 56 bytes with `returned.fileattr == 0` and the
-//!    name starting at offset 52 — the three `fileattr` slots are *absent*,
-//!    not zero-filled. 56 is less than the 72 bytes the fixed fields would
+//!    file's entry is 96 bytes with `returned.fileattr == 0x205`, while the
+//!    directory beside it is 72 bytes with `returned.fileattr == 0` and the
+//!    name starting at offset 68 — the three `fileattr` slots are *absent*,
+//!    not zero-filled. 72 is less than the 88 bytes the fixed fields would
 //!    need, so this is arithmetic, not interpretation. Measured identically on
-//!    APFS, HFS+, exFAT and FAT32, so it is VFS behaviour rather than one
-//!    filesystem's quirk, and setting or clearing `FSOPT_PACK_INVAL_ATTRS`
+//!    APFS, HFS+, exFAT and FAT32 for the Phase 1 mask, so it is VFS
+//!    behaviour rather than one filesystem's quirk (the ten-attribute mask
+//!    was re-measured on APFS only), and setting or clearing `FSOPT_PACK_INVAL_ATTRS`
 //!    changes nothing — although `getattrlistbulk(2)` documents that option as
 //!    meaning "all requested attributes [...] will be returned".
 //!    Offsets therefore do **not** stay stable from entry to entry, and a
@@ -86,10 +104,11 @@
 //! * **The shape gate.** The name's `attr_dataoffset` marks where the
 //!   variable-length region begins, which makes it the kernel's own statement
 //!   of where the fixed-field region ends. Over a full scan of a Data volume
-//!   (6.7 million entries: directories, regular files, symlinks, sockets and
-//!   fifos) and on HFS+, exFAT and FAT32 images, that end was only ever 52
-//!   with the `fileattr` word zero (every directory) or 72 with it non-zero
-//!   (everything else). Any other size, or a size that disagrees with the
+//!   (6.78 million entries: directories, regular files, symlinks, sockets and
+//!   fifos), that end was only ever 68 with the `fileattr` word zero (every
+//!   directory) or 88 with it non-zero (everything else). For the Phase 1
+//!   mask, without `ATTR_CMN_MODTIME`, the two sizes were 52 and 72, on that
+//!   volume and on HFS+, exFAT and FAT32 images alike. Any other size, or a size that disagrees with the
 //!   `fileattr` word, is [`ParseError::UnexpectedLayout`]: a kernel that
 //!   packed this mask differently would put a neighbour's bytes under the
 //!   constant offsets, so the entry is refused rather than read.
@@ -109,7 +128,7 @@
 //! everything else. It has no safe default, so its returned bit is checked
 //! *before* it is read and a clear bit ends the entry with
 //! [`ParseError::NameOutOfBounds`] rather than yielding a shifted layout. The
-//! doctrine holds for all eight slots with no silent exception.
+//! doctrine holds for all nine slots with no silent exception.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(
@@ -135,6 +154,11 @@ pub struct RawEntry<'a> {
     /// `ATTR_CMN_FLAGS` (`st_flags`). Unread in Phase 1; see
     /// [`crate::attrs::COMMON_MASK`] for why it is requested.
     pub flags: u32,
+    /// `ATTR_CMN_MODTIME`'s `tv_sec`: seconds since the Unix epoch, UTC.
+    /// Signed, as `time_t` is: a time before 1970 is negative. The
+    /// nanoseconds are not kept. Present for directories too, since it is a
+    /// common attribute.
+    pub modified: i64,
     /// `ATTR_FILE_DATALENGTH`: the data fork's logical size.
     pub logical: u64,
     /// `ATTR_FILE_ALLOCSIZE`: bytes on disk across all of the file's forks.
@@ -172,8 +196,8 @@ pub enum ParseError {
     /// from a shifted offset.
     NameOutOfBounds,
     /// The fixed-field region is not one of the two layouts measured for this
-    /// mask: 52 bytes with no `fileattr` attribute returned (a directory), or
-    /// 72 bytes with at least one (everything else). The constant offsets
+    /// mask: 68 bytes with no `fileattr` attribute returned (a directory), or
+    /// 88 bytes with at least one (everything else). The constant offsets
     /// describe only those two, so no field is read from any other.
     UnexpectedLayout,
 }
@@ -246,11 +270,13 @@ const OFF_RETURNED_FILE: usize = 16;
 const OFF_NAME_REF: usize = 24;
 const OFF_DEVID: usize = 32;
 const OFF_OBJTYPE: usize = 36;
-const OFF_FLAGS: usize = 40;
-const OFF_FILEID: usize = 44;
-const OFF_LINKCOUNT: usize = 52;
-const OFF_ALLOCSIZE: usize = 56;
-const OFF_DATALENGTH: usize = 64;
+/// `ATTR_CMN_MODTIME`: a `struct timespec`, `tv_sec` (`i64`) then `tv_nsec`.
+const OFF_MODTIME: usize = 40;
+const OFF_FLAGS: usize = 56;
+const OFF_FILEID: usize = 60;
+const OFF_LINKCOUNT: usize = 68;
+const OFF_ALLOCSIZE: usize = 72;
+const OFF_DATALENGTH: usize = 80;
 
 /// An entry must at least hold its length, the returned-attributes set and the
 /// name reference. Anything shorter cannot be an entry for this mask.
@@ -263,9 +289,9 @@ const MIN_NAME_START: usize = OFF_NAME_REF + 8;
 
 /// Where the fixed-field region ends, and so the name begins, in the two
 /// measured layouts: without the `fileattr` group (a directory) and with it.
-/// No other region size has been observed for this mask -- not over a full
-/// scan of a 6.7-million-entry Data volume, nor on HFS+, exFAT or FAT32 -- and
-/// the parser accepts no other.
+/// No other region size has been observed for this mask over a full scan of a
+/// 6.78-million-entry Data volume, and the parser accepts no other. (The
+/// Phase 1 mask's 52 and 72 held on HFS+, exFAT and FAT32 images too.)
 const DIR_FIXED_END: usize = OFF_LINKCOUNT;
 const FILE_FIXED_END: usize = OFF_DATALENGTH + 8;
 
@@ -292,6 +318,7 @@ const RET_DEVID: CommonBit = CommonBit(libc::ATTR_CMN_DEVID);
 const RET_OBJTYPE: CommonBit = CommonBit(libc::ATTR_CMN_OBJTYPE);
 const RET_FLAGS: CommonBit = CommonBit(libc::ATTR_CMN_FLAGS);
 const RET_FILEID: CommonBit = CommonBit(libc::ATTR_CMN_FILEID);
+const RET_MODTIME: CommonBit = CommonBit(libc::ATTR_CMN_MODTIME);
 const RET_LINKCOUNT: FileBit = FileBit(libc::ATTR_FILE_LINKCOUNT);
 const RET_ALLOCSIZE: FileBit = FileBit(libc::ATTR_FILE_ALLOCSIZE);
 const RET_DATALENGTH: FileBit = FileBit(libc::ATTR_FILE_DATALENGTH);
@@ -342,9 +369,10 @@ fn parse_entry(rest: &[u8]) -> Result<(RawEntry<'_>, usize), ParseError> {
     // (3) The name reference, which is the one slot that must be gated before
     // it is read rather than after. Every other offset in the entry is derived
     // from its `attr_dataoffset`, so if the slot were absent the whole layout
-    // would shift by 8 and this parser would read `OBJTYPE | FLAGS` as the
-    // reference and the low half of `FILEID` as `DEVID` -- the silent misread,
-    // arriving through the one slot otherwise trusted unconditionally.
+    // would shift by 8 and this parser would read `DEVID | OBJTYPE` as the
+    // reference and the low half of `MODTIME`'s seconds as `DEVID` -- the
+    // silent misread, arriving through the one slot otherwise trusted
+    // unconditionally.
     //
     // A conforming kernel cannot get here: `ATTR_CMN_NAME` is
     // `ATTR_BULK_REQUIRED`, `getattrlistbulk` rejects a mask without it, and
@@ -418,6 +446,12 @@ fn parse_entry(rest: &[u8]) -> Result<(RawEntry<'_>, usize), ParseError> {
             flags: gated(returned.has_common(RET_FLAGS), || {
                 read_u32(entry, OFF_FLAGS, fixed_end)
             }),
+            // The `tv_sec` half of the timespec only. Its `tv_nsec` half
+            // follows at `OFF_MODTIME + 8` and is never read, so it cannot
+            // leak into the seconds.
+            modified: gated(returned.has_common(RET_MODTIME), || {
+                read_i64(entry, OFF_MODTIME, fixed_end)
+            }),
             logical: gated(returned.has_file(RET_DATALENGTH), || {
                 read_u64(entry, OFF_DATALENGTH, fixed_end)
             }),
@@ -461,7 +495,12 @@ fn read_i32(buf: &[u8], off: usize, limit: usize) -> Option<i32> {
     read_bytes::<4>(buf, off, limit).map(i32::from_le_bytes)
 }
 
-/// Note the byte copy: `ATTR_CMN_FILEID` sits at offset 44, so a `u64` here is
+/// A byte copy, like every read here: the kernel aligns nothing.
+fn read_i64(buf: &[u8], off: usize, limit: usize) -> Option<i64> {
+    read_bytes::<8>(buf, off, limit).map(i64::from_le_bytes)
+}
+
+/// Note the byte copy: `ATTR_CMN_FILEID` sits at offset 60, so a `u64` here is
 /// not 8-byte aligned.
 fn read_u64(buf: &[u8], off: usize, limit: usize) -> Option<u64> {
     read_bytes::<8>(buf, off, limit).map(u64::from_le_bytes)
@@ -490,6 +529,9 @@ mod tests {
         dev_id: i32,
         obj_type: u32,
         flags: u32,
+        /// `ATTR_CMN_MODTIME`: a `struct timespec`, seconds then nanoseconds.
+        mtime_sec: i64,
+        mtime_nsec: i64,
         file_id: u64,
         link_count: u32,
         allocated: u64,
@@ -518,6 +560,8 @@ mod tests {
                 dev_id: 0x0100_000F,
                 obj_type: VREG,
                 flags: 0,
+                mtime_sec: 1_700_000_000,
+                mtime_nsec: 123_456_789,
                 file_id: 0x0123_4567_89AB_CDEF,
                 link_count: 1,
                 allocated: 4096,
@@ -551,6 +595,8 @@ mod tests {
             e[OFF_DEVID..][..4].copy_from_slice(&self.dev_id.to_le_bytes());
             e[OFF_OBJTYPE..][..4].copy_from_slice(&self.obj_type.to_le_bytes());
             e[OFF_FLAGS..][..4].copy_from_slice(&self.flags.to_le_bytes());
+            e[OFF_MODTIME..][..8].copy_from_slice(&self.mtime_sec.to_le_bytes());
+            e[OFF_MODTIME + 8..][..8].copy_from_slice(&self.mtime_nsec.to_le_bytes());
             e[OFF_FILEID..][..8].copy_from_slice(&self.file_id.to_le_bytes());
             if self.file_group {
                 e[OFF_LINKCOUNT..][..4].copy_from_slice(&self.link_count.to_le_bytes());
@@ -670,6 +716,61 @@ mod tests {
             assert_eq!(entry.logical, 123_456, "the next field must not shift");
             assert_eq!(entry.link_count, 7, "the previous field must not shift");
             assert_eq!(entry.name, b"synthetic.bin");
+        }
+
+        /// `ATTR_CMN_MODTIME` is a common attribute, so unlike the `fileattr`
+        /// group it is present in a directory's entry as well as a file's or a
+        /// symlink's. Only the seconds are kept; the nanoseconds that follow
+        /// them must not leak into the value, and a clear returned bit yields
+        /// the default rather than the slot's bytes.
+        #[test]
+        fn modtime_is_parsed_for_files_dirs_and_symlinks() {
+            let shapes = [
+                ("file", VREG, true, FILE_MASK, ObjType::Reg),
+                ("dir", VDIR, false, 0, ObjType::Dir),
+                ("symlink", VLNK, true, FILE_MASK, ObjType::Lnk),
+            ];
+            for (i, (what, obj_type, file_group, returned_file, kind)) in
+                shapes.into_iter().enumerate()
+            {
+                // A distinct value per shape, and one before 1970 (a negative
+                // `time_t` is a real modification time, not an error).
+                let sec = [1_760_000_000i64, 1_234_567_890, -86_400][i];
+                let buf = Synth {
+                    obj_type,
+                    file_group,
+                    returned_file,
+                    mtime_sec: sec,
+                    mtime_nsec: 999_999_999,
+                    name: what.as_bytes().to_vec(),
+                    ..Default::default()
+                }
+                .build();
+                let entry = one(&buf);
+                // Precondition: the entry is the shape this case claims.
+                assert_eq!(entry.obj_type, kind, "{what}");
+                assert_eq!(entry.name, what.as_bytes(), "{what}");
+                assert_eq!(entry.modified, sec, "{what}: seconds of ATTR_CMN_MODTIME");
+                // The neighbours on either side are still read from their own
+                // offsets: the 16-byte slot did not shift anything.
+                assert_eq!(entry.dev_id, 0x0100_000F, "{what}: DEVID");
+                assert_eq!(entry.file_id, 0x0123_4567_89AB_CDEF, "{what}: FILEID");
+
+                let unsupplied = Synth {
+                    returned_common: COMMON_MASK & !libc::ATTR_CMN_MODTIME,
+                    obj_type,
+                    file_group,
+                    returned_file,
+                    mtime_sec: sec,
+                    ..Default::default()
+                }
+                .build();
+                assert_eq!(
+                    one(&unsupplied).modified,
+                    0,
+                    "{what}: an unsupplied MODTIME is the default, not the slot's bytes"
+                );
+            }
         }
 
         #[test]
@@ -793,8 +894,8 @@ mod tests {
             assert_eq!(entry.dev_id, 0x0100_000F);
         }
 
-        /// The two fixed-region sizes measured over a full scan of a Data volume
-        /// and on HFS+, exFAT and FAT32 images are 52 (directories) and 72
+        /// The two fixed-region sizes measured for the ten-attribute mask over
+        /// a full scan of a Data volume are 68 (directories) and 88
         /// (everything else). Any other size is a layout this parser has never
         /// seen, where the constant offsets could land on a neighbour's bytes,
         /// so the entry is refused instead of read.
@@ -815,7 +916,9 @@ mod tests {
                 .build();
                 assert_eq!(one(&buf).name, b"synthetic.bin", "control {fixed_end}");
             }
-            for fixed_end in [32, 40, 44, 48, 56, 60, 64, 68, 76, 80, 88, 128] {
+            // 52 and 72 are the Phase 1 sizes, measured for the nine-attribute
+            // mask before ATTR_CMN_MODTIME moved every later slot by 16.
+            for fixed_end in [32, 40, 44, 48, 52, 56, 60, 64, 72, 76, 80, 84, 92, 96, 128] {
                 for (file_group, returned_file) in [(true, FILE_MASK), (false, 0)] {
                     let buf = Synth {
                         fixed_end: Some(fixed_end),
@@ -833,9 +936,9 @@ mod tests {
             }
         }
 
-        /// The size alone is not the layout: a 52-byte region that claims any
+        /// The size alone is not the layout: a 68-byte region that claims any
         /// `fileattr` attribute would report that attribute as zero (its slot
-        /// cannot fit), and a 72-byte region claiming none is a shape no
+        /// cannot fit), and an 88-byte region claiming none is a shape no
         /// measured kernel produced. Both are refused.
         #[test]
         fn rejects_a_region_size_that_disagrees_with_the_returned_file_word() {
@@ -855,7 +958,7 @@ mod tests {
                 assert_eq!(
                     entries(&dir, 1).next(),
                     Some(Err(ParseError::UnexpectedLayout)),
-                    "52-byte region claiming file bit {bit:#x}"
+                    "68-byte region claiming file bit {bit:#x}"
                 );
             }
             let file = Synth {
@@ -866,9 +969,9 @@ mod tests {
             assert_eq!(
                 entries(&file, 1).next(),
                 Some(Err(ParseError::UnexpectedLayout)),
-                "72-byte region claiming no file attribute"
+                "88-byte region claiming no file attribute"
             );
-            // A partial word at 72 is the returned-attributes gate's business,
+            // A partial word at 88 is the returned-attributes gate's business,
             // not the layout's: `absent_attribute_yields_default_not_shifted_read`.
         }
 
@@ -883,6 +986,7 @@ mod tests {
             assert_eq!(RET_OBJTYPE.0, 0x0000_0008);
             assert_eq!(RET_FLAGS.0, 0x0004_0000);
             assert_eq!(RET_FILEID.0, 0x0200_0000);
+            assert_eq!(RET_MODTIME.0, 0x0000_0400);
             assert_eq!(RET_ALLOCSIZE.0, 0x0000_0004);
             assert_eq!(RET_DATALENGTH.0, 0x0000_0200);
 
@@ -967,6 +1071,7 @@ mod tests {
                 libc::ATTR_CMN_OBJTYPE,
                 libc::ATTR_CMN_FLAGS,
                 libc::ATTR_CMN_FILEID,
+                libc::ATTR_CMN_MODTIME,
             ] {
                 let buf = Synth {
                     returned_common: COMMON_MASK & !bit,
@@ -1074,6 +1179,8 @@ mod tests {
             nlink: u32,
             logical: u64,
             allocated: u64,
+            /// `st_mtimespec.tv_sec`.
+            mtime: i64,
         }
 
         fn expectations(name: &str) -> Vec<Expect> {
@@ -1083,7 +1190,7 @@ mod tests {
                 .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
                 .map(|l| {
                     let f: Vec<&str> = l.split('\t').collect();
-                    assert_eq!(f.len(), 7, "bad expectation row: {l}");
+                    assert_eq!(f.len(), 8, "bad expectation row: {l}");
                     Expect {
                         name: (0..f[0].len() / 2)
                             .map(|i| u8::from_str_radix(&f[0][i * 2..i * 2 + 2], 16).unwrap())
@@ -1094,6 +1201,7 @@ mod tests {
                         nlink: f[4].parse().unwrap(),
                         logical: f[5].parse().unwrap(),
                         allocated: f[6].parse().unwrap(),
+                        mtime: f[7].parse().unwrap(),
                     }
                 })
                 .collect();
@@ -1122,6 +1230,7 @@ mod tests {
                         nlink: e.link_count,
                         logical: e.logical,
                         allocated: e.allocated,
+                        mtime: e.modified,
                     }
                 })
                 .collect();
@@ -1216,7 +1325,7 @@ mod tests {
 
             // The regular file: full fixed region, name directly after it.
             let file = find(b"a.bin");
-            assert_eq!(file.len, 80, "a.bin entry length");
+            assert_eq!(file.len, 96, "a.bin entry length");
             assert_eq!(file.returned_common, COMMON_MASK);
             assert_eq!(file.returned_file, FILE_MASK);
             assert_eq!(
@@ -1228,7 +1337,7 @@ mod tests {
             // The directory: no `fileattr` group, so the name starts where
             // ATTR_FILE_LINKCOUNT would have been.
             let dir = find(b"d");
-            assert_eq!(dir.len, 56, "directory entry length");
+            assert_eq!(dir.len, 72, "directory entry length");
             assert_eq!(
                 dir.returned_file, 0,
                 "a directory reports no fileattr at all"
@@ -1237,10 +1346,28 @@ mod tests {
                 dir.name_start, OFF_LINKCOUNT,
                 "the directory's fileattr slots are absent, not zero-filled"
             );
-            // The decisive arithmetic: the fixed fields need 72 bytes and the
-            // entry is 56, so the three slots cannot be present at any offset.
+            // The decisive arithmetic: the fixed fields need 88 bytes and the
+            // entry is 72, so the three slots cannot be present at any offset.
             assert!(dir.len < OFF_DATALENGTH + 8);
-            assert_eq!(dir.bytes.len(), 56);
+            assert_eq!(dir.bytes.len(), 72);
+
+            // ATTR_CMN_MODTIME's seconds, decoded by hand at its constant
+            // offset in both shapes, agree with `lstat(2)`'s `st_mtime` from
+            // the sidecar: the 16-byte timespec sits where the constant says,
+            // in a directory's entry as well as a file's.
+            let expect = expectations("simple");
+            for (r, name) in [(file, &b"a.bin"[..]), (dir, &b"d"[..])] {
+                let want = expect
+                    .iter()
+                    .find(|e| e.name == name)
+                    .expect("sidecar row")
+                    .mtime;
+                assert_ne!(want, 0, "a zero mtime would not locate the slot");
+                let got =
+                    i64::from_le_bytes(r.bytes[OFF_MODTIME..OFF_MODTIME + 8].try_into().unwrap());
+                assert_eq!(got, want, "ATTR_CMN_MODTIME seconds at {OFF_MODTIME}");
+                assert_ne!(r.returned_common & libc::ATTR_CMN_MODTIME, 0);
+            }
 
             // ATTR_CMN_NAME is set on every entry, which is why the unconditional
             // read it guards is unreachable from a conforming kernel.

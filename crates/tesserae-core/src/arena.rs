@@ -134,6 +134,10 @@ pub struct ScanNode {
     pub flags: u16,
     pub logical: u64,
     pub allocated: u64,
+    /// The entry's own `ATTR_CMN_MODTIME` seconds, as the parser read them.
+    /// A directory's is its own here; [`crate::freeze`] rolls the newest
+    /// descendant's up into it.
+    pub modified: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +329,7 @@ mod tests {
             flags: 0,
             logical,
             allocated: logical,
+            modified: 0,
         }
     }
 
@@ -578,9 +583,9 @@ mod tests {
     }
 
     #[test]
-    fn scan_node_is_forty_bytes() {
-        // The sizing in the design (65_536 nodes is about 2.6 MB) assumes it.
-        assert_eq!(std::mem::size_of::<ScanNode>(), 40);
+    fn scan_node_is_48_bytes() {
+        // The sizing in the design (65_536 nodes is about 3.1 MB) assumes it.
+        assert_eq!(std::mem::size_of::<ScanNode>(), 48);
     }
 
     #[test]

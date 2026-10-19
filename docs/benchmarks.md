@@ -226,3 +226,51 @@ target directories (counted by logical size, some of them replacing older
 files) and 0.4 GB in 4,296 entries of a scratch directory. The rest was not
 traced. This is not a regression signal: no entry was refused and nothing
 was lost.
+
+## Phase 2: the cost of `ATTR_CMN_MODTIME`
+
+Phase 2 Task 2 added `ATTR_CMN_MODTIME` to the attribute request (16 more
+bytes per entry: a file's entry grew from 80 to 96 bytes, a directory's from
+56 to 72) and grew `TessNode` and `ScanNode` from 40 to 48 bytes. The
+question is what that costs on the real volume.
+
+Same machine as above (Apple M5, 10 cores, 24 GiB), macOS 27.2 (26B5112a),
+Rust 1.99.1, release profile, 2026-10-19. Two release binaries of
+`tesserae-cli`: **before** is commit `ffff993` (Phase 2 Task 1, the nine
+attributes), **after** is the same tree with this change. Each run is
+`tesserae-cli scan /System/Volumes/Data --workers 10 --json`, read-only, and
+the elapsed figure is the CLI's own (walk plus freeze); user and sys are
+`/usr/bin/time -p`. One unrecorded warm-up scan first, then the two binaries
+alternate so neither always runs first. Every scan below completed (exit 0,
+no `lost_entries`), about 843,300 directories and 5.95 million files.
+
+**Series 3, the comparison of record:** the Phase 1 condition, a load
+average below 3 before every run (the script waited for the one-minute load
+to fall below 3 before starting each scan). 09:57 to 10:06 local time.
+This condition and the 23.98 s pass mark were fixed after series 1 and 2
+below and before series 3 was run, because those two had been run back to
+back under a load Phase 1 did not have.
+
+| | run 1 | run 2 | run 3 | median | user / sys (s) |
+|---|---|---|---|---|---|
+| before (`ffff993`) | 21.99 | 22.24 | 21.59 | **21.99** | 2.0 to 2.2 / 105 to 107 |
+| after (this change) | 22.53 | 22.10 | 22.42 | **22.42** | 2.1 to 2.3 / 105 to 111 |
+
+**+2.0% against the same-day baseline, +2.8% against Phase 1's 21.8 s**
+(the 10-worker median above), inside the 10% budget the task set.
+
+Two earlier series on the same day, recorded because they were run and to
+show how much the machine's state moves these numbers:
+
+| series | condition | before median | after median | after vs before |
+|---|---|---|---|---|
+| 1 | a Time Machine backup in its "finding changes" phase, load 8 to 10; 3 runs each, back to back | 26.23 (25.71, 26.23, 28.85) | 30.10 (30.10, 26.69, 30.21) | +14.8% |
+| 2 | backup finished, scans back to back (load 6 to 8, much of it the previous scan's own); 5 runs each, alternating order | 24.35 (22.85, 25.25, 24.33, 24.35, 25.29) | 24.48 (23.68, 24.48, 24.78, 24.30, 26.30) | +0.5% |
+
+Series 1 is dominated by the backup walking the same volume; its before and
+after spread (25.7 to 30.2 s) is wider than the difference between them.
+Series 2 puts the change at noise level. Read together, the attribute costs
+a few percent at most. Where those percent go was not measured; the
+likeliest candidate is the 20% larger entries (fewer per 256 KiB
+`getattrlistbulk` buffer, so more calls). Not measured: the sparse-image benchmark, or the criterion
+`parse` and `freeze` numbers, for this change.
