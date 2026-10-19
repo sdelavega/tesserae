@@ -469,12 +469,14 @@ APFS, HFS+, exFAT and FAT32, for the nine-attribute mask and again for the
 ten (68 and 88 bytes on each; `tests/volume.rs` scans an image of each), so
 it is VFS-level rather than one filesystem's quirk.
 
-*Measured, FAT32 only:* `getattrlistbulk` returns `ATTR_FILE_ALLOCSIZE` as 0,
-with its returned bit set, for every file, while `getattrlist(2)` on the
-path and `lstat` report the real allocation (102,400 bytes for a 100 KiB
-file). The data length beside it is right, so this is the kernel's bulk path
-for msdosfs, not a misread; but a FAT32 volume therefore scans with no
-allocated bytes at all. exFAT, HFS+ and APFS agree with `lstat`.
+*Measured, FAT only:* on msdos volumes `getattrlistbulk` returns
+`ATTR_FILE_ALLOCSIZE` as 0, with its returned bit set, for every file, while
+`getattrlist(2)` on the path and `lstat` report the real allocation (102,400
+bytes for a 100 KiB file). The data length beside it is right, so this is the
+kernel's bulk path for msdosfs, not a misread. Taken as reported, it would
+make a FAT USB stick look empty, so on msdos the scanner computes the
+allocation instead (see Size semantics). exFAT, HFS+ and APFS report a real
+figure and agree with `lstat`.
 
 **The parser accepts exactly two fixed-region sizes**, the two a census
 found. Over a full read-only scan of `/System/Volumes/Data` (6.78 million
@@ -651,7 +653,25 @@ requested**: it would cost about 1% of scan time and return nothing.
 `ATTR_FILE_ALLOCSIZE` equalled `st_blocks * 512` on all five sampled files,
 which is consistent with our figures agreeing with `du`; five files do not
 establish whole-volume agreement. There is no `effective_allocated` correction step;
-`allocated` is `ATTR_FILE_ALLOCSIZE` as reported.
+`allocated` is `ATTR_FILE_ALLOCSIZE` as reported, **except on msdos (FAT12,
+FAT16, FAT32) volumes**, where the bulk call reports 0 (§7, Attribute set).
+
+**FAT: allocated is computed, from the data length and the cluster size.**
+Decided per volume from the `fstatfs` the walker already makes on every
+directory it enters (and once on the root): `f_fstypename` `msdos` selects
+the rule and `f_bsize` is the cluster. Measured on FAT32 images of 64 MiB,
+600 MiB and 2.1 GiB, a 64 MiB FAT16 and an 8 MiB FAT12, `f_bsize` equalled
+the cluster `diskutil info` reports (512, 4096, 4096, 2048, 2048), while
+`f_iosize` and `st_blksize` were 1 MiB on all of them, and every file's real
+allocation (`lstat`, path `getattrlist`) was its data length rounded up to
+that cluster. So a file records `logical` rounded up to the cluster, 0
+staying 0. A symlink on msdos is an "XSym" file of about a kilobyte whose
+data length is the target's: it records 1,536 bytes rounded up to the
+cluster, its measured allocation at 512-byte clusters, which equals what the
+real file rounds to at every FAT cluster size. Directories are unchanged.
+`tests/volume.rs` holds a FAT32 and a FAT16 image's scanned total to the sum
+of `lstat`'s `st_blocks * 512`, exactly. exFAT needs no rule: its bulk
+figure is real.
 
 ### Progress and cancellation
 

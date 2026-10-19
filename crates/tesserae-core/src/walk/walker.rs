@@ -41,7 +41,7 @@ use super::{KEPT_TOO_LONG, OOM_INJECTED};
 use crate::arena::ArenaError;
 use crate::arena::{Arena, ScanId, ScanNode, FLAG_HARDLINK_DUP};
 use crate::attrs::{scan_attrlist, SCAN_OPTIONS};
-use crate::boundary::{should_descend, volume_of, VolumeId};
+use crate::boundary::{should_descend, volume_info, Sizing, VolumeId};
 use crate::dedup::{InodeSet, ReserveFailed};
 use crate::parse::{entries, ObjType, RawEntry};
 use crate::progress::Progress;
@@ -53,6 +53,8 @@ pub(super) struct Frame<'a> {
     /// This directory, open. Dropping the frame closes it.
     pub(super) dir: Dir<'a>,
     pub(super) depth: u16,
+    /// How this directory's volume sizes its files: see [`Sizing`].
+    pub(super) sizing: Sizing,
     /// Subdirectories found by enumeration and not yet entered.
     pub(super) children: Vec<ScanId>,
     /// Index into `children` of the next one to enter.
@@ -190,6 +192,12 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             allocated: 0,
             link_count: 0,
         };
+        // How the root's volume sizes files, from one `fstatfs` on the
+        // descriptor already open. Every other directory gets its volume's
+        // from the `fstatfs` in `admit`. A failure here is not fatal: the
+        // root's volume was already read once to start the walk, so this
+        // falls back to the reported sizes.
+        let sizing = volume_info(root_fd.as_raw_fd()).map_or(Sizing::Reported, |v| v.sizing);
         self.guard(|w| {
             let root = {
                 let mut slot = w.lock()?;
@@ -206,7 +214,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             if w.max_depth == 0 {
                 return Ok(());
             }
-            w.subtree(dir, root, 0)
+            w.subtree(dir, root, 0, sizing)
         })
     }
 
@@ -225,8 +233,8 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             let rel = Arc::clone(&w.task_rel);
             match w.reopen(node, &rel) {
                 Ok(dir) => {
-                    if w.admit(node, &dir)? {
-                        w.subtree(dir, node, depth)?;
+                    if let Some(sizing) = w.admit(node, &dir)? {
+                        w.subtree(dir, node, depth, sizing)?;
                     }
                     Ok(())
                 }
@@ -258,9 +266,15 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     }
 
     /// Depth-first over an explicit stack, from `id` (open as `dir`) down.
-    fn subtree(&mut self, dir: Dir<'a>, id: ScanId, depth: u16) -> Result<(), Incomplete> {
+    fn subtree(
+        &mut self,
+        dir: Dir<'a>,
+        id: ScanId,
+        depth: u16,
+        sizing: Sizing,
+    ) -> Result<(), Incomplete> {
         let mut stack: Vec<Frame<'a>> = Vec::new();
-        self.enter(&mut stack, dir, id, depth)?;
+        self.enter(&mut stack, dir, id, depth, sizing)?;
 
         while let Some(top) = stack.last_mut() {
             let Some(&child) = top.children.get(top.next) else {
@@ -272,8 +286,8 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             let (parent_fd, depth) = (top.dir.raw(), top.depth + 1);
             match self.open_child(parent_fd, child)? {
                 Ok(dir) => {
-                    if self.admit(child, &dir)? {
-                        self.enter(&mut stack, dir, child, depth)?;
+                    if let Some(sizing) = self.admit(child, &dir)? {
+                        self.enter(&mut stack, dir, child, depth, sizing)?;
                     }
                     // Otherwise `dir` drops here, closing the directory the
                     // boundary refused without a single read from it.
@@ -314,26 +328,27 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     /// Cost: one `fstatfs` per directory (about 0.4 us against several us for
     /// the `openat` it follows), plus a second only at a crossing.
     ///
-    /// Returns `Ok(true)` to enter, `Ok(false)` to skip (recorded in
-    /// `skipped_mounts`, or in the error counters if the descriptor cannot be
-    /// examined). `Err` is only for the terminal reasons.
-    fn admit(&mut self, id: ScanId, dir: &Dir<'_>) -> Result<bool, Incomplete> {
+    /// Returns `Ok(Some(sizing))` to enter, with how the directory's volume
+    /// sizes its files (from the same `fstatfs`), and `Ok(None)` to skip
+    /// (recorded in `skipped_mounts`, or in the error counters if the
+    /// descriptor cannot be examined). `Err` is only for the terminal reasons.
+    fn admit(&mut self, id: ScanId, dir: &Dir<'_>) -> Result<Option<Sizing>, Incomplete> {
         let raw = dir.raw();
-        let volume = match self.lane.during(id, || volume_of(raw)) {
-            Ok(volume) => volume,
+        let (volume, sizing) = match self.lane.during(id, || volume_info(raw)) {
+            Ok(v) => (v.id, v.sizing),
             Err(e) => {
                 self.note_error(id, e.raw_os_error().unwrap_or(libc::EIO))?;
-                return Ok(false);
+                return Ok(None);
             }
         };
         if volume == self.root_volume {
-            return Ok(true);
+            return Ok(Some(sizing));
         }
         let (root_volume, include_non_local) = (self.root_volume, self.include_non_local);
         let Err(reason) = self.lane.during(id, || {
             should_descend(root_volume, volume, raw, include_non_local)
         }) else {
-            return Ok(true);
+            return Ok(Some(sizing));
         };
         let mut slot = self.lock()?;
         let path = self.report_path_of(&slot, id)?;
@@ -342,7 +357,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             .try_reserve(1)
             .map_err(|_| Incomplete::OutOfMemory)?;
         slot.stats.skipped_mounts.push((path, reason));
-        Ok(false)
+        Ok(None)
     }
 
     /// Enumerate `id`'s directory, offer what the pool wants of it, then push
@@ -353,10 +368,12 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         dir: Dir<'a>,
         id: ScanId,
         depth: u16,
+        sizing: Sizing,
     ) -> Result<(), Incomplete> {
         let mut frame = Frame {
             dir,
             depth,
+            sizing,
             children: Vec::new(),
             next: 0,
         };
@@ -545,6 +562,19 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         dir: ScanId,
         e: &RawEntry<'_>,
     ) -> Result<(), Incomplete> {
+        // On a volume whose bulk reply does not carry a real allocation (FAT),
+        // the size is computed instead: see `Sizing`.
+        let sized;
+        let e = match frame.sizing {
+            Sizing::Reported => e,
+            rule => {
+                sized = RawEntry {
+                    allocated: rule.allocated(e.obj_type, e.logical, e.allocated),
+                    ..e.clone()
+                };
+                &sized
+            }
+        };
         let id = self.push(slot, e.name, dir, Some(e))?;
         if e.obj_type == ObjType::Dir {
             // `frame.depth < max_depth` always holds for a frame on the

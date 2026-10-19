@@ -72,6 +72,8 @@
 use std::io;
 use std::os::raw::c_int;
 
+use crate::parse::ObjType;
+
 /// Why a directory was not entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
@@ -112,13 +114,98 @@ impl VolumeId {
 /// only `f_fsid` tells the sealed system volume from the data volume. See the
 /// module documentation.
 pub fn volume_of(fd: c_int) -> io::Result<VolumeId> {
-    let fsid = fstatfs(fd)?.f_fsid;
+    Ok(volume_info(fd)?.id)
+}
+
+/// [`volume_of`] and the volume's [`Sizing`], from the same one `fstatfs`.
+pub fn volume_info(fd: c_int) -> io::Result<Volume> {
+    let st = fstatfs(fd)?;
     // SAFETY: `fsid_t` is `struct { int32_t val[2]; }` (`<sys/mount.h>`), the
     // same size and layout as `[i32; 2]`; `transmute` checks the sizes agree at
     // compile time. The `libc` crate does not expose the field.
-    Ok(VolumeId(unsafe {
-        std::mem::transmute::<libc::fsid_t, [i32; 2]>(fsid)
-    }))
+    let id = VolumeId(unsafe { std::mem::transmute::<libc::fsid_t, [i32; 2]>(st.f_fsid) });
+    Ok(Volume {
+        id,
+        sizing: Sizing::of(&st.f_fstypename, st.f_bsize),
+    })
+}
+
+/// A volume as the walker needs it: who it is, and how to size its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Volume {
+    pub id: VolumeId,
+    pub sizing: Sizing,
+}
+
+/// Where a file's allocated size comes from on a volume.
+///
+/// # Why FAT needs its own rule
+///
+/// On msdos volumes (FAT12, FAT16, FAT32) `getattrlistbulk` reports
+/// `ATTR_FILE_ALLOCSIZE` as 0 for every file, with the attribute's returned
+/// bit set, while `getattrlist(2)` on the same path and `lstat(2)` report the
+/// real allocation. Measured on FAT32 images of 64 MiB, 600 MiB and 2.1 GiB,
+/// FAT16 (64 MiB) and FAT12 (8 MiB): in every case the real allocation was the
+/// data length rounded up to the cluster size, and the cluster size was
+/// `fstatfs`'s `f_bsize` (512, 4096, 4096, 2048 and 2048 bytes, each equal to
+/// the "Allocation Block Size" `diskutil info` reports). `f_iosize` and
+/// `st_blksize` were 1 MiB on all of them, so neither is the cluster size.
+/// exFAT (`exfat`) reports a real `ATTR_FILE_ALLOCSIZE` through the bulk call
+/// and keeps the reported value, as every other filesystem does.
+///
+/// A symlink on msdos is stored as an "XSym" file of about a kilobyte, while
+/// its data length is the target's: measured, a 4-byte target allocates
+/// 1,536 bytes with 512-byte clusters and one cluster with 2 KiB or 4 KiB
+/// ones. That allocation is [`MSDOS_SYMLINK_BYTES`] rounded up to the cluster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sizing {
+    /// Use `ATTR_FILE_ALLOCSIZE` as the kernel reported it.
+    Reported,
+    /// msdos: compute it from the data length and this cluster size.
+    Clusters(std::num::NonZeroU64),
+}
+
+/// What an msdos symlink file occupies before rounding to a cluster: its
+/// measured allocation with the smallest cluster FAT has (512 bytes). The
+/// file's true length lies in 1,025..=1,536 bytes, and every value in that
+/// range rounds up to the same allocation for every power-of-two cluster of
+/// at least 512 bytes, which are the only cluster sizes FAT has.
+pub const MSDOS_SYMLINK_BYTES: u64 = 1536;
+
+impl Sizing {
+    /// The rule for a filesystem named `fstypename` (`f_fstypename`) whose
+    /// `f_bsize` is `bsize`. An msdos volume reporting a zero block size has
+    /// no cluster to round to, so it keeps the reported figure.
+    pub fn of(fstypename: &[libc::c_char], bsize: u32) -> Sizing {
+        let name: Vec<u8> = fstypename
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        match (name.as_slice(), std::num::NonZeroU64::new(u64::from(bsize))) {
+            (b"msdos", Some(cluster)) => Sizing::Clusters(cluster),
+            _ => Sizing::Reported,
+        }
+    }
+
+    /// The allocated size to record for an entry of `kind` with data length
+    /// `logical`, of which the kernel reported `reported` bytes allocated.
+    /// Directories are untouched: their size is the freeze's rollup.
+    pub fn allocated(self, kind: ObjType, logical: u64, reported: u64) -> u64 {
+        let Sizing::Clusters(cluster) = self else {
+            return reported;
+        };
+        let bytes = match kind {
+            ObjType::Dir => return reported,
+            ObjType::Lnk => MSDOS_SYMLINK_BYTES,
+            ObjType::Reg | ObjType::Other => logical,
+        };
+        // A FAT file is under 4 GiB, so this cannot overflow from a real
+        // volume; saturating keeps a nonsense length from wrapping to small.
+        bytes
+            .checked_next_multiple_of(cluster.get())
+            .unwrap_or(u64::MAX)
+    }
 }
 
 fn fstatfs(fd: c_int) -> io::Result<libc::statfs> {
@@ -193,6 +280,76 @@ fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The FAT rule against values measured on FAT images: a file's data
+    /// length rounded up to the cluster (0 stays 0), a symlink one XSym file
+    /// rounded up to the cluster, a directory untouched; every other volume
+    /// keeps what the kernel reported.
+    #[test]
+    fn msdos_sizes_are_the_data_length_rounded_up_to_the_cluster() {
+        use crate::parse::ObjType;
+        use std::num::NonZeroU64;
+        for c in [512u64, 2048, 4096, 32 * 1024] {
+            let rule = Sizing::Clusters(NonZeroU64::new(c).unwrap());
+            for (logical, want) in [(0, 0), (1, c), (c - 1, c), (c, c), (c + 1, 2 * c)] {
+                // The reported figure is the bulk call's 0, or anything else:
+                // on msdos it is not used.
+                for reported in [0, 999] {
+                    assert_eq!(
+                        rule.allocated(ObjType::Reg, logical, reported),
+                        want,
+                        "cluster {c}, logical {logical}"
+                    );
+                }
+            }
+            assert_eq!(rule.allocated(ObjType::Other, 1, 0), c);
+            assert_eq!(
+                rule.allocated(ObjType::Dir, 0, 0),
+                0,
+                "directories untouched"
+            );
+        }
+        // Symlinks, as measured: a 4-byte target took 1,536 bytes with
+        // 512-byte clusters and one cluster with 2 KiB and 4 KiB ones.
+        for (c, want) in [(512u64, 1536u64), (2048, 2048), (4096, 4096)] {
+            let rule = Sizing::Clusters(NonZeroU64::new(c).unwrap());
+            assert_eq!(rule.allocated(ObjType::Lnk, 4, 0), want, "cluster {c}");
+        }
+        // Everywhere else the kernel's figure stands, zero included.
+        for kind in [ObjType::Reg, ObjType::Lnk, ObjType::Dir, ObjType::Other] {
+            assert_eq!(Sizing::Reported.allocated(kind, 5, 4096), 4096);
+            assert_eq!(Sizing::Reported.allocated(kind, 5, 0), 0);
+        }
+        // A length no FAT file has saturates instead of wrapping.
+        let rule = Sizing::Clusters(NonZeroU64::new(4096).unwrap());
+        assert_eq!(rule.allocated(ObjType::Reg, u64::MAX - 1, 0), u64::MAX);
+    }
+
+    /// The rule is chosen from `f_fstypename` and `f_bsize`, which are what
+    /// the FAT measurements found to identify the volume and its cluster.
+    #[test]
+    fn only_msdos_volumes_compute_their_sizes() {
+        fn name(s: &str) -> [libc::c_char; 16] {
+            let mut out = [0 as libc::c_char; 16];
+            for (o, b) in out.iter_mut().zip(s.bytes()) {
+                *o = b as libc::c_char;
+            }
+            out
+        }
+        let cluster = |c| Sizing::Clusters(std::num::NonZeroU64::new(c).unwrap());
+        assert_eq!(Sizing::of(&name("msdos"), 4096), cluster(4096));
+        assert_eq!(Sizing::of(&name("msdos"), 512), cluster(512));
+        assert_eq!(Sizing::of(&name("msdos"), 0), Sizing::Reported);
+        for other in ["apfs", "hfs", "exfat", "smbfs", "msdosx", "msdo"] {
+            assert_eq!(Sizing::of(&name(other), 4096), Sizing::Reported, "{other}");
+        }
+        // The real thing: the volume these tests run on is not msdos.
+        let here = std::fs::File::open(env!("CARGO_MANIFEST_DIR")).unwrap();
+        assert_eq!(
+            volume_info(here.as_raw_fd()).unwrap().sizing,
+            Sizing::Reported
+        );
+    }
     use std::fs::File;
     use std::os::fd::AsRawFd;
 

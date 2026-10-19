@@ -386,6 +386,7 @@ fn a_malformed_batch_reports_the_entries_it_lost() {
     let mut frame = Frame {
         dir: Dir::new(OwnedFd::from(File::open(fx.path()).unwrap()), root, &lane),
         depth: 0,
+        sizing: crate::boundary::Sizing::Reported,
         children: Vec::new(),
         next: 0,
     };

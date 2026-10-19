@@ -174,12 +174,11 @@ fn scans_a_known_disk_image_to_exact_totals() {
 /// external drive.
 ///
 /// Totals are held to `lstat(2)`, an independent reading of the same
-/// metadata, with one measured exception: on FAT32, `getattrlistbulk` returns
-/// `ATTR_FILE_ALLOCSIZE` as 0 with its returned bit set, for every file,
-/// while `getattrlist(2)` on the path and `lstat` report the real
-/// allocation. That is the kernel's bulk path for msdosfs, not a misread (the
-/// data length beside it is right), and it is pinned here so that a change
-/// in it is noticed.
+/// metadata, exactly, on every filesystem. On FAT (FAT32 and FAT16 here)
+/// that is the walker's computed allocation: `getattrlistbulk` reports
+/// `ATTR_FILE_ALLOCSIZE` as 0 there, so the scanner rounds each file's data
+/// length up to the volume's cluster (see `boundary::Sizing`), and this is
+/// what holds that rounding to the filesystem's own figure.
 #[test]
 fn every_filesystem_scans_with_only_the_two_measured_layouts() {
     let hdiutil = std::process::Command::new("hdiutil")
@@ -200,6 +199,7 @@ fn every_filesystem_scans_with_only_the_two_measured_layouts() {
         Filesystem::HfsPlus,
         Filesystem::ExFat,
         Filesystem::Fat32,
+        Filesystem::Fat16,
     ] {
         let fx = Fixture::new().unwrap();
         fx.dir("mnt").unwrap();
@@ -254,14 +254,32 @@ fn every_filesystem_scans_with_only_the_two_measured_layouts() {
         assert_eq!(counted(&snapshot), (dirs, files), "{fs:?}");
         let root = &snapshot.nodes[snapshot.root as usize];
         assert_eq!(root.logical, logical, "{fs:?}: logical");
-        if fs == Filesystem::Fat32 {
-            assert_ne!(allocated, 0, "precondition: lstat sees FAT32 allocation");
-            assert_eq!(root.allocated, 0, "FAT32: the bulk path's measured zero");
-        } else {
-            assert_eq!(root.allocated, allocated, "{fs:?}: allocated");
+        if matches!(fs, Filesystem::Fat32 | Filesystem::Fat16) {
+            // Preconditions: a file whose size is not a whole number of
+            // clusters, so rounding is exercised and not a no-op, and a
+            // nonzero reference, so a scan reporting 0 cannot match.
+            let cluster = statfs_bsize(&mnt);
+            assert!(
+                FILES.iter().any(|(_, len)| len % cluster != 0),
+                "{fs:?}: no file is short of a {cluster}-byte cluster"
+            );
+            assert_ne!(allocated, 0, "{fs:?}");
         }
+        assert_eq!(root.allocated, allocated, "{fs:?}: allocated");
         drop(image);
     }
+}
+
+/// `statfs(2)`'s `f_bsize` for the volume at `path`: on FAT, the cluster size
+/// (measured equal to the "Allocation Block Size" `diskutil` reports).
+fn statfs_bsize(path: &Path) -> u64 {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `statfs` is plain data for which all-zero is valid; `c` is a
+    // live NUL-terminated path and `st` a writable out-pointer.
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::statfs(c.as_ptr(), &mut st) }, 0);
+    u64::from(st.f_bsize)
 }
 
 /// `(dirs, files, logical, allocated)` under `root`, the root included, read

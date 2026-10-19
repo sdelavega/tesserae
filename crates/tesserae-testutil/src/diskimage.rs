@@ -54,6 +54,8 @@ pub enum Filesystem {
     ExFat,
     /// FAT32. `hdiutil` needs an image of at least about 33 MiB for it.
     Fat32,
+    /// FAT16: at 64 MiB, 2 KiB clusters where FAT32 has 512-byte ones.
+    Fat16,
 }
 
 impl Filesystem {
@@ -64,6 +66,7 @@ impl Filesystem {
             Filesystem::HfsPlus => "HFS+",
             Filesystem::ExFat => "ExFAT",
             Filesystem::Fat32 => "MS-DOS FAT32",
+            Filesystem::Fat16 => "MS-DOS FAT16",
         }
     }
 
@@ -73,7 +76,7 @@ impl Filesystem {
     fn volume_name(self) -> &'static str {
         match self {
             Filesystem::Apfs | Filesystem::HfsPlus => VOLUME_NAME,
-            Filesystem::ExFat | Filesystem::Fat32 => "TESSTEST",
+            Filesystem::ExFat | Filesystem::Fat32 | Filesystem::Fat16 => "TESSTEST",
         }
     }
 }
