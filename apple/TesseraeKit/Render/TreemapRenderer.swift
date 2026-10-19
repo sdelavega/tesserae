@@ -258,6 +258,8 @@ public final class TreemapRenderer {
     @MainActor
     public func drawZoom(in view: MTKView, oldTransform: CGAffineTransform, alpha: Float) {
         guard isZooming else { return draw(in: view) }
+        let timing = FrameTimer.shared.begin("encode", tiles: instances.count)
+        defer { FrameTimer.shared.end(timing) }
         let bounds = view.bounds.size
         guard bounds.width > 0, bounds.height > 0 else { return }
         precondition(view.colorPixelFormat == Self.pixelFormat, "MTKView must use \(Self.pixelFormat)")
@@ -270,6 +272,7 @@ public final class TreemapRenderer {
             return
         }
         encodeZoom(cb, target: target, size: bounds, scale: scale, oldTransform: oldTransform, alpha: alpha)
+        FrameTimer.shared.observe(cb, drawable: drawable, tiles: instances.count)
         cb.present(drawable)
         cb.commit()
     }

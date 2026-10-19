@@ -149,6 +149,41 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(app.focusKinds, [.video, .audio])
     }
 
+    func test_frame_capture_rejects_late_callbacks_and_keeps_duration_units() throws {
+        let timer = FrameTimer(enabled: true)
+        timer.startCapture()
+        let stale = timer.begin("encode", at: 10)
+        timer.startCapture()
+        timer.end(stale, at: 100)
+        XCTAssertTrue(timer.samples.isEmpty, "callbacks from an earlier capture cannot contaminate this one")
+        let first = timer.begin("encode", at: 100)
+        timer.end(first, at: 100.002)
+        let second = timer.begin("encode", at: 101)
+        timer.end(second, at: 101.020)
+        let samples = timer.samples
+        XCTAssertEqual(samples.count, 2)
+        XCTAssertEqual(samples[0].seconds, 0.002, accuracy: 1e-10)
+        XCTAssertEqual(samples[1].seconds, 0.020, accuracy: 1e-10)
+        XCTAssertEqual(FrameTimer.percentile99(samples.map(\.seconds)), 0.020, accuracy: 1e-10)
+    }
+
+    func test_return_zoom_shrinks_the_old_root_into_its_parent_tile() throws {
+        let viewport = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let target = CGRect(x: 100, y: 50, width: 200, height: 300)
+        let child = [Tile(rect: viewport, node: 7, depth: 0)]
+        let parent = [Tile(rect: viewport, node: 0, depth: 0), Tile(rect: target, node: 7, depth: 1)]
+        let from = try XCTUnwrap(TreemapView.navigationZoomRect(old: child, new: parent, viewport: viewport))
+        let animation = ZoomAnimation(from: from, viewport: viewport)
+        XCTAssertFalse(animation.isFinished)
+        let result = viewport.applying(animation.transform(at: animation.duration))
+        XCTAssertEqual(result.minX, target.minX, accuracy: 1e-8)
+        XCTAssertEqual(result.minY, target.minY, accuracy: 1e-8)
+        XCTAssertEqual(result.width, target.width, accuracy: 1e-8)
+        XCTAssertEqual(result.height, target.height, accuracy: 1e-8)
+        XCTAssertEqual(TreemapView.navigationZoomRect(old: parent, new: child, viewport: viewport), target)
+        XCTAssertNil(TreemapView.navigationZoomRect(old: parent, new: parent, viewport: viewport))
+    }
+
     func test_treemap_click_writes_shared_selection() throws {
         let tree = TestSnapshot(.dir("/R", [.file("one", 20)]))
         let selection = Selection()

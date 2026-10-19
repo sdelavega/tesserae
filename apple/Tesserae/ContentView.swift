@@ -20,11 +20,15 @@ import TesseraeKit
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
+    @StateObject private var phaseGate = PhaseGateRunner()
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
 
     var body: some View {
         VStack(spacing: 0) {
+            if let status = phaseGate.status {
+                Text(status).font(.caption).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+            }
             if model.colourChoice == 2 { focusControls }
             if let session = model.session {
                 SessionView(session: session, mode: model.colourMode, dark: dark)
@@ -34,6 +38,9 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 960, minHeight: 580)
+        .onReceive(NotificationCenter.default.publisher(for: .init("TesseraeRunFrameGate"))) { _ in
+            if let session = model.session { phaseGate.run(session: session) }
+        }
         .toolbar {
             ToolbarItemGroup {
                 Button { model.scan(URL(fileURLWithPath: "/System/Volumes/Data")) } label: {

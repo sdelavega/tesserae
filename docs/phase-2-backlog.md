@@ -8,30 +8,22 @@ rulings list kept outside the repo.
 
 ## Do first
 
-- **Link the static library from Xcode.** Only a plain `clang` link has been tried.
-  The archive's objects are arm64 Mach-O, but they embed LLVM 23 bitcode that
-  Xcode's own tools cannot read (`nm` fails). `-C embed-bitcode=no` is
-  incompatible with LTO, so this needs a real Xcode/Swift build to settle.
+- ~~**Link the static library from Xcode.**~~ Closed in Phase 2 Task 3;
+  TesseraeKit tests and unsigned universal Release app builds link successfully.
 - **Capture golden buffers on macOS 13 and 14.** The parser now accepts only the
-  two fixed-region layouts measured on macOS 27.2 (52 bytes for directories, 72
+  two fixed-region layouts measured on macOS 27.2 (68 bytes for directories, 88
   for everything else, across APFS, HFS+, exFAT and FAT32). On another macOS
   version, or over SMB/NFS, a different layout fails loudly as `MalformedBatch`
   with lost entries rather than producing wrong sizes. Also unmeasured: block and
-  character devices, and a non-directory at 72 bytes with a zero file word (now
+  character devices, and a non-directory at 88 bytes with a zero file word (now
   refused).
 - **Confirm `O_NOFOLLOW_ANY` on a macOS 13.x kernel.** It builds for the 13.0
   target (it is a flag bit, not a symbol), but whether the kernel honours it there
   is untested; the root-relative reopen of stolen directories depends on it.
-- **Run CI for the first time.** The workflows have only been checked as valid
-  YAML. Unverified: that `rustup toolchain install` adds the pinned components and
-  targets; the disk-image tests on the `macos-14` runner; the nightly fuzz, Miri
-  and ASAN jobs.
-- **Split `walk.rs` (~2,700 lines) as a pure move.** Candidate modules: lane
-  (Lane/Slot/Held/Dir), coordination (Halt, NodeBudget, Share), opening, error
-  classification, and the walker. Fold in the duplicated helpers: path assembly
-  (`walk::node_path` and `pool::stalled_path`), the EINTR loop (in `open_root`,
-  `openat_retrying` and `boundary::fstatfs`), and the golden `.expect` parser
-  (tests and benches).
+- ~~**Run CI for the first time.**~~ Closed: rust, fuzz and apple jobs passed
+  for `f33dd4a` on PR #2; the Apple runner is now `macos-26`.
+- ~~**Split `walk.rs` as a pure move.**~~ Closed in Phase 2 Task 1; the lane,
+  coordination, opening and error modules are now separate.
 - **Decide how to treat dataless (iCloud "Optimize Mac Storage") items.** The Data
   volume census found 664,076 dataless regular files and no dataless directories.
   Enumerating a dataless directory may trigger downloads, slow the scan or trip the
@@ -110,8 +102,9 @@ rulings list kept outside the repo.
 
 - `--locked` is missing from `cargo tree` (check-shipped-lib.sh), the `cargo deny`
   calls, and the justfile `bench` and `run` recipes; cargo-fuzz rejects it.
-- CI never builds the release profile or the Intel target, so the LTO,
-  codegen-units and panic settings are unchecked there.
+- ~~CI never builds the release profile or the Intel target.~~ Closed:
+  the Apple job builds the unsigned universal Release app, and the shipped-library
+  checks build the Rust release static library.
 - `deny.toml`'s `confidence-threshold = 0.93` was never justified (default 0.8).
 - `check-shipped-lib.sh` does a full release build into a fresh target directory
   on every run.
@@ -129,3 +122,17 @@ rulings list kept outside the repo.
 - Purgeable space comes from a Foundation read that crosses the FFI boundary while
   the Rust core owns `purgeableEstimate`; the spec does not say how.
 - The compressed-file finding rests on a single 5 MB test file.
+
+## Phase 2 exit gate (2026-10-19)
+
+- **Frame gate failed; Phase 2 remains open.** On the local partial 3.22M-node
+  Data snapshot, presentation gaps reached 50.00 ms on a 60 Hz display. Layout
+  stayed below 7.18 ms. See `docs/benchmarks.md` for the exact build, display,
+  workload and raw capture. Investigate scheduling/presentation gaps before
+  rerunning the original workload gate; no thresholds were relaxed.
+- An optimized ad-hoc Debug app can fail dyld library validation with the
+  project's hardened runtime enabled. The measurement used a command-line-only
+  `ENABLE_HARDENED_RUNTIME=NO` override. Resolve development/distribution signing
+  deliberately; keep the shipped hardened-runtime setting enabled.
+- Final whole-branch review, parked-item triage and plan/spec reconciliation
+  remain pending because the phase-gate stop rule was reached.

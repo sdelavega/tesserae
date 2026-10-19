@@ -523,6 +523,8 @@ func test_table_cells_have_voiceover_labels()               // spec §12
 
 ### Task 13: App shell
 
+**Status (2026-10-19): complete at `f33dd4a`; full gate and universal Release build passed; light/dark screenshots retained locally.**
+
 **Files:**
 - Modify: `apple/Tesserae/{TesseraeApp.swift,ContentView.swift}`
 - Create: `apple/TesseraeKit/AppModel.swift`, `apple/TesseraeKit/ScanBanner.swift`, `apple/TesseraeKitTests/AppModelTests.swift`
@@ -547,6 +549,8 @@ func test_focus_legend_has_voiceover_labels()
 ---
 
 ### Task 14: Phase gate — fluid zoom on a million-node tree
+
+**Status (2026-10-19): measured, FAILED; stop rule applied.** See `docs/benchmarks.md` and its raw capture. Instrumentation and both navigation directions are implemented; final whole-branch review and finishing the branch remain pending. The local snapshot had 3.22M nodes and was partial, so it also does not substitute for the original full-snapshot workload.
 
 Spec §17: "Fluid zoom on a million-node tree." Defined here as: on the development machine (Apple M5), with the `/System/Volumes/Data` snapshot (6.7M nodes) loaded, every frame of a zoom animation into and out of the five largest directories completes within the display's frame budget (16.7 ms at 60 Hz; 8.3 ms at 120 Hz if the display runs ProMotion), and relayout for each new root completes in under 100 ms.
 

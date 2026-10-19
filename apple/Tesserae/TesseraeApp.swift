@@ -26,6 +26,10 @@ struct TesseraeApp: App {
         #if DEBUG
         .commands {
             CommandMenu("Diagnostics") {
+                Button("Run Phase 2 Frame Gate") {
+                    NotificationCenter.default.post(name: .init("TesseraeRunFrameGate"), object: nil)
+                }
+                Divider()
                 Button("Use Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Use Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
                 Button("Follow System Appearance") { NSApp.appearance = nil }

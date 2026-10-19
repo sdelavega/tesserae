@@ -99,9 +99,13 @@ public struct TreemapView: NSViewRepresentable {
         coordinator.onZoomChanged = onZoomChanged
         coordinator.onDroppedTiles = onDroppedTiles
         coordinator.interaction.selection = selection
+        let sameNavigator = coordinator.interaction.navigator === navigator
+        let previousTiles = coordinator.interaction.tiles
         coordinator.interaction.navigator = navigator
         coordinator.interaction.onHover = onHover
-        let zoomFrom = coordinator.interaction.setTiles(tiles)
+        let pending = coordinator.interaction.setTiles(tiles)
+        let inferred = sameNavigator ? Self.navigationZoomRect(old: previousTiles, new: tiles, viewport: nsView.bounds) : nil
+        let zoomFrom = pending ?? inferred
         guard let renderer = coordinator.renderer, let view = nsView as? MTKView else {
             // No animation without Metal: the new layout at once.
             (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
@@ -116,6 +120,23 @@ public struct TreemapView: NSViewRepresentable {
         renderer.update(tiles: tiles, colourOf: colourOf, palette: palette)
         coordinator.reportDropped(renderer.droppedTileCount)
         nsView.needsDisplay = true
+    }
+
+    /// A virtual old-layout window that makes the existing zoom transform
+    /// shrink the old root into its tile in the returned-to parent layout.
+    static func navigationZoomRect(old: [Tile], new: [Tile], viewport: CGRect) -> CGRect? {
+        guard let oldRoot = old.first?.node, let newRoot = new.first?.node,
+            oldRoot != newRoot, oldRoot != Tile.noNode, newRoot != Tile.noNode,
+            viewport.width > 0, viewport.height > 0 else { return nil }
+        if let target = old.first(where: { $0.node == newRoot }) { return target.rect }
+        guard let target = new.first(where: { $0.node == oldRoot }),
+            target.rect.width > 0, target.rect.height > 0 else { return nil }
+        let sx = target.rect.width / viewport.width
+        let sy = target.rect.height / viewport.height
+        return CGRect(
+            x: viewport.minX + (viewport.minX - target.rect.minX) / sx,
+            y: viewport.minY + (viewport.minY - target.rect.minY) / sy,
+            width: viewport.width / sx, height: viewport.height / sy)
     }
 
     /// An event's location in the tiles' coordinates (top-left origin).
@@ -307,6 +328,7 @@ public struct TreemapView: NSViewRepresentable {
             guard let renderer else { return }
             if renderer.isZooming {
                 if let f = player.frame(now: CACurrentMediaTime()) {
+                    FrameTimer.shared.frameStarted()
                     return renderer.drawZoom(in: view, oldTransform: f.transform, alpha: f.alpha)
                 }
                 stopZoom(view)

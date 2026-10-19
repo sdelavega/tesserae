@@ -87,7 +87,11 @@ public final class AppSession: ObservableObject, Identifiable {
             labels = []
             return
         }
+        let preparation = FrameTimer.shared.begin("prepare")
+        defer { FrameTimer.shared.end(preparation) }
+        let layout = FrameTimer.shared.begin("layout")
         var next = squarify(snapshot, root: root, in: CGRect(origin: .zero, size: size))
+        FrameTimer.shared.end(layout)
         applySelection(&next, selection.nodes)
         tiles = next
         labels = placeLabels(next, in: snapshot, measure: LabelStyle.measure)

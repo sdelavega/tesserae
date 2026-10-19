@@ -57,6 +57,7 @@
 		E01500000000000000000002 /* AppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01300000000000000000001 /* AppModelTests.swift */; };
 		E01400000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01300000000000000000002 /* AppModel.swift */; };
 		E01400000000000000000003 /* ScanBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01300000000000000000003 /* ScanBanner.swift */; };
+		E01400000000000000000011 /* FrameTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01400000000000000000010 /* FrameTimer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -154,6 +155,7 @@
 		E01300000000000000000001 /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
 		E01300000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		E01300000000000000000003 /* ScanBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanBanner.swift; sourceTree = "<group>"; };
+		E01400000000000000000010 /* FrameTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Diagnostics/FrameTimer.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -230,6 +232,7 @@
 		B44C549377661B3C8A9D0A6E /* TesseraeKit */ = {
 			isa = PBXGroup;
 			children = (
+				E01400000000000000000010 /* FrameTimer.swift */,
 				E01300000000000000000003 /* ScanBanner.swift */,
 				E01300000000000000000002 /* AppModel.swift */,
 				84D57130E3E47C4FB4AF9941 /* TesseraeKit.h */,
@@ -491,6 +494,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E01400000000000000000011 /* FrameTimer.swift in Sources */,
 				E01400000000000000000003 /* ScanBanner.swift in Sources */,
 				E01400000000000000000002 /* AppModel.swift in Sources */,
 				4578FE5C5643A78DDC6C0B63 /* Version.swift in Sources */,

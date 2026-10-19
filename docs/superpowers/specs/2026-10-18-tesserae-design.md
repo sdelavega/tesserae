@@ -820,7 +820,9 @@ the target layout, renders the *old* layout transformed so the clicked rect
 fills the viewport, and cross-fades — ~250ms ease-out, two instance buffers
 and an alpha uniform, no per-frame relayout.
 
-Breadcrumb for ancestry. Arrows between siblings, ⌘↑ to ascend, Return to
+Returning to an ancestor shrinks the old root into its tile in the ancestor's
+new layout and cross-fades; if that root has no emitted tile, it redraws at
+once. Breadcrumb for ancestry. Arrows between siblings, ⌘↑ to ascend, Return to
 descend. Hover drives the inspector: full path, both sizes, type, dates.
 
 ### Hit testing
@@ -1387,6 +1389,15 @@ those tests take.
 ---
 
 ## 13. Spike results
+
+**Phase 2 update (2026-10-19):** The app shell, navigation, labels and file table
+are implemented. The real-window zoom gate remains **failed**: on a partial
+3.22M-node Data-volume snapshot at 60 Hz, presentation gaps reached 50.00 ms
+against a 16.67 ms budget; raw relayout stayed below 7.18 ms. The measured
+optimized Debug build and workload caveats are recorded in
+[`docs/benchmarks.md`](../../benchmarks.md). Phase 2 is not declared complete;
+final branch review and PR readiness are pending.
+
 
 Everything downstream assumes scan speed. A throwaway Rust spike ran before
 implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread

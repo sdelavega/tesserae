@@ -368,3 +368,88 @@ same input gave 0.048 ms per worst-case query (best of 10 blocks). So at
 mouse-event frequency even a full scan of 50,000 rects is well under a
 millisecond in an optimized build (spec §8 "Hit testing"); only the
 unoptimized test build approaches one.
+
+
+## Phase 2: real-window frame gate — FAILED (2026-10-19)
+
+Task 13 is implemented at `f33dd4a`. This measurement adds `FrameTimer`,
+return-to-parent animation and a bounded Diagnostics menu command that drives
+the actual window's navigation. **The phase gate did not pass.** At 60 Hz,
+the frame budget is 16.667 ms; the largest presentation gap was 50.000 ms
+(p99 49.999 ms), and the largest interval between draw callbacks was
+42.945 ms (p99 40.839 ms). No threshold was changed and no performance tuning
+was attempted after this result. Final branch review and PR readiness remain
+pending.
+
+The local workload was a **partial** `/System/Volumes/Data` snapshot:
+3,220,327 nodes, 279.59 GB allocated, incomplete code 4 (`STALLED`), 334
+unreadable directories. This scan's watchdog named the user's Documents
+folder; earlier app-shell scans named `/System/Volumes/Data/home`. The banner
+reported this in the window. These are the nodes visible to this app without
+any new Full Disk Access grant; this is not the earlier 6.7M-node snapshot.
+Consequently even a cadence pass here would not establish the full original
+workload gate.
+
+Same M5 development machine and Xcode 27.2 as above. The maximized window's
+treemap viewport was 1679 × 493.5 pt; the active display mode reported **60 Hz**
+through `CGDisplayMode.refreshRate` (not a remembered display specification).
+The workload was the five largest allocated, readable **immediate child
+directories** of the Data root, each zoomed into and returned from three times.
+All 30 transitions have actual draw, GPU-completion and presentation samples;
+403 submitted frames each have a matching GPU and presentation record.
+No offscreen rendering was substituted.
+
+Build and reproduction:
+
+```sh
+xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae \
+  -configuration Debug -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath apple/build/DerivedData-framegate \
+  SWIFT_OPTIMIZATION_LEVEL=-O ENABLE_HARDENED_RUNTIME=NO
+```
+
+Launch that local build, scan the Data volume, maximize the window, then
+choose **Diagnostics → Run Phase 2 Frame Gate**. It writes
+`apple/build/phase14-frames.json`; the retained raw measurements are in
+[`benchmarks/2026-10-19-phase2-frame-gate.json`](benchmarks/2026-10-19-phase2-frame-gate.json).
+The Debug build is optimized but retains Snapshot's Debug liveness locks.
+The local-only hardened-runtime override was required because dyld rejected
+the ad-hoc framework under library validation; the project's hardened-runtime
+settings were not changed. The unsigned universal Release build also succeeds,
+but this is not a signed Release performance result.
+
+The sampler adds signpost intervals and records the following separately:
+
+| measurement | samples | maximum ms | p99 ms |
+|---|---:|---:|---:|
+| raw squarify layout | 30 | 7.180 | 7.180 |
+| UI preparation (layout, selection and labels) | 30 | 73.680 | 73.680 |
+| CPU draw submission, including buffer/drawable waits | 403 | 0.735 | 0.431 |
+| GPU execution (`gpuEndTime - gpuStartTime`) | 403 | 12.854 | 11.042 |
+| draw-callback interval within an animation | 373 | 42.945 | 40.839 |
+| drawable presentation latency after encode | 403 | 73.889 | 58.210 |
+| presentation interval within an animation | 373 | 50.000 | 49.999 |
+
+Raw layout is below 100 ms on every navigation. CPU encoding and GPU execution
+are individually within the frame budget, but these do not establish smooth
+presentation: the actual display intervals include missed refreshes. The data
+alone does not identify the source of those gaps. p99 uses nearest rank
+`ceil(0.99 × count)`; transition boundaries are excluded from cadence so time
+spent between separate zooms is not counted as a slow animation frame.
+
+Per-directory figures combine the three repetitions. `out` returns to the Data
+root, so its target tile count is the root layout's 6,451. Each row's p99 equals
+its maximum where fewer than 100 samples were collected.
+
+| directory | direction | frames | tiles | layout max ms | preparation max ms | CPU max / p99 ms | GPU max / p99 ms | presentation gap max / p99 ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Applications | in | 40 | 6692 | 2.509 | 72.239 | 0.439 / 0.439 | 9.992 / 9.992 | 33.333 / 33.333 |
+| Applications | out | 40 | 6451 | 6.167 | 72.516 | 0.185 / 0.185 | 8.940 / 8.940 | 33.333 / 33.333 |
+| Users | in | 40 | 5460 | 5.297 | 65.161 | 0.735 / 0.735 | 11.733 / 11.733 | 33.333 / 33.333 |
+| Users | out | 40 | 6451 | 5.803 | 65.558 | 0.218 / 0.218 | 10.668 / 10.668 | 33.333 / 33.333 |
+| System | in | 39 | 1063 | 0.414 | 23.984 | 0.356 / 0.356 | 10.555 / 10.555 | 49.999 / 49.999 |
+| System | out | 42 | 6451 | 6.547 | 69.356 | 0.188 / 0.188 | 7.675 / 7.675 | 33.333 / 33.333 |
+| Library | in | 40 | 4811 | 1.453 | 60.406 | 0.637 / 0.637 | 12.854 / 12.854 | 50.000 / 50.000 |
+| Library | out | 40 | 6451 | 7.108 | 68.533 | 0.160 / 0.160 | 11.065 / 11.065 | 50.000 / 50.000 |
+| opt | in | 40 | 4227 | 1.494 | 54.929 | 0.498 / 0.498 | 8.833 / 8.833 | 49.998 / 49.998 |
+| opt | out | 42 | 6451 | 7.180 | 73.680 | 0.330 / 0.330 | 9.431 / 9.431 | 33.333 / 33.333 |
