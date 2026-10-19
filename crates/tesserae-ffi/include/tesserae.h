@@ -88,6 +88,10 @@
 // could not be parsed; `lost_entries` says how many entries were lost.
 #define TESS_INCOMPLETE_MALFORMED_BATCH 6
 
+// `TessScanStats.incomplete`: the volume being scanned went away mid-scan (an
+// image detached, a drive pulled); the snapshot holds what was read before.
+#define TESS_INCOMPLETE_VOLUME_LOST 7
+
 // `tess_scan_status`: the scan is still running.
 #define TESS_STATUS_RUNNING 0
 

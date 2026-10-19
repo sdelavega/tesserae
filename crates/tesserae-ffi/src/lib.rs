@@ -101,6 +101,9 @@ pub const TESS_INCOMPLETE_FD_EXHAUSTED: u32 = 5;
 /// `TessScanStats.incomplete`: the kernel returned a directory batch that
 /// could not be parsed; `lost_entries` says how many entries were lost.
 pub const TESS_INCOMPLETE_MALFORMED_BATCH: u32 = 6;
+/// `TessScanStats.incomplete`: the volume being scanned went away mid-scan (an
+/// image detached, a drive pulled); the snapshot holds what was read before.
+pub const TESS_INCOMPLETE_VOLUME_LOST: u32 = 7;
 
 /// `tess_scan_status`: the scan is still running.
 pub const TESS_STATUS_RUNNING: i32 = 0;
@@ -541,6 +544,7 @@ fn incomplete_code(reason: Option<Incomplete>) -> u32 {
         Some(Incomplete::Stalled) => TESS_INCOMPLETE_STALLED,
         Some(Incomplete::FdExhausted) => TESS_INCOMPLETE_FD_EXHAUSTED,
         Some(Incomplete::MalformedBatch) => TESS_INCOMPLETE_MALFORMED_BATCH,
+        Some(Incomplete::VolumeLost) => TESS_INCOMPLETE_VOLUME_LOST,
     }
 }
 
@@ -1134,6 +1138,7 @@ mod tests {
                 TESS_INCOMPLETE_MALFORMED_BATCH,
                 6,
             ),
+            (Some(Incomplete::VolumeLost), TESS_INCOMPLETE_VOLUME_LOST, 7),
         ];
         for (reason, constant, literal) in table {
             assert_eq!(incomplete_code(reason), literal, "{reason:?}");

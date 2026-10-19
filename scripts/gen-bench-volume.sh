@@ -38,8 +38,10 @@ mkdir "$mnt"
 hdiutil create -size 8g -type SPARSE -fs APFS -volname TesseraeBench "$dir/bench" >/dev/null
 hdiutil attach -nobrowse -noverify -noautoopen -mountpoint "$mnt" "$image" >/dev/null
 
-# From here on a failure must not leave the image attached.
-trap 'hdiutil detach -force "$mnt" >/dev/null 2>&1 || true' ERR
+# From here on any exit but success must not leave the image attached. EXIT,
+# not ERR: the validation failures below are plain `exit 1`s, which an ERR trap
+# never sees.
+trap 'hdiutil detach -force "$mnt" >/dev/null 2>&1 || true' EXIT
 
 # Spotlight would otherwise start indexing 500,000 new files, and `mdutil -i
 # off` needs root. This marker is the documented way to opt a volume out; it
@@ -74,5 +76,6 @@ if [ -n "$nonempty" ]; then
     echo "error: $nonempty is not empty" >&2
     exit 1
 fi
+trap - EXIT
 echo "$count empty files in $(find "$mnt" -type d | wc -l | tr -d ' ') directories"
 echo "$mnt"

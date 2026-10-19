@@ -26,7 +26,17 @@ cd "$(dirname "$0")/.."
 
 work="$(mktemp -d)"
 mnt="$work/mnt"
-trap 'hdiutil detach -force "$mnt" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+# Delete the work directory only once the volume is off it: `rm -rf` through a
+# mount that would not detach would walk into 500,000 files of the image.
+cleanup() {
+    hdiutil detach -force "$mnt" >/dev/null 2>&1 || true
+    if [ -d "$mnt" ] && [ "$(stat -f %d "$mnt")" != "$(stat -f %d "$work")" ]; then
+        echo "warning: $mnt is still mounted; leaving $work in place" >&2
+        return
+    fi
+    rm -rf "$work"
+}
+trap cleanup EXIT
 
 cargo build --release -p tesserae-cli
 cli=target/release/tesserae-cli

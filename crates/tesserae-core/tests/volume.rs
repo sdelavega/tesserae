@@ -141,6 +141,18 @@ fn scans_a_known_disk_image_to_exact_totals() {
 
     let snapshot = scan(mnt);
 
+    // The reference is only a reference if it held still: APFS reallocating a
+    // file between the `lstat` above and the scan would otherwise surface as
+    // a totals mismatch that blames the scanner.
+    let allocated_after: u64 = FILES
+        .iter()
+        .map(|(rel, _)| fs::metadata(mnt.join(rel)).unwrap().blocks() * 512)
+        .sum();
+    assert_eq!(
+        allocated_after, expected_allocated,
+        "allocation moved during the test"
+    );
+
     assert_eq!(snapshot.stats.dirs, 3, "the root, dir and dir/deeper");
     assert_eq!(snapshot.stats.files, 3);
     assert_eq!(
@@ -272,6 +284,7 @@ enum Walked {
         nodes: u64,
         incomplete: Option<Incomplete>,
         errors: u64,
+        lost_entries: u64,
         unreadable: usize,
         /// Whether the (possibly partial) result froze into a snapshot.
         froze: bool,
@@ -303,11 +316,12 @@ impl Walked {
                 nodes,
                 incomplete,
                 errors,
+                lost_entries,
                 unreadable,
                 froze,
             } => format!(
                 "Ok: {nodes} nodes, incomplete {incomplete:?}, errors {errors}, \
-                 unreadable {unreadable}, froze {froze}"
+                 lost_entries {lost_entries}, unreadable {unreadable}, froze {froze}"
             ),
         }
     }
@@ -398,12 +412,17 @@ fn detach_during_walk(dirs: u32, per: u32) -> Attempt {
                 },
                 Ok((arenas, stats)) => {
                     let nodes = stats.dirs + stats.files;
-                    let (incomplete, errors, unreadable) =
-                        (stats.incomplete, stats.errors, stats.unreadable.len());
+                    let (incomplete, errors, lost_entries, unreadable) = (
+                        stats.incomplete,
+                        stats.errors,
+                        stats.lost_entries,
+                        stats.unreadable.len(),
+                    );
                     Walked::Returned {
                         nodes,
                         incomplete,
                         errors,
+                        lost_entries,
                         unreadable,
                         froze: try_freeze(arenas, stats).is_ok(),
                     }
@@ -416,15 +435,19 @@ fn detach_during_walk(dirs: u32, per: u32) -> Attempt {
     // Wait for the walk to be demonstrably under way: a handful of
     // directories stored, the walk not yet returned.
     let started_waiting = Instant::now();
-    while progress.snapshot().dirs < 5 {
+    // A walk that returns before it stored five directories has a result
+    // already sitting in the channel; take it rather than wait it out.
+    let mut early = None;
+    while early.is_none() && progress.snapshot().dirs < 5 {
         assert!(
             started_waiting.elapsed() < HANG_LIMIT,
             "the walk stored no directories in {HANG_LIMIT:?}"
         );
+        early = rx.try_recv().ok();
         std::thread::sleep(Duration::from_micros(200));
     }
     let progress_at_detach = progress.snapshot();
-    let early = rx.try_recv().ok();
+    let early = early.or_else(|| rx.try_recv().ok());
     let issued = Instant::now();
     image.force_detach().unwrap();
     let detach_took = issued.elapsed();
@@ -456,16 +479,20 @@ fn detach_during_walk(dirs: u32, per: u32) -> Attempt {
 }
 
 /// A volume that vanishes mid-scan must not hang the scan, panic it, or come
-/// back as a complete tree.
+/// back looking complete: the walk returns `Ok` with `incomplete ==
+/// Some(VolumeLost)`, the errors it met on the way still counted, and a
+/// partial result that freezes.
 ///
 /// Measured on macOS 27.2 (see the report): `hdiutil detach -force` takes
 /// about 0.3 s and unmounts in the kernel well before it returns. A walker
 /// holding descriptors on the volume then gets `ENOTDIR` from
-/// `getattrlistbulk` and `openat` (and `EBADF` from `fstat`), which the walk
-/// counts in `errors` as it would a race, and the walk returns promptly with
-/// `incomplete == None`. So the "flagged partial" this accepts is
-/// `errors > 0`, not an `Incomplete` reason; `Err`, `incomplete` or `errors`
-/// all count, and a short tree with none of them does not.
+/// `getattrlistbulk` and `openat`, `EBADF` from `fstat` and `ENOTSUP` from
+/// `fstatfs`. `ENOTDIR` alone is also what churn on a live volume gives, so
+/// the walk answers it by asking the root's descriptor which volume it is on;
+/// before that check existed the same detach returned `incomplete == None`
+/// with only `errors > 0`, a third of a tree presented as a finished scan.
+/// `Err` is not an accepted outcome: the root opened, so the walk returns what
+/// it read.
 ///
 /// The detach races the walk, so the test insists on evidence the detach
 /// landed mid-walk (the walk had stored directories and had not returned when
@@ -487,7 +514,12 @@ fn reports_incomplete_when_the_image_detaches_mid_scan() {
             continue;
         }
         match &attempt.walked {
-            Walked::Failed { .. } => {}
+            Walked::Failed { .. } => {
+                panic!(
+                    "the walk returned Err after it had started: {}",
+                    attempt.report()
+                )
+            }
             Walked::Returned {
                 nodes,
                 incomplete,
@@ -495,10 +527,16 @@ fn reports_incomplete_when_the_image_detaches_mid_scan() {
                 froze,
                 ..
             } => {
-                assert!(
-                    incomplete.is_some() || *errors > 0,
-                    "{nodes} of {} nodes came back with no incomplete reason and no errors: {}",
+                assert_eq!(
+                    *incomplete,
+                    Some(Incomplete::VolumeLost),
+                    "{nodes} of {} nodes came back not marked as a lost volume: {}",
                     attempt.created,
+                    attempt.report()
+                );
+                assert!(
+                    *errors > 0,
+                    "the directories that failed are still counted: {}",
                     attempt.report()
                 );
                 assert!(
