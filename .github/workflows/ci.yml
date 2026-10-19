@@ -94,6 +94,63 @@ jobs:
       - name: Licences (fuzz)
         run: cargo deny --manifest-path fuzz/Cargo.toml check licenses
 
+  # The Xcode project: the universal Rust library, TesseraeKit's XCTest suite
+  # (which links that library: the first proof the Swift side links at all),
+  # and an unsigned universal Release build of the app (spec §14).
+  #
+  # macos-26 (arm64) with Xcode 26.6 selected explicitly, not the image's
+  # default, so a runner-image update cannot change the Xcode under the
+  # project. The project is written for it: objectVersion 77 (the Xcode 16+
+  # format), LastUpgradeCheck 2600, SWIFT_VERSION 6.0. Xcode 27 is only a
+  # preview image (xcode-27) at the time of writing; move to it once it is GA.
+  # Versions: https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md
+  apple:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode in use
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # Both Rust targets, lipo'd into apple/build/libtesserae.a. Xcode never
+      # runs cargo; its Run Script phase fails the build if this is stale.
+      - name: Universal Rust library
+        run: just ffi
+
+      - name: TesseraeKit tests
+        run: just app-test
+
+      - name: Unsigned universal Release build
+        run: |
+          just app-build
+          lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
+          lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/Frameworks/TesseraeKit.framework/TesseraeKit
+
+      # The .xcresult bundle holds the full build and test logs.
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-logs
+          path: apple/build/DerivedData/Logs
+          if-no-files-found: ignore
+
   # Short fuzz of the getattrlistbulk buffer parser. Separate from `rust` so
   # it can use nightly without disturbing the stable pin. The longer run and
   # the Miri and ASAN jobs live in nightly.yml.

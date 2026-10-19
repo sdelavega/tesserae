@@ -14,8 +14,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Every Rust source file in the workspace, and in `fuzz/`, and every shell
-//! script in `scripts/`, carries the full GPL-3.0 header.
+//! Every Rust source file in the workspace, and in `fuzz/`, every shell
+//! script in `scripts/`, and every Swift, Metal, header and module-map file in
+//! `apple/`, carries the full GPL-3.0 header.
 //!
 //! Nothing else in the repo checks this, and a truncated header (cut off
 //! before the closing "along with this program" lines) passes every other gate.
@@ -75,6 +76,61 @@ fn all_sources_carry_the_full_gpl_header() {
         files.len() > before_fuzz,
         "found no .rs files under {}; is the fuzz walk broken?",
         fuzz.display()
+    );
+    let bad: Vec<_> = files
+        .iter()
+        .filter(|f| !fs::read_to_string(f).unwrap().starts_with(HEADER))
+        .map(|f| f.display().to_string())
+        .collect();
+    assert!(bad.is_empty(), "missing or truncated GPL header: {bad:#?}");
+}
+
+/// The extensions of hand-written source under `apple/` that carry the notice
+/// in `//` form, as Swift, Metal, C headers and clang module maps all accept.
+const APPLE_EXTENSIONS: [&str; 4] = ["swift", "metal", "h", "modulemap"];
+
+fn collect_apple(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            // `build/` holds the Rust library and DerivedData (gitignored);
+            // the .xcodeproj is generated XML, not source.
+            let skip = path.file_name().is_some_and(|n| n == "build")
+                || path.extension().is_some_and(|e| e == "xcodeproj");
+            if !skip {
+                collect_apple(&path, out);
+            }
+        } else if path
+            .extension()
+            .is_some_and(|e| APPLE_EXTENSIONS.iter().any(|x| e == *x))
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// Every Swift, Metal, header and module-map file of the Xcode project.
+#[test]
+fn all_apple_sources_carry_the_full_gpl_header() {
+    let apple = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apple");
+    let mut files = Vec::new();
+    collect_apple(&apple, &mut files);
+    // Each kind that exists today must be found, so a walk that silently
+    // stops matching one of them cannot pass.
+    for ext in ["swift", "h", "modulemap"] {
+        assert!(
+            files
+                .iter()
+                .any(|f| f.extension().is_some_and(|e| e == ext)),
+            "found no .{ext} files under {}; is the walk broken?",
+            apple.display()
+        );
+    }
+    assert!(
+        files.len() >= 6,
+        "found only {} files under {}; is the walk broken?",
+        files.len(),
+        apple.display()
     );
     let bad: Vec<_> = files
         .iter()
