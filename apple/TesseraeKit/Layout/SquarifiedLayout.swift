@@ -53,13 +53,21 @@ public struct LayoutParameters: Sendable {
 ///   scan. The aggregate is emitted even when it is below `cullArea`, so the
 ///   parent stays covered.
 /// * Permission-denied directories (0 bytes, unreadable) are not sizes but
-///   must stay visible (spec §8 "Status colours"; ruling T6-2). Each gets a
-///   placeholder tile of area `cullArea`, flagged `permDenied`, laid after
-///   its sized siblings; more than `maxDeniedTiles` collapse into one
-///   placeholder flagged `permDenied | aggregated` that counts them. The
-///   sized children share the parent's area minus the placeholders'. An
-///   unreadable root is one placeholder filling `bounds`. Finding them scans
-///   the zero-size suffix of each laid-out sibling set.
+///   must stay visible (spec §8 "Status colours"; rulings T6-2, T6-3). Each
+///   gets a placeholder tile, a square of side sqrt(`cullArea`) flagged
+///   `permDenied`; more than `maxDeniedTiles` collapse into one square
+///   flagged `permDenied | aggregated` that counts them. The squares are not
+///   squarified with the sized children (a row could squeeze one to a
+///   sliver): they fill a strip along the parent's shorter side, packed from
+///   its leading corner, and the sized children, which share the rect that
+///   remains, are squarified there. The strip is `DenialStrip` and is at
+///   most half the parent; when it would be more, the placeholders collapse
+///   to one, and to none if even one does not fit. The strip is a whole
+///   band, so the cells its squares leave empty belong to no tile (a sized
+///   rect cannot be given them without ceasing to be a rect or ceasing to be
+///   proportional): the parent's own tile shows through there. An unreadable
+///   root is one placeholder filling `bounds`. Finding them scans the
+///   zero-size suffix of each laid-out sibling set.
 /// * No more than `budget` tiles are emitted. Directories are subdivided
 ///   breadth-first, so the budget cuts the deepest levels first; a sibling
 ///   set that does not fit the remaining budget is cut shorter (placeholders
@@ -112,6 +120,25 @@ public func squarify(
     return tiles
 }
 
+/// The strip that holds `count` placeholder squares of side `cell` in `rect`:
+/// `perLine` squares along the shorter side, in `thickness` (a whole number
+/// of squares) across the longer. Nil when not even one square fits.
+struct DenialStrip {
+    var perLine: Int
+    var thickness: Double
+    var length: Double
+    var area: Double { length * thickness }
+
+    init?(count: Int, in rect: CGRect, cell: Double) {
+        let length = Double(min(rect.width, rect.height))
+        let perLine = Int((length / cell + 1e-9).rounded(.down))
+        guard count > 0, perLine >= 1 else { return nil }
+        self.perLine = perLine
+        self.length = length
+        thickness = Double((count + perLine - 1) / perLine) * cell
+    }
+}
+
 /// More permission-denied siblings than this share one placeholder tile.
 let maxDeniedTiles = 16
 
@@ -162,16 +189,22 @@ private func layoutChildren(
     guard positiveCount > 0 || deniedCount > 0 else { return }
 
     // Placeholder tiles: one per unreadable folder, or one for them all.
+    let cell = cull.squareRoot()
     var deniedTiles = deniedCount <= maxDeniedTiles ? deniedCount : 1
-    // Placeholders never take more than half the parent (only reachable
-    // with parameters far from the defaults: a subdivided rect is at least
+    // The strip never takes more than half the parent (only reachable with
+    // parameters far from the defaults: a subdivided rect is at least
     // subdivideMin², and 16 placeholders of cullArea fit in half of 24²).
-    if Double(deniedTiles) * cull > area / 2 { deniedTiles = cull > area / 2 ? 0 : min(deniedTiles, 1) }
+    func stripFits(_ count: Int) -> Bool {
+        guard let strip = DenialStrip(count: count, in: rect, cell: cell) else { return false }
+        return strip.area <= area / 2
+    }
+    if deniedTiles > 1 && !stripFits(deniedTiles) { deniedTiles = 1 }
+    if deniedTiles == 1 && !stripFits(1) { deniedTiles = 0 }
 
     // The cull, over the area the placeholders leave.
     var keepEnd = positiveEnd
     if positiveCount > 0 {
-        let scale = (area - Double(deniedTiles) * cull) / Double(total)
+        let scale = (area - (DenialStrip(count: deniedTiles, in: rect, cell: cell)?.area ?? 0)) / Double(total)
         keepEnd = firstBelow(range.lowerBound..<positiveEnd) { Double(src.allocated($0)) * scale < cull }
     }
     var needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
@@ -187,8 +220,22 @@ private func layoutChildren(
             keepEnd = range.lowerBound + UInt32(remaining - 1 - deniedTiles)
         }
     }
-    let deniedArea = Double(deniedTiles) * cull
-    let sizedArea = area - deniedArea
+    // The strip runs along the shorter side at the leading edge (left of a
+    // landscape rect, top of a portrait one); the sized children take the
+    // rest.
+    let strip = DenialStrip(count: deniedTiles, in: rect, cell: cell)
+    let landscape = rect.width >= rect.height
+    var sizedRect = rect
+    if let strip {
+        if landscape {
+            sizedRect.origin.x += CGFloat(strip.thickness)
+            sizedRect.size.width -= CGFloat(strip.thickness)
+        } else {
+            sizedRect.origin.y += CGFloat(strip.thickness)
+            sizedRect.size.height -= CGFloat(strip.thickness)
+        }
+    }
+    let sizedArea = Double(sizedRect.width) * Double(sizedRect.height)
 
     var keptBytes: UInt64 = 0
     scratch.areas.removeAll(keepingCapacity: true)
@@ -209,14 +256,15 @@ private func layoutChildren(
     if sum > 0 {
         for i in scratch.areas.indices { scratch.areas[i] *= sizedArea / sum }
     }
-    for _ in 0..<deniedTiles { scratch.areas.append(cull) }
-    // With no sized children, empty space fills the rest (never emitted).
-    if sum == 0 { scratch.areas.append(sizedArea) }
-    squarifyRow(scratch.areas, in: rect, into: &scratch.rects, suffix: &scratch.suffix)
+    if sum > 0 {
+        squarifyRow(scratch.areas, in: sizedRect, into: &scratch.rects, suffix: &scratch.suffix)
+    } else {
+        // With no sized children the rest stays empty.
+        scratch.rects.removeAll(keepingCapacity: true)
+    }
 
     let keptCount = Int(keepEnd - range.lowerBound)
     let aggregateIndex = hasTail ? keptCount : -1
-    let deniedStart = keptCount + (hasTail ? 1 : 0)
     let childDepth = depth == UInt8.max ? depth : depth + 1
     for (i, r) in scratch.rects.enumerated() {
         if i < keptCount {
@@ -230,10 +278,21 @@ private func layoutChildren(
                 Tile(
                     rect: r, node: Tile.noNode, depth: childDepth, flags: Tile.Flag.aggregated,
                     aggregateCount: tailCount, aggregateBytes: tailBytes))
-        } else if i < deniedStart + deniedTiles {
+        }
+    }
+    // Placeholders last: after every sized sibling, packed line by line from
+    // the strip's leading corner.
+    if let strip {
+        for i in 0..<deniedTiles {
+            let line = Double(i / strip.perLine) * cell
+            let along = Double(i % strip.perLine) * cell
+            let origin =
+                landscape
+                ? CGPoint(x: Double(rect.minX) + line, y: Double(rect.minY) + along)
+                : CGPoint(x: Double(rect.minX) + along, y: Double(rect.minY) + line)
+            let r = CGRect(origin: origin, size: CGSize(width: cell, height: cell))
             if deniedTiles == deniedCount {
-                tiles.append(
-                    Tile(rect: r, node: scratch.denied[i - deniedStart], depth: childDepth, flags: Tile.Flag.permDenied))
+                tiles.append(Tile(rect: r, node: scratch.denied[i], depth: childDepth, flags: Tile.Flag.permDenied))
             } else {
                 tiles.append(
                     Tile(

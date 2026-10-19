@@ -714,16 +714,25 @@ visible children with no sorting at layout time.
   smaller than the cull threshold.
 - **Permission-denied directories get placeholders.** An unreadable
   directory has 0 bytes, so by size it would get no tile and the reserved
-  status colour would have nothing to paint. Each one instead gets a fixed
-  tile of area equal to the cull threshold (16px²), laid after its sized
-  siblings and flagged `permDenied`; more than 16 such siblings collapse
-  into one "N unreadable folders" tile flagged `permDenied | aggregated`.
-  The area is a placeholder, not a size: the sized siblings share the
-  parent's area minus the placeholders', so area stays proportional to size
-  among them, and placeholders count toward coverage, disjointness and the
-  budget. An unreadable layout root is one placeholder filling the view.
-  Finding them reads the zero-size suffix of each laid-out sibling set
-  (flags only); the sized tail is still never visited.
+  status colour would have nothing to paint. Each one instead gets a
+  placeholder: a square of side sqrt(cull threshold) (4px, 16px²), flagged
+  `permDenied`; more than 16 such siblings collapse into one "N unreadable
+  folders" square flagged `permDenied | aggregated`. Placeholders are
+  *not* squarified with the sized children (inside a row a 16px² item can
+  come out a fraction of a pixel thick, invisible). They fill a strip along
+  the parent's shorter side, packed from the leading corner in lines of
+  floor(shorter side / 4) squares, painted after the sized siblings; the
+  sized children share the rect that remains and are squarified there, so
+  their area stays proportional to size among themselves. The strip never
+  exceeds half the parent (else the placeholders collapse to one, then to
+  none). Because the strip is a whole band, the cells its squares leave
+  empty belong to no tile and the parent's own tile shows through: a sized
+  rect cannot absorb them while staying a rect and staying proportional. So
+  a parent with placeholders is covered by its tiles plus those empty
+  cells; placeholders count toward disjointness and the budget. An
+  unreadable layout root is one placeholder filling the view. Finding them
+  reads the zero-size suffix of each laid-out sibling set (flags only); the
+  sized tail is still never visited.
 
 Typical render sets are a few thousand rects; the worst case at a 16px²
 cutoff is tens of thousands, which is nothing to a GPU. The genuinely

@@ -213,9 +213,10 @@ final class RenderSnapshotTests: XCTestCase {
     }
 
     func test_type_focus_and_permission_denied_tiles_match_reference() throws {
-        // The layout's permission-denied placeholder is a sliver (area 16 px²
-        // spread along an edge), so a hand-made one, 30×20 points, is added to
-        // make the status colour visible in the reference.
+        // The layout's permission-denied placeholder is a 4×4 point square
+        // (visible, but only a few pixels of fill at this size), so a
+        // hand-made one, 30×20 points, is added to make the status colour
+        // prominent in the reference.
         let tiles = Self.tiles(of: Self.fixedTree()) + [
             Tile(rect: CGRect(x: 100, y: 60, width: 30, height: 20), node: 7, depth: 2, flags: Tile.Flag.permDenied)
         ]
