@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B1B2C3D4E5F60718293A4B5C /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */; };
+		D1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift */; };
 		19F30F3C5950D449910A1845 /* TesseraeKit.h in Headers */ = {isa = PBXBuildFile; fileRef = 84D57130E3E47C4FB4AF9941 /* TesseraeKit.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		434DDC8E332E0EE5E1372929 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2143F348021411D5954085B /* ContentView.swift */; };
 		4578FE5C5643A78DDC6C0B63 /* Version.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75C38E56BF70B11E7DBBC176 /* Version.swift */; };
@@ -61,6 +63,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
+		C1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotTests.swift; sourceTree = "<group>"; };
 		217A1A74C4A12984EA94399A /* Tesserae.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tesserae.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		25C795E77AC247CB2BB2A411 /* TesseraeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraeApp.swift; sourceTree = "<group>"; };
 		75C38E56BF70B11E7DBBC176 /* Version.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Version.swift; sourceTree = "<group>"; };
@@ -108,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				8723AA9194DE0F498DAC322F /* LinkTests.swift */,
+				C1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift */,
 			);
 			path = TesseraeKitTests;
 			sourceTree = "<group>";
@@ -136,6 +141,7 @@
 			children = (
 				84D57130E3E47C4FB4AF9941 /* TesseraeKit.h */,
 				75C38E56BF70B11E7DBBC176 /* Version.swift */,
+				A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -305,6 +311,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4578FE5C5643A78DDC6C0B63 /* Version.swift in Sources */,
+				B1B2C3D4E5F60718293A4B5C /* Snapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -322,6 +329,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4AD32EA6DAEEE56249B35629 /* LinkTests.swift in Sources */,
+				D1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
