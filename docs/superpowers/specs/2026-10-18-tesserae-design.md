@@ -316,9 +316,16 @@ const uint8_t* tess_snapshot_stalled_at(const TessSnapshot*, uint64_t* len_out);
   out of memory, stalled, fd exhausted, malformed batch, volume lost) plus the
   counts the scan report shows: files, dirs, errors, unreadable, skipped
   mounts, lost entries, hardlink duplicates, depth-capped.
-- `tess_snapshot_stalled_at`: the stalled directory's absolute path as bytes
-  borrowed from the snapshot, valid until release. Not NUL-terminated and not
-  necessarily UTF-8.
+- `tess_snapshot_stalled_at`: the stalled directory's path as bytes borrowed
+  from the snapshot, valid until release. Not NUL-terminated and not
+  necessarily UTF-8. It is the scan root exactly as given to
+  `tess_scan_begin`, joined with the path below it, so it is absolute only if
+  the root was; the root is not canonicalised.
+
+**The root node's name is the scan root path as given** (for example
+`/System/Volumes/Data`), not a single component like every other node's
+name. A table or breadcrumb that joins names must start from it rather than
+prepend a separator to it.
 
 `TessScanOptions` reads "0 = default" per field, and a null pointer means all
 defaults:
@@ -457,8 +464,10 @@ explanation is consistent with the zero but was not itself observed, and
 nothing here depends on it.
 
 **The claim is about allocated bytes only.** A directory's
-`ATTR_DIR_DATALENGTH` is *not* zero — measured 64, 448, 1408 and 12864 for
-the directories above, scaling with entry count — while this scan reports 0
+`ATTR_DIR_DATALENGTH` is *not* zero — measured 64 for the empty directory,
+12864 for the 400-entry one, 1408 for `/usr/share` (42 entries) and 448 for
+a fourth, 12-entry directory (the repo root), scaling with entry count —
+while this scan reports 0
 for a directory's logical size, because the attribute is neither requested
 nor present in the entry. That is correct for a tool whose unit is allocated
 space, and §9's reconciliation is against allocated bytes too. Anything that
@@ -1066,6 +1075,11 @@ user.
 | Symlink cycles | impossible — never followed |
 | Hardlinked directory cycles | HFS+ Time Machine only; depth cap catches it |
 
+A `getattrlistbulk` failure partway through a directory (the spike saw one
+`ETIMEDOUT`) is counted in `errors`, and that directory's remaining entries
+are lost; it does not set an `incomplete` reason. That is the chosen
+taxonomy, and `errors` is reported beside `incomplete`.
+
 On a vanished volume `ENOTDIR` is what the dead descriptors answer (measured
 with a force-detached disk image), and `ENOTDIR` is also what a directory
 replaced by a file gives, so the errno alone cannot tell churn from loss;
@@ -1077,10 +1091,10 @@ drive or a dropped network mount is unprobed.
 **A hanging local volume** has no clean recovery — a blocked `openat` is
 uninterruptible from userspace. A watchdog declares the scan stalled when no
 worker has completed a directory syscall (open, read, `fstatfs`, close) for
-~15 s while one is still inside one, and surfaces *"scan stalled at /path"*;
-Cancel returns the partial snapshot. The blocked thread cannot be killed:
-the scan abandons it, taking its arena so nothing else dangles, and the
-thread leaks until the syscall returns or the app quits. **What is missing
+~15 s while one is still inside one. The engine then ends the scan itself
+and returns the partial snapshot, surfaced as *"scan stalled at /path"*; no
+Cancel is needed. The blocked thread cannot be killed: the scan abandons
+it, taking its arena so nothing else dangles, and the thread leaks until the syscall returns or the app quits. **What is missing
 from the result is that worker's whole unfinished descent chain**: every
 directory on its stack has a node, but the subdirectories it had enumerated
 and not yet entered appear as empty directories, and the blocked directory
@@ -1130,7 +1144,7 @@ disabled — a degraded treemap beats a dialog saying the app won't run.
 | Snapshot list unavailable | everything else | snapshot count `—` |
 | Node limit reached | partial treemap, table, deletion | **Partial scan** badge + what was cut |
 | Scan cancelled | partial tree, deletion | **Partial** badge; residual suppressed |
-| Volume stalled | partial tree | stalled path named; Cancel offered |
+| Volume stalled | partial tree | stalled path named; the engine ends the scan itself when the watchdog fires |
 | Volume lost mid-scan | partial tree (what was read before) | **Partial** badge naming the lost volume; residual suppressed |
 | No Metal | treemap, no zoom animation | nothing stated; it looks plain |
 | Rust panic | app survives, no tree | error + Copy Diagnostics |
@@ -1287,6 +1301,7 @@ The spike code has been deleted; these numbers are its only product.
 **Tree measured.** About **6.39M entries**: ~5.56M non-directory entries
 plus ~0.83M directories (the tree drifts by ~0.1% between runs because the
 machine was live). 795 GiB allocated, 3.6 TiB logical (sparse files).
+(The 795 GiB is superseded by Phase 1's measured 711.8 GiB; see item 4.)
 **Rates below are entries per second over that 6.39M**, and "per 1M" figures
 are scaled from it. Unreadable: 57 directories `EPERM`, 194 `EACCES`, plus
 one `EACCES` from `getattrlistbulk` itself (about 250 directories, <0.03%).
@@ -1349,9 +1364,11 @@ cache needs root (`purge`) and was not attempted.
    purgeable space from there, not from the `getattrlist` pair.
    `ATTR_VOL_SPACEUSED` was 826,595,618,816 B (769.83 GiB), matching
    `diskutil`'s Volume Used Space (826,586,357,760 B). `SPACEFREE` tracks
-   container-wide free space: it read 137,225,666,560 B against
-   `diskutil`'s Container Free Space of 137,225,658,368 B in the same
-   minute (an 8 KB difference). `ATTR_VOL_FILECOUNT` / `DIRCOUNT` read
+   container-wide free space: in a separate reading it was
+   137,225,666,560 B against `diskutil`'s Container Free Space of
+   137,225,658,368 B in the same minute (an 8 KB difference). That reading
+   and the 137,216,397,312 B above are two different moments on a live
+   volume, not two answers to one question. `ATTR_VOL_FILECOUNT` / `DIRCOUNT` read
    5,328,862 / 837,861, which sit about 4% **under** the scan's own
    ~5.56M non-directory entries and 1.3% over its ~0.83M directories (the
    scan could not open ~250). They are **not a reliable total** and are not
@@ -1364,6 +1381,17 @@ cache needs root (`purge`) and was not attempted.
    but the over-count is measured evidence for the signed-residual design,
    not an unexplained discrepancy. Packing-order gotcha: see §9 (`SPACEUSED`
    packs before `FILECOUNT`/`DIRCOUNT`, contrary to the header's bit order).
+   **Superseded by Phase 1:** the spike's 795.1 GiB and its "3% over"
+   reconciliation are not comparable with the engine's figures and no
+   longer argue for anything. On the same machine and volume the engine
+   measured 746,329,884 KiB (711.8 GiB), agreeing with `du -sxk` within the
+   live volume's churn and sitting 57 to 77 GB **under** `df`, not over it
+   (see "Phase 1 results" below and `docs/benchmarks.md`). The spike most
+   likely lacked hardlink dedup: the engine counts 204,349 links as zero
+   that a per-path sum would count in full. A clone over-count large enough
+   to put the tree above the volume's used space is therefore not shown on
+   this volume; §9's signed residual rests on §7's reasoning about clones,
+   not on this measurement.
 5. **FDA probe: with-FDA was observed; the without-FDA case is
    unmeasured.** The measuring process already held Full Disk Access
    (inherited from its host app): `~/Library/Mail`, `~/Library/Messages`
@@ -1624,6 +1652,7 @@ machines that need a disk visualizer.
 | `diskutil` plist schema drifts across macOS releases | Parse defensively; missing key means unknown, never error; degrades one UI line. |
 | FDA onboarding confusion loses users at first run | Design for the relaunch explicitly; Limited scan is labelled, not silent. |
 | Donations don't cover the $99/yr | Stated plainly in §1's funding assumption; the project should not depend on donations funding sustained labour. |
+| Dataless (iCloud "Optimize Mac Storage") directories | **Open, a Phase 2 decision.** Enumerating a dataless directory may make the system fetch its listing: downloads, slowness, and on a slow link a stall that trips the 15 s watchdog. Nothing sets the `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy or reads `SF_DATALESS` yet (`ATTR_CMN_FLAGS` is requested for it). Not measured: a full census of this machine's Data volume found 664,076 dataless regular files and no dataless directory, so enumerating one has never been observed. Probe with an evicted iCloud Drive folder first. |
 | Name crowding hurts discoverability | "Tesserae" is rarer than "Tessera". Trademark not verified — **check USPTO Class 9 before shipping.** |
 
 ---

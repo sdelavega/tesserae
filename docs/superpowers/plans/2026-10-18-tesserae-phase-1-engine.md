@@ -365,7 +365,7 @@ than from anything assumed here.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core attrs`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 5: Commit**
 
@@ -485,7 +485,7 @@ iteration, so a malformed buffer cannot cause an infinite loop.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core parse`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 6: Commit**
 
@@ -654,7 +654,7 @@ existing one, which is what makes `get()` stable across growth.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core arena`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 5: Commit**
 
@@ -791,7 +791,7 @@ walker's worker threads (Task 11) see the same seam.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core walk`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 5: Commit**
 
@@ -878,7 +878,7 @@ declined; the stall watchdog (Task 12) is the only mitigation.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core boundary`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 5: Commit**
 
@@ -971,7 +971,7 @@ empty.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p tesserae-core -- dedup`
-Expected: PASS (the tests below, and the cases review added).
+Expected: PASS (the tests above, and the cases review added).
 
 - [ ] **Step 5: Commit**
 
