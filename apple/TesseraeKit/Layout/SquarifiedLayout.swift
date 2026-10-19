@@ -44,27 +44,48 @@ public struct LayoutParameters: Sendable {
 /// * A directory tile whose smaller side is below `subdivideMin` is terminal.
 /// * Zero-size children get no area, so they are left out of the layout
 ///   entirely: no tile, and not counted in an aggregate. A zero-size root
-///   (or subtree) emits nothing.
+///   (or subtree) emits nothing, except for permission-denied directories.
 /// * The first positive child whose share of the parent's area is below
 ///   `cullArea` starts the tail; it and every positive child after it
 ///   collapse into one aggregate tile (`Tile.noNode`, `Flag.aggregated`) of
-///   their combined area, placed last. Because children are sorted, the tail
-///   is a suffix and the cut is a binary search, not a scan.
+///   their combined area, placed after the kept children. Because children
+///   are sorted, the tail is a suffix and the cut is a binary search, not a
+///   scan. The aggregate is emitted even when it is below `cullArea`, so the
+///   parent stays covered.
+/// * Permission-denied directories (0 bytes, unreadable) are not sizes but
+///   must stay visible (spec §8 "Status colours"; ruling T6-2). Each gets a
+///   placeholder tile of area `cullArea`, flagged `permDenied`, laid after
+///   its sized siblings; more than `maxDeniedTiles` collapse into one
+///   placeholder flagged `permDenied | aggregated` that counts them. The
+///   sized children share the parent's area minus the placeholders'. An
+///   unreadable root is one placeholder filling `bounds`. Finding them scans
+///   the zero-size suffix of each laid-out sibling set.
 /// * No more than `budget` tiles are emitted. Directories are subdivided
 ///   breadth-first, so the budget cuts the deepest levels first; a sibling
-///   set that does not fit the remaining budget is cut shorter, its excess
-///   joining the aggregate, and a parent is never left half covered.
+///   set that does not fit the remaining budget is cut shorter (placeholders
+///   first collapse to one), its excess joining the aggregate, and a parent
+///   is never left half covered.
 ///
 /// Output is paint order: every parent precedes its children.
 public func squarify(
     _ src: some TreeSource, root: UInt32, in bounds: CGRect, _ p: LayoutParameters = .init()
 ) -> [Tile] {
+    precondition(p.subdivideMin > 0, "LayoutParameters.subdivideMin must be positive")
+    precondition(p.cullArea > 0, "LayoutParameters.cullArea must be positive")
+    precondition(p.budget >= 0, "LayoutParameters.budget must not be negative")
+    let boundsArea = Double(bounds.size.width) * Double(bounds.size.height)
     guard p.budget > 0,
         bounds.origin.x.isFinite, bounds.origin.y.isFinite,
         bounds.size.width.isFinite, bounds.size.height.isFinite,
         bounds.size.width > 0, bounds.size.height > 0,
-        src.allocated(root) > 0
+        boundsArea.isFinite, boundsArea > 0
     else { return [] }
+
+    let rootBytes = src.allocated(root)
+    if rootBytes == 0 && src.isPermissionDenied(root) {
+        return [Tile(rect: bounds, node: root, depth: 0, flags: Tile.Flag.permDenied)]
+    }
+    guard rootBytes > 0 || src.isDirectory(root) else { return [] }
 
     var tiles: [Tile] = []
     tiles.reserveCapacity(min(p.budget, 4096))
@@ -86,14 +107,20 @@ public func squarify(
             src, of: node, in: rect, depth: depth, remaining: remaining, p,
             scratch: &row, tiles: &tiles, queue: &queue)
     }
+    // A zero-size root shows only its unreadable children, if any.
+    if rootBytes == 0 && tiles.count == 1 { return [] }
     return tiles
 }
+
+/// More permission-denied siblings than this share one placeholder tile.
+let maxDeniedTiles = 16
 
 /// Reused buffers for one sibling set.
 struct SquarifyScratch {
     var areas: [Double] = []
     var rects: [CGRect] = []
     var suffix: [Double] = []
+    var denied: [UInt32] = []
 }
 
 /// The first index in `range` for which `isBelow` holds, given that it holds
@@ -118,24 +145,50 @@ private func layoutChildren(
 ) {
     let range = src.children(node)
     let total = src.allocated(node)
-    guard !range.isEmpty, total > 0 else { return }
-
-    // Positive-size children are a prefix; zero-size ones are left out.
-    let positiveEnd = firstBelow(range) { src.allocated($0) == 0 }
-    guard positiveEnd > range.lowerBound else { return }
-
-    // The cull: the first child whose share of the area is below cullArea.
+    guard !range.isEmpty else { return }
     let area = Double(rect.width) * Double(rect.height)
-    let scale = area / Double(total)
+    guard area.isFinite, area > 0 else { return }
     let cull = Double(p.cullArea)
-    var keepEnd = firstBelow(range.lowerBound..<positiveEnd) { Double(src.allocated($0)) * scale < cull }
-    let needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0)
-    if needed > remaining {
-        // Cut the prefix shorter so it plus the aggregate fit the budget;
-        // a set that would be a lone aggregate is not worth subdividing.
-        guard remaining >= 2 else { return }
-        keepEnd = range.lowerBound + UInt32(remaining - 1)
+
+    // Positive-size children are a prefix; zero-size ones are left out,
+    // except that unreadable directories among them get placeholders.
+    let positiveEnd = total > 0 ? firstBelow(range) { src.allocated($0) == 0 } : range.lowerBound
+    let positiveCount = Int(positiveEnd - range.lowerBound)
+    scratch.denied.removeAll(keepingCapacity: true)
+    for c in positiveEnd..<range.upperBound where src.isPermissionDenied(c) {
+        scratch.denied.append(c)
     }
+    let deniedCount = scratch.denied.count
+    guard positiveCount > 0 || deniedCount > 0 else { return }
+
+    // Placeholder tiles: one per unreadable folder, or one for them all.
+    var deniedTiles = deniedCount <= maxDeniedTiles ? deniedCount : 1
+    // Placeholders never take more than half the parent (only reachable
+    // with parameters far from the defaults: a subdivided rect is at least
+    // subdivideMin², and 16 placeholders of cullArea fit in half of 24²).
+    if Double(deniedTiles) * cull > area / 2 { deniedTiles = cull > area / 2 ? 0 : min(deniedTiles, 1) }
+
+    // The cull, over the area the placeholders leave.
+    var keepEnd = positiveEnd
+    if positiveCount > 0 {
+        let scale = (area - Double(deniedTiles) * cull) / Double(total)
+        keepEnd = firstBelow(range.lowerBound..<positiveEnd) { Double(src.allocated($0)) * scale < cull }
+    }
+    var needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
+    if needed > remaining {
+        // Collapse the placeholders, then cut the prefix shorter so it plus
+        // the aggregate fit; a set that would keep no sized child is not
+        // worth subdividing.
+        deniedTiles = min(deniedTiles, 1)
+        needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
+        if needed > remaining {
+            if positiveCount == 0 { return }
+            guard remaining >= 2 + deniedTiles else { return }
+            keepEnd = range.lowerBound + UInt32(remaining - 1 - deniedTiles)
+        }
+    }
+    let deniedArea = Double(deniedTiles) * cull
+    let sizedArea = area - deniedArea
 
     var keptBytes: UInt64 = 0
     scratch.areas.removeAll(keepingCapacity: true)
@@ -146,29 +199,48 @@ private func layoutChildren(
     }
     // The tail's bytes from the rollup: a directory's size is the sum over
     // its children, so this is exact without touching the tail.
+    assert(total >= keptBytes, "directory smaller than its kept children: rollup broken")
     let tailBytes = total > keptBytes ? total - keptBytes : 0
     let tailCount = positiveEnd - keepEnd
     let hasTail = tailCount > 0 && tailBytes > 0
     if hasTail { scratch.areas.append(Double(tailBytes)) }
 
     let sum = Double(keptBytes) + (hasTail ? Double(tailBytes) : 0)
-    for i in scratch.areas.indices { scratch.areas[i] *= area / sum }
+    if sum > 0 {
+        for i in scratch.areas.indices { scratch.areas[i] *= sizedArea / sum }
+    }
+    for _ in 0..<deniedTiles { scratch.areas.append(cull) }
+    // With no sized children, empty space fills the rest (never emitted).
+    if sum == 0 { scratch.areas.append(sizedArea) }
     squarifyRow(scratch.areas, in: rect, into: &scratch.rects, suffix: &scratch.suffix)
 
     let keptCount = Int(keepEnd - range.lowerBound)
+    let aggregateIndex = hasTail ? keptCount : -1
+    let deniedStart = keptCount + (hasTail ? 1 : 0)
     let childDepth = depth == UInt8.max ? depth : depth + 1
     for (i, r) in scratch.rects.enumerated() {
-        if i == keptCount {
+        if i < keptCount {
+            let c = range.lowerBound + UInt32(i)
+            tiles.append(Tile(rect: r, node: c, depth: childDepth))
+            if src.isDirectory(c) && min(r.width, r.height) >= p.subdivideMin {
+                queue.append((c, r, childDepth))
+            }
+        } else if i == aggregateIndex {
             tiles.append(
                 Tile(
                     rect: r, node: Tile.noNode, depth: childDepth, flags: Tile.Flag.aggregated,
                     aggregateCount: tailCount, aggregateBytes: tailBytes))
-            continue
-        }
-        let c = range.lowerBound + UInt32(i)
-        tiles.append(Tile(rect: r, node: c, depth: childDepth))
-        if src.isDirectory(c) && min(r.width, r.height) >= p.subdivideMin {
-            queue.append((c, r, childDepth))
+        } else if i < deniedStart + deniedTiles {
+            if deniedTiles == deniedCount {
+                tiles.append(
+                    Tile(rect: r, node: scratch.denied[i - deniedStart], depth: childDepth, flags: Tile.Flag.permDenied))
+            } else {
+                tiles.append(
+                    Tile(
+                        rect: r, node: Tile.noNode, depth: childDepth,
+                        flags: Tile.Flag.permDenied | Tile.Flag.aggregated,
+                        aggregateCount: UInt32(deniedCount), aggregateBytes: 0))
+            }
         }
     }
 }

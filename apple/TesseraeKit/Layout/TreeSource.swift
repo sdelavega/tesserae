@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import Foundation
+import TesseraeFFI
 
 /// The tree the layout reads (spec §8). Children of a node are contiguous
 /// indices sorted by `allocated` descending, and a directory's `allocated`
@@ -26,8 +27,17 @@ public protocol TreeSource {
     func children(_ i: UInt32) -> Range<UInt32>
     func allocated(_ i: UInt32) -> UInt64
     func isDirectory(_ i: UInt32) -> Bool
+    /// A directory the scan could not read (`TESS_FLAG_PERM_DENIED`): zero
+    /// bytes and no children, so the layout gives it a placeholder tile.
+    func isPermissionDenied(_ i: UInt32) -> Bool
 }
 
 extension Snapshot: TreeSource {
     public var rootIndex: UInt32 { root }
+
+    public func isPermissionDenied(_ i: UInt32) -> Bool {
+        let all = nodes
+        precondition(Int(i) < all.count, "Snapshot node index out of range")
+        return all[Int(i)].flags & UInt16(TESS_FLAG_PERM_DENIED) != 0
+    }
 }

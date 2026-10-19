@@ -708,6 +708,22 @@ visible children with no sorting at layout time.
   collapse `children[k..]` into one "N smaller items — X MB" tile. A prefix
   cut, no scanning.
 - **Hard instance budget** (~50k tiles), whichever binds first.
+- **The aggregate covers its share even when small.** The tail tile is
+  emitted even if its own area is below the 16px² cull, so siblings plus
+  aggregate always cover the parent exactly; it is the one tile that may be
+  smaller than the cull threshold.
+- **Permission-denied directories get placeholders.** An unreadable
+  directory has 0 bytes, so by size it would get no tile and the reserved
+  status colour would have nothing to paint. Each one instead gets a fixed
+  tile of area equal to the cull threshold (16px²), laid after its sized
+  siblings and flagged `permDenied`; more than 16 such siblings collapse
+  into one "N unreadable folders" tile flagged `permDenied | aggregated`.
+  The area is a placeholder, not a size: the sized siblings share the
+  parent's area minus the placeholders', so area stays proportional to size
+  among them, and placeholders count toward coverage, disjointness and the
+  budget. An unreadable layout root is one placeholder filling the view.
+  Finding them reads the zero-size suffix of each laid-out sibling set
+  (flags only); the sized tail is still never visited.
 
 Typical render sets are a few thousand rects; the worst case at a 16px²
 cutoff is tens of thousands, which is nothing to a GPU. The genuinely

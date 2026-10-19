@@ -50,4 +50,5 @@ public struct Tile: Equatable, Sendable {
     }
 
     public var isAggregate: Bool { flags & Flag.aggregated != 0 }
+    public var isPermissionDenied: Bool { flags & Flag.permDenied != 0 }
 }

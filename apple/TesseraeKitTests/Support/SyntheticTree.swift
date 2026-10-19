@@ -26,8 +26,13 @@ struct SyntheticTree: TreeSource {
     struct Spec {
         var size: UInt64
         var children: [Spec]?
+        var denied = false
 
         static func file(_ size: UInt64) -> Spec { Spec(size: size, children: nil) }
+
+        /// A directory the scan could not read: zero bytes, no children
+        /// (as freeze records `TESS_FLAG_PERM_DENIED`).
+        static let denied = Spec(size: 0, children: [], denied: true)
 
         /// A directory, sized as the sum over `children`.
         static func dir(_ children: [Spec]) -> Spec {
@@ -40,6 +45,7 @@ struct SyntheticTree: TreeSource {
     private(set) var counts: [UInt32] = []
     private(set) var dirs: [Bool] = []
     private(set) var parents: [UInt32] = []
+    private(set) var deniedFlags: [Bool] = []
 
     var rootIndex: UInt32 { 0 }
     var count: Int { sizes.count }
@@ -50,6 +56,7 @@ struct SyntheticTree: TreeSource {
         var head = 0
         sizes.append(root.size)
         dirs.append(root.children != nil)
+        deniedFlags.append(root.denied)
         parents.append(UInt32.max)
         starts.append(0)
         counts.append(0)
@@ -64,6 +71,7 @@ struct SyntheticTree: TreeSource {
             for k in sorted {
                 sizes.append(k.size)
                 dirs.append(k.children != nil)
+                deniedFlags.append(k.denied)
                 parents.append(me)
                 starts.append(0)
                 counts.append(0)
@@ -82,6 +90,7 @@ struct SyntheticTree: TreeSource {
                 sum += sizes[Int(c)]
             }
             if dirs[i] { precondition(sum == sizes[i], "directory size is not its rollup") }
+            if deniedFlags[i] { precondition(sizes[i] == 0 && r.isEmpty, "a denied directory has no size or children") }
         }
     }
 
@@ -92,6 +101,8 @@ struct SyntheticTree: TreeSource {
     func allocated(_ i: UInt32) -> UInt64 { sizes[Int(i)] }
 
     func isDirectory(_ i: UInt32) -> Bool { dirs[Int(i)] }
+
+    func isPermissionDenied(_ i: UInt32) -> Bool { deniedFlags[Int(i)] }
 
     // MARK: Random trees
 
@@ -122,7 +133,10 @@ struct SyntheticTree: TreeSource {
             kids.reserveCapacity(n)
             for _ in 0..<n {
                 let pDir = depth < 7 ? 0.35 / Double(depth + 1) + 0.05 : 0
-                if rng.unit() < pDir {
+                let u = rng.unit()
+                if u < 0.03 {
+                    kids.append(.denied)
+                } else if u < 0.03 + pDir {
                     kids.append(dir(depth: depth + 1))
                 } else {
                     kids.append(.file(fileSize(&rng)))

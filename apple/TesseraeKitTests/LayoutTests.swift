@@ -139,12 +139,16 @@ final class LayoutTests: XCTestCase {
             for g in groups {
                 let pa = Self.area(g.parent.rect)
                 let sum = g.children.reduce(0.0) { $0 + Self.area($1.tile.rect) }
-                XCTAssertEqual(sum, pa, accuracy: 1e-6 * pa, "children do not cover parent \(g.parent.node)")
+                // Sized children, their aggregate and any permission-denied
+                // placeholders together cover a sized parent.
+                if t.allocated(g.parent.node) > 0 {
+                    XCTAssertEqual(sum, pa, accuracy: 1e-6 * pa, "children do not cover parent \(g.parent.node)")
+                }
                 let slack = 1e-9 * max(g.parent.rect.width, g.parent.rect.height)
                 let outer = g.parent.rect.insetBy(dx: -slack, dy: -slack)
                 for c in g.children {
                     XCTAssertTrue(outer.contains(c.tile.rect), "\(c.tile.rect) outside parent \(g.parent.rect)")
-                    if c.tile.isAggregate { aggregates += 1 }
+                    if c.tile.isAggregate && !c.tile.isPermissionDenied { aggregates += 1 }
                 }
             }
             // Level of detail: a directory is subdivided iff its tile is at
@@ -168,9 +172,12 @@ final class LayoutTests: XCTestCase {
         var checked = 0
         forEachSeed("area") { _, t, _, tiles in
             for g in Self.groups(tiles, t) {
-                let pa = Self.area(g.parent.rect)
+                // Permission-denied placeholders have a fixed area, not a
+                // size; the sized children share what they leave.
+                let placeholders = g.children.filter(\.tile.isPermissionDenied)
+                let pa = Self.area(g.parent.rect) - placeholders.reduce(0.0) { $0 + Self.area($1.tile.rect) }
                 let pb = Double(t.allocated(g.parent.node))
-                for c in g.children {
+                for c in g.children where !c.tile.isPermissionDenied {
                     let bytes = c.tile.isAggregate ? c.tile.aggregateBytes : t.allocated(c.tile.node)
                     let want = Double(bytes) / pb
                     let got = Self.area(c.tile.rect) / pa
@@ -180,6 +187,41 @@ final class LayoutTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(checked, 50_000, "precondition: many tiles checked")
+
+        // The row step alone, on extreme spreads (sizes over 50 bits, so a
+        // tile can be 1e-15 of its parent): every rect keeps its proportion.
+        var rects: [CGRect] = []
+        var suffix: [Double] = []
+        var tiny = 0
+        for seed in Self.seeds {
+            var rng = SplitMix64(seed: seed ^ 0xA4EA)
+            let n = 2 + Int(rng.next() % 100)
+            var areas = (0..<n).map { _ in exp(rng.unit() * 50 * M_LN2) }.sorted(by: >)
+            let r = Self.window(seed)
+            let scale = Double(r.width) * Double(r.height) / areas.reduce(0, +)
+            areas = areas.map { $0 * scale }
+            squarifyRow(areas, in: r, into: &rects, suffix: &suffix)
+            for (a, rect) in zip(areas, rects) {
+                if a < 1e-9 { tiny += 1 }
+                XCTAssertLessThanOrEqual(abs(Self.area(rect) - a), 1e-3 * a, "seed \(seed): \(rect) for area \(a)")
+            }
+            if testRun!.failureCount > 0 {
+                print("area: failing seed \(seed) (row step)")
+                return
+            }
+        }
+        XCTAssertGreaterThan(tiny, 200, "precondition: tiles under 1e-9 pt² exercised")
+        // A dominant item and one 1e-14 its size, away from the origin: the
+        // small one's extent is far below the coordinates' rounding, so it
+        // must come from its own area, not from "end minus cursor".
+        for r in [CGRect(x: 51, y: 4.5, width: 409, height: 1163), CGRect(x: 4.5, y: 51, width: 1163, height: 409)] {
+            let whole = Self.area(r)
+            let areas = [whole * (1 - 1e-14), whole * 1e-14]
+            squarifyRow(areas, in: r, into: &rects, suffix: &suffix)
+            for (a, rect) in zip(areas, rects) {
+                XCTAssertLessThanOrEqual(abs(Self.area(rect) - a), 1e-3 * a, "\(r): \(rect) for area \(a)")
+            }
+        }
     }
 
     /// A window-shaped rect, as the treemap is laid out in.
@@ -192,61 +234,154 @@ final class LayoutTests: XCTestCase {
         Double(max(r.width, r.height) / min(r.width, r.height))
     }
 
-    /// Worst ratio of emitted tiles ≤ 20 for non-aggregate tiles larger than
-    /// subdivideMin (min side ≥ 24), in a window-shaped root.
+    /// BHvW's worst aspect ratio of a row of `areas` laid along a side `s`.
+    static func worst(_ areas: ArraySlice<Double>, _ s: Double) -> Double {
+        let sum = areas.reduce(0, +)
+        return max(s * s * areas.max()! / (sum * sum), sum * sum / (s * s * areas.min()!))
+    }
+
+    /// The exact oracle for the squarified row-building step: reconstruct the
+    /// rows of `rects` (the output of `squarifyRow` on `areas` in `rect`) and
+    /// check each against the greedy rule. Returns the rows checked and how
+    /// many of those had a next item, so (b) was decided.
     ///
-    /// No rectangular layout can bound aspect ratios for arbitrary sizes:
-    /// with sizes 97.7% and 2.3% in a square, the small one is at best a
-    /// 2.3%-wide strip (ratio ~44) whatever the algorithm. So the bound is
-    /// asserted outright on trees whose siblings differ by at most 10x, and
-    /// on heavy-tailed trees for every tile not forced thin: a tile is forced
-    /// when its larger siblings together take at least 90% of the parent (it
-    /// lives in the leftover strip) or its parent tile is itself over the
-    /// bound (a dominant child inherits its parent's shape).
+    /// (c) the row is laid along the current shorter side of the free rect
+    ///     (a column when w ≥ h), starting at its corner;
+    /// (a) the row's worst ratio is no worse than its first item's alone;
+    /// (b) adding the next item would make the row worse (strictly).
+    static func checkGreedyRows(
+        _ areas: [Double], _ rect: CGRect, _ rects: [CGRect], file: StaticString = #filePath, line: UInt = #line
+    ) -> (rows: Int, decided: Int) {
+        XCTAssertEqual(rects.count, areas.count, file: file, line: line)
+        guard rects.count == areas.count else { return (0, 0) }
+        var fx = Double(rect.minX), fy = Double(rect.minY)
+        var fw = Double(rect.width), fh = Double(rect.height)
+        let tol = 1e-10 * max(fw, fh)
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= tol }
+        let n = areas.count
+        var i = 0
+        var rows = 0
+        var decided = 0
+        while i < n {
+            // The items of one row: a column shares minX and width and
+            // stacks down from fy; a row shares minY and height and runs
+            // right from fx. Valid if it spans the free side exactly.
+            func row(column: Bool) -> Int? {
+                let first = rects[i]
+                var len = 0.0
+                var j = i
+                let side = column ? fh : fw
+                while j < n {
+                    let q = rects[j]
+                    let fits = column
+                        ? near(Double(q.minX), fx) && near(Double(q.width), Double(first.width)) && near(Double(q.minY), fy + len)
+                        : near(Double(q.minY), fy) && near(Double(q.height), Double(first.height)) && near(Double(q.minX), fx + len)
+                    guard fits else { return nil }
+                    len += Double(column ? q.height : q.width)
+                    j += 1
+                    if len >= side - tol { return near(len, side) ? j : nil }
+                }
+                return nil
+            }
+            let preferColumn = fw >= fh
+            var column = preferColumn
+            var end = row(column: column)
+            if end == nil && near(fw, fh) {
+                column.toggle()
+                end = row(column: column)
+            }
+            guard let j = end else {
+                XCTFail("(c) item \(i) does not start a row along the shorter side of (\(fx), \(fy), \(fw), \(fh))", file: file, line: line)
+                return (rows, decided)
+            }
+            let s = min(fw, fh)
+            let w = worst(areas[i..<j], s)
+            XCTAssertLessThanOrEqual(w, worst(areas[i..<i + 1], s) * (1 + 1e-9), "(a) row \(i)..<\(j) worse than its first item alone", file: file, line: line)
+            if j < n {
+                XCTAssertGreaterThan(worst(areas[i...j], s), w, "(b) row \(i)..<\(j) stopped although item \(j) would not worsen it", file: file, line: line)
+                decided += 1
+            }
+            let thick = Double(column ? rects[i].width : rects[i].height)
+            if column { fx += thick; fw -= thick } else { fy += thick; fh -= thick }
+            rows += 1
+            i = j
+        }
+        return (rows, decided)
+    }
+
+    /// Worst ratio ≤ 20 for non-aggregate tiles larger than subdivideMin, by
+    /// area (≥ subdivideMin², so slivers count), in a window-shaped root.
+    ///
+    /// No rectangular layout bounds aspect ratios for arbitrary sizes (97.7%
+    /// and 2.3% in a square force a strip of ratio ~44), so (ruling T6-1):
+    /// * the bound of 20 is asserted strictly on trees whose siblings differ
+    ///   by at most 10x;
+    /// * on heavy-tailed inputs the row-building step is checked exactly
+    ///   against the BHvW greedy rule (`checkGreedyRows`), with no exemptions;
+    /// * the heavy-tailed trees' worst ratio is reported, not gated.
     func test_aspect_ratios_are_bounded() {
+        let minArea = Double(p.subdivideMin * p.subdivideMin)
         var balancedChecked = 0
-        var heavyChecked = 0
-        var forced = 0
-        var worstUnforced = 0.0
+        var balancedSlivers = 0
+        var rows = 0
+        var decided = 0
+        var heavyWorst = 0.0
+        var scratch: (rects: [CGRect], suffix: [Double]) = ([], [])
         for seed in Self.seeds {
             let before = testRun!.failureCount
             let b = Self.window(seed)
 
             let bt = SyntheticTree.balanced(seed: seed)
             for tile in squarify(bt, root: bt.rootIndex, in: b, p).dropFirst() where !tile.isAggregate {
-                guard min(tile.rect.width, tile.rect.height) >= p.subdivideMin else { continue }
+                guard Self.area(tile.rect) >= minArea else { continue }
+                if min(tile.rect.width, tile.rect.height) < p.subdivideMin { balancedSlivers += 1 }
                 XCTAssertLessThanOrEqual(Self.ratio(tile.rect), 20, "balanced: tile \(tile.node) \(tile.rect)")
                 balancedChecked += 1
             }
 
+            // Heavy-tailed area lists (16 bits log-uniform, sorted as the
+            // layout receives them, sometimes with an aggregate and
+            // placeholders appended) in window, strip or tiny rects.
+            var rng = SplitMix64(seed: seed ^ 0x0AC1E)
+            let n = 1 + Int(rng.next() % 200)
+            var areas = (0..<n).map { _ in exp(rng.unit() * 16 * M_LN2) }.sorted(by: >)
+            if rng.unit() < 0.3 { areas.append(areas.reduce(0, +) * rng.unit() * 0.2 + 1) }
+            if rng.unit() < 0.2 { areas += Array(repeating: areas.last! * (0.5 + rng.unit()), count: 1 + Int(rng.next() % 16)) }
+            let r = Self.bounds(seed)
+            let scale = Double(r.width) * Double(r.height) / areas.reduce(0, +)
+            areas = areas.map { $0 * scale }
+            squarifyRow(areas, in: r, into: &scratch.rects, suffix: &scratch.suffix)
+            let checked = Self.checkGreedyRows(areas, r, scratch.rects)
+            rows += checked.rows
+            decided += checked.decided
+
             let t = SyntheticTree.random(seed: seed)
-            let tiles = squarify(t, root: t.rootIndex, in: b, p)
-            var tileOf: [UInt32: Tile] = [:]
-            for tile in tiles where !tile.isAggregate { tileOf[tile.node] = tile }
-            for tile in tiles.dropFirst() where !tile.isAggregate {
-                guard min(tile.rect.width, tile.rect.height) >= p.subdivideMin else { continue }
-                heavyChecked += 1
-                let r = Self.ratio(tile.rect)
-                let parent = t.parents[Int(tile.node)]
-                let larger = t.children(parent).lowerBound..<tile.node
-                let largerShare = Double(larger.reduce(UInt64(0)) { $0 + t.allocated($1) }) / Double(t.allocated(parent))
-                if largerShare >= 0.9 || Self.ratio(tileOf[parent]!.rect) > 20 {
-                    if r > 20 { forced += 1 }
-                    continue
-                }
-                worstUnforced = max(worstUnforced, r)
-                XCTAssertLessThanOrEqual(r, 20, "heavy-tailed: tile \(tile.node) \(tile.rect)")
+            for tile in squarify(t, root: t.rootIndex, in: b, p).dropFirst() where !tile.isAggregate {
+                guard Self.area(tile.rect) >= minArea else { continue }
+                heavyWorst = max(heavyWorst, Self.ratio(tile.rect))
             }
             if testRun!.failureCount > before {
                 print("aspect: failing seed \(seed)")
-                XCTFail("aspect: failing seed \(seed) (bounds \(b))")
+                XCTFail("aspect: failing seed \(seed)")
                 return
             }
         }
-        print("aspect: \(balancedChecked) balanced tiles, \(heavyChecked) heavy-tailed tiles, \(forced) forced over 20, worst unforced \(worstUnforced)")
+        // Ties: the greedy rule joins an item that leaves the worst ratio
+        // unchanged. Two halves of a square tie at 2 (k = 1 → 2); six sixths
+        // of a 6x6 square tie at 1.5 (k = 2 → 3). Exact in binary.
+        for (areas, r) in [
+            ([8192.0, 8192.0], CGRect(x: 0, y: 0, width: 128, height: 128)),
+            (Array(repeating: 6.0, count: 6), CGRect(x: 0, y: 0, width: 6, height: 6)),
+        ] {
+            squarifyRow(areas, in: r, into: &scratch.rects, suffix: &scratch.suffix)
+            let checked = Self.checkGreedyRows(areas, r, scratch.rects)
+            // 2 halves: one row of both. 6 sixths: [3 joined on the tie], then 1, 1, 1.
+            XCTAssertEqual(checked.rows, areas.count == 2 ? 1 : 4, "tie fixture \(areas.count): rows")
+        }
+        print("aspect: \(balancedChecked) balanced tiles (\(balancedSlivers) thinner than \(p.subdivideMin)), \(rows) greedy rows (\(decided) decided); heavy-tailed worst ratio \(heavyWorst) (reported, not gated)")
         XCTAssertGreaterThan(balancedChecked, 20_000, "precondition: many balanced tiles checked")
-        XCTAssertGreaterThan(heavyChecked, 10_000, "precondition: many heavy-tailed tiles checked")
-        XCTAssertGreaterThan(forced, 0, "precondition: the forced case occurs, so the exemption is not vacuous")
+        XCTAssertGreaterThan(rows, 5_000, "precondition: many greedy rows checked")
+        XCTAssertGreaterThan(decided, 4_000, "precondition: many rows where the join rule was decided")
     }
 
     func test_tail_aggregate_is_a_contiguous_suffix() {
@@ -256,9 +391,10 @@ final class LayoutTests: XCTestCase {
             for g in Self.groups(tiles, t) {
                 let range = t.children(g.parent.node)
                 let positive = range.filter { t.allocated($0) > 0 }
-                let aggs = g.children.filter(\.tile.isAggregate)
+                let sized = g.children.filter { !$0.tile.isPermissionDenied }
+                let aggs = sized.filter(\.tile.isAggregate)
                 XCTAssertLessThanOrEqual(aggs.count, 1, "more than one aggregate in a sibling set")
-                let emitted = g.children.filter { !$0.tile.isAggregate }.map(\.tile.node)
+                let emitted = sized.filter { !$0.tile.isAggregate }.map(\.tile.node)
                 // The individually emitted children are exactly a prefix.
                 XCTAssertEqual(emitted.sorted(), Array(positive.prefix(emitted.count)), "emitted set is not a prefix")
                 if let agg = aggs.first?.tile {
@@ -275,7 +411,7 @@ final class LayoutTests: XCTestCase {
                 } else {
                     XCTAssertEqual(emitted.count, positive.count, "children missing without an aggregate")
                 }
-                for c in g.children where !c.tile.isAggregate {
+                for c in sized where !c.tile.isAggregate {
                     XCTAssertEqual(c.tile.aggregateCount, 0)
                     XCTAssertEqual(c.tile.aggregateBytes, 0)
                     XCTAssertEqual(c.tile.flags & Tile.Flag.aggregated, 0)
@@ -337,10 +473,109 @@ final class LayoutTests: XCTestCase {
             CGRect(x: 0, y: 0, width: CGFloat.nan, height: 100),
             CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 100),
             CGRect(x: CGFloat.nan, y: 0, width: 100, height: 100),
+            CGRect(x: 0, y: 0, width: 1e200, height: 1e200),  // area overflows to +inf
+            CGRect(x: 0, y: 0, width: 1e-200, height: 1e-200),  // area underflows to 0
         ] {
             XCTAssertEqual(squarify(sized, root: sized.rootIndex, in: bad), [], "\(bad)")
         }
         XCTAssertEqual(squarify(sized, root: sized.rootIndex, in: b, LayoutParameters(budget: 0)), [])
+    }
+
+    /// Ruling T6-2: a permission-denied directory (0 bytes) gets a fixed
+    /// placeholder tile of area cullArea, laid after its sized siblings and
+    /// flagged permDenied; more than 16 collapse into one placeholder flagged
+    /// permDenied + aggregated, counting them.
+    func test_permission_denied_directories_get_placeholder_tiles() {
+        let b = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let cull = Double(p.cullArea)
+        for d in [1, 16, 17] {
+            let t = SyntheticTree(
+                .dir([.file(1_000_000), .file(500_000), .dir([.file(300), .file(200)])] + Array(repeating: .denied, count: d)))
+            let deniedKids = t.children(0).filter { t.isPermissionDenied($0) }
+            XCTAssertEqual(deniedKids.count, d, "precondition")
+            let tiles = squarify(t, root: 0, in: b, p)
+            let placeholders = tiles.enumerated().filter { $0.element.isPermissionDenied }
+            if d <= 16 {
+                XCTAssertEqual(placeholders.map(\.element.node).sorted(), deniedKids, "\(d): one tile per denied folder")
+                for (_, tile) in placeholders {
+                    XCTAssertEqual(tile.flags, Tile.Flag.permDenied, "\(d)")
+                    XCTAssertEqual(tile.aggregateCount, 0)
+                }
+            } else {
+                XCTAssertEqual(placeholders.count, 1, "\(d): collapsed")
+                guard let tile = placeholders.first?.element else { continue }
+                XCTAssertEqual(tile.flags, Tile.Flag.permDenied | Tile.Flag.aggregated)
+                XCTAssertEqual(tile.node, Tile.noNode)
+                XCTAssertEqual(tile.aggregateCount, UInt32(d))
+                XCTAssertEqual(tile.aggregateBytes, 0)
+            }
+            for (i, tile) in placeholders {
+                XCTAssertEqual(Self.area(tile.rect), cull, accuracy: 1e-9 * cull, "\(d): placeholder area")
+                XCTAssertEqual(tile.depth, 1)
+                // Painted after every sized sibling.
+                for (j, other) in tiles.enumerated() where other.depth == 1 && !other.isPermissionDenied {
+                    XCTAssertLessThan(j, i, "\(d): placeholder before a sized sibling")
+                }
+            }
+            // Coverage, disjointness and proportion of the sized children.
+            let kids = tiles.filter { $0.depth == 1 }
+            XCTAssertEqual(kids.reduce(0.0) { $0 + Self.area($1.rect) }, Self.area(b), accuracy: 1e-6 * Self.area(b))
+            for x in kids.indices { for y in kids.indices where x < y {
+                XCTAssertLessThanOrEqual(Self.overlap(kids[x].rect, kids[y].rect), 1e-9 * Self.area(b))
+            } }
+            let avail = Self.area(b) - Double(placeholders.count) * cull
+            for tile in kids where !tile.isPermissionDenied {
+                let want = Double(t.allocated(tile.node)) / Double(t.allocated(0))
+                XCTAssertEqual(Self.area(tile.rect) / avail, want, accuracy: 1e-9, "\(d): sized share")
+            }
+        }
+
+        // A parent whose only child is unreadable (so the parent is 0 bytes).
+        let only = SyntheticTree(.dir([.denied]))
+        let onlyTiles = squarify(only, root: 0, in: b, p)
+        XCTAssertEqual(onlyTiles.map(\.node), [0, 1])
+        XCTAssertEqual(onlyTiles.last?.flags, Tile.Flag.permDenied)
+        if let last = onlyTiles.last {
+            XCTAssertEqual(Self.area(last.rect), cull, accuracy: 1e-9 * cull)
+            XCTAssertTrue(b.contains(last.rect))
+        }
+        // An unreadable root is one placeholder filling the bounds.
+        XCTAssertEqual(squarify(SyntheticTree(.denied), root: 0, in: b, p), [Tile(rect: b, node: 0, depth: 0, flags: Tile.Flag.permDenied)])
+
+        // The budget still binds with placeholders in play.
+        let crowd = SyntheticTree(.dir((1...200).map { .file(UInt64($0) * 1000) } + Array(repeating: .denied, count: 10)))
+        for budget in 0...40 {
+            let tiles = squarify(crowd, root: 0, in: b, LayoutParameters(budget: budget))
+            XCTAssertLessThanOrEqual(tiles.count, budget, "budget \(budget)")
+            let kids = tiles.filter { $0.depth == 1 }
+            if !kids.isEmpty {
+                XCTAssertEqual(kids.reduce(0.0) { $0 + Self.area($1.rect) }, Self.area(b), accuracy: 1e-6 * Self.area(b), "budget \(budget)")
+                XCTAssertFalse(kids.filter(\.isPermissionDenied).isEmpty, "budget \(budget): placeholders kept")
+            }
+        }
+
+        // Random trees: every subdivided parent shows its denied children.
+        var few = 0
+        var many = 0
+        forEachSeed("denied") { _, t, _, tiles in
+            for g in Self.groups(tiles, t) {
+                let denied = t.children(g.parent.node).filter { t.isPermissionDenied($0) }
+                let shown = g.children.filter(\.tile.isPermissionDenied).map(\.tile)
+                if denied.isEmpty {
+                    XCTAssertTrue(shown.isEmpty)
+                } else if denied.count <= 16 {
+                    few += 1
+                    XCTAssertEqual(shown.map(\.node).sorted(), denied)
+                } else {
+                    many += 1
+                    XCTAssertEqual(shown.count, 1)
+                    XCTAssertEqual(shown.first?.aggregateCount, UInt32(denied.count))
+                }
+                for tile in shown { XCTAssertEqual(Self.area(tile.rect), cull, accuracy: 1e-9 * cull) }
+            }
+        }
+        XCTAssertGreaterThan(few, 100, "precondition: parents with 1-16 denied children")
+        XCTAssertGreaterThan(many, 5, "precondition: parents with more than 16 denied children")
     }
 
     func test_huge_flat_directory_is_bounded_and_aggregate_is_exact() {
