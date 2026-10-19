@@ -23,9 +23,9 @@ import SwiftUI
 /// Hosts the treemap: an `MTKView` drawn by `TreemapRenderer`, redrawn on
 /// demand (not on a display-link loop) whenever SwiftUI updates the inputs.
 ///
-/// Without a Metal device, or if the renderer cannot be built, it shows a
-/// plain surface-coloured placeholder; Task 9 replaces that with the
-/// CoreGraphics renderer (spec §11 "Rendering").
+/// Without a Metal device, or if the renderer cannot be built, it shows the
+/// CoreGraphics renderer's image instead (spec §11 "Rendering"), with no zoom
+/// animation.
 public struct TreemapView: NSViewRepresentable {
     public var tiles: [Tile]
     public var palette: [SIMD4<Float>]
@@ -43,7 +43,9 @@ public struct TreemapView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSView {
         guard let device = MTLCreateSystemDefaultDevice(), let renderer = TreemapRenderer(device: device) else {
-            return Self.placeholder(dark: dark)
+            let fallback = FallbackView(frame: .zero)
+            fallback.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
+            return fallback
         }
         let view = MTKView(frame: .zero, device: device)
         // The palette's sRGB-encoded values are written unconverted into a
@@ -61,7 +63,7 @@ public struct TreemapView: NSViewRepresentable {
 
     public func updateNSView(_ nsView: NSView, context: Context) {
         guard let renderer = context.coordinator.renderer else {
-            nsView.layer?.backgroundColor = Self.cgColour(Palette.surface(dark: dark))
+            (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
             return
         }
         renderer.clearColour = Palette.surface(dark: dark)
@@ -69,17 +71,43 @@ public struct TreemapView: NSViewRepresentable {
         nsView.needsDisplay = true
     }
 
-    private static func cgColour(_ c: SIMD4<Float>) -> CGColor {
-        CGColor(
-            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-            components: [CGFloat(c.x), CGFloat(c.y), CGFloat(c.z), CGFloat(c.w)])!
-    }
+    /// The no-Metal view: draws the tiles with `CGTreemapRenderer` into its
+    /// layer whenever its inputs or size change.
+    final class FallbackView: NSView {
+        private var tiles: [Tile] = []
+        private var palette: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1)]
+        private var colourOf: (Tile) -> UInt16 = { _ in 0 }
+        private var dark = false
 
-    private static func placeholder(dark: Bool) -> NSView {
-        let view = NSView(frame: .zero)
-        view.wantsLayer = true
-        view.layer?.backgroundColor = cgColour(Palette.surface(dark: dark))
-        return view
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+        }
+
+        required init?(coder: NSCoder) { fatalError("FallbackView is not decoded from a nib") }
+
+        func set(tiles: [Tile], palette: [SIMD4<Float>], colourOf: @escaping (Tile) -> UInt16, dark: Bool) {
+            self.tiles = tiles
+            self.palette = palette
+            self.colourOf = colourOf
+            self.dark = dark
+            redraw()
+        }
+
+        override func layout() {
+            super.layout()
+            redraw()
+        }
+
+        private func redraw() {
+            guard let layer, bounds.width > 0, bounds.height > 0 else { return }
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+            let image = CGTreemapRenderer(clearColour: Palette.surface(dark: dark)).render(
+                tiles: tiles, colours: palette, colourOf: colourOf, size: bounds.size, scale: scale)
+            layer.contentsScale = scale
+            layer.contentsGravity = .topLeft
+            layer.contents = image
+        }
     }
 
     /// The `MTKView`'s delegate; owns the renderer.

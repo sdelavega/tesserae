@@ -192,11 +192,14 @@ public final class TreemapRenderer {
     }
 
     /// Renders the current tiles into a `size` × `scale` image (8-bit BGRA,
-    /// premultiplied first, sRGB) and waits for it. For tests.
+    /// premultiplied first, sRGB) and waits for it; a size that rounds to zero
+    /// gives 1×1. For tests.
     public func renderOffscreen(size: CGSize, scale: CGFloat) -> CGImage {
-        let width = Int((size.width * scale).rounded())
-        let height = Int((size.height * scale).rounded())
-        precondition(width > 0 && height > 0, "empty render size \(size) at scale \(scale)")
+        // At least 1×1, as `CGTreemapRenderer` (a zero-sized view draws nothing
+        // visible but must not trap).
+        func pixels(_ v: CGFloat) -> Int { v.isFinite ? Int(min(max(v.rounded(), 1), 32_768)) : 1 }
+        let width = pixels(size.width * scale)
+        let height = pixels(size.height * scale)
         let td = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: Self.pixelFormat, width: width, height: height, mipmapped: false)
         td.usage = .renderTarget
