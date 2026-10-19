@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 
 /// Present in a binary exactly when this module is compiled in.
 ///
-/// `scripts/check-shipped-lib.sh` searches the shipped static library for these
-/// bytes. It cannot search for a hook's panic message instead: whole-program
+/// `scripts/check-shipped-lib.sh` searches the shipped static library for this
+/// symbol's name. It cannot search for a hook's panic message instead: whole-program
 /// LTO may prove the hook registry is never written outside tests and delete
 /// that message even from a build that has the hooks. `#[used]` keeps this
 /// symbol through compilation and `#[no_mangle]` exports it from the static

@@ -33,7 +33,7 @@
 #
 #   1. cargo's own feature resolution for a normal (non-dev) build of
 #      tesserae-ffi does not include the feature;
-#   2. the release archive does not contain the hooks' marker symbol
+#   2. the release archive does not contain the name of the hooks' marker symbol
 #      (TESSERAE_TEST_HOOKS_PRESENT in tesserae-core's test_hooks.rs, kept by
 #      #[used] and exported by #[no_mangle] so LTO cannot remove it).
 #
@@ -53,7 +53,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-marker='tesserae-test-hooks-present'
+# The symbol's NAME, not its bytes: in some builds the archive holds LLVM
+# bitcode, which does not store a data constant's bytes contiguously, while
+# both Mach-O and bitcode keep symbol names as plain strings.
+marker='TESSERAE_TEST_HOOKS_PRESENT'
 
 tree="$(cargo tree -p tesserae-ffi -e features --edges normal)"
 if [ "$(printf '%s\n' "$tree" | grep -c 'feature "test-hooks"' || true)" != 0 ]; then
