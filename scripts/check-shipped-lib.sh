@@ -70,6 +70,22 @@ CARGO_TARGET_DIR="$control_dir" cargo build -p tesserae-ffi --release --tests --
 control="$(find "$control_dir/release/deps" -maxdepth 1 -name 'libtesserae_ffi-*.a' -print -quit)"
 if [ -z "$control" ] || [ "$(grep -ac "$marker" "$control" || true)" = 0 ]; then
     echo "error: control failed: the hooks-on release archive has no '$marker', so this check searches nothing" >&2
+    # Evidence for whoever reads this failure: what was built, and whether
+    # any part of the marker is present.
+    {
+        echo "archives under $control_dir/release/deps:"
+        ls -l "$control_dir"/release/deps/*.a 2>&1 || true
+        if [ -n "$control" ]; then
+            members="$(mktemp -d)"
+            (cd "$members" && ar -x "$control" 2>&1 || true)
+            echo "member types:"
+            file -b "$members"/* 2>/dev/null | sort | uniq -c || true
+            for part in 'test-hooks' 'injected worker panic' 'injected'; do
+                echo "occurrences of '$part': $(grep -ac "$part" "$control" || true)"
+            done
+            rm -rf "$members"
+        fi
+    } >&2
     exit 1
 fi
 
