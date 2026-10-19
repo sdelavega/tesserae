@@ -158,6 +158,16 @@ jobs:
       - name: Universal Rust library
         run: just ffi
 
+      # TesseraeKit compiles Shaders.metal. Since Xcode 26 the Metal compiler
+      # is a separately downloaded component; fetch it only if a trivial
+      # shader does not compile with what the image has.
+      - name: Metal toolchain
+        run: |
+          if ! echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null; then
+            xcodebuild -downloadComponent MetalToolchain
+            echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null
+          fi
+
       - name: TesseraeKit tests
         run: just app-test
 

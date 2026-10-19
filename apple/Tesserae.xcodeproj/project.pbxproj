@@ -30,6 +30,10 @@
 		B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */; };
 		B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B2C3D4E5F60718293A4B5C /* FileKind.swift */; };
 		D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */; };
+		B9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift */; };
+		BAB2C3D4E5F60718293A4B5C /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AAB2C3D4E5F60718293A4B5C /* Shaders.metal */; };
+		BBB2C3D4E5F60718293A4B5C /* TreemapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */; };
+		D7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +104,10 @@
 		A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourMode.swift; sourceTree = "<group>"; };
 		A8B2C3D4E5F60718293A4B5C /* FileKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileKind.swift; sourceTree = "<group>"; };
 		C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourTests.swift; sourceTree = "<group>"; };
+		A9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapRenderer.swift; sourceTree = "<group>"; };
+		AAB2C3D4E5F60718293A4B5C /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapView.swift; sourceTree = "<group>"; };
+		C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRendererTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +148,7 @@
 				C2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift */,
 				C3B2C3D4E5F60718293A4B5C /* LayoutTests.swift */,
 				C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */,
+				C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
 			path = TesseraeKitTests;
@@ -173,6 +182,7 @@
 				A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */,
 				E1B2C3D4E5F60718293A4B5C /* Layout */,
 				E6B2C3D4E5F60718293A4B5C /* Colour */,
+				E7B2C3D4E5F60718293A4B5C /* Render */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -206,6 +216,16 @@
 				A8B2C3D4E5F60718293A4B5C /* FileKind.swift */,
 			);
 			path = Colour;
+			sourceTree = "<group>";
+		};
+		E7B2C3D4E5F60718293A4B5C /* Render */ = {
+			isa = PBXGroup;
+			children = (
+				A9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift */,
+				AAB2C3D4E5F60718293A4B5C /* Shaders.metal */,
+				ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */,
+			);
+			path = Render;
 			sourceTree = "<group>";
 		};
 		E2B2C3D4E5F60718293A4B5C /* Support */ = {
@@ -379,6 +399,9 @@
 				B6B2C3D4E5F60718293A4B5C /* Palette.swift in Sources */,
 				B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */,
 				B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */,
+				B9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift in Sources */,
+				BAB2C3D4E5F60718293A4B5C /* Shaders.metal in Sources */,
+				BBB2C3D4E5F60718293A4B5C /* TreemapView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -400,6 +423,7 @@
 				D2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift in Sources */,
 				D3B2C3D4E5F60718293A4B5C /* LayoutTests.swift in Sources */,
 				D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */,
+				D7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift in Sources */,
 				D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */,
 				D5B2C3D4E5F60718293A4B5C /* SplitMix64.swift in Sources */,
 			);
