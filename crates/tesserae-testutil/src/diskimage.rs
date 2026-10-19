@@ -67,6 +67,16 @@ impl DiskImage {
     /// mountpoint is verified to be on a different device from its parent, so
     /// a call that returns `Ok` really did mount a separate filesystem.
     pub fn attach(mountpoint: &Path, size_mib: u32) -> io::Result<Self> {
+        Self::attach_using(mountpoint, size_mib, |dmg| hdiutil_attach(mountpoint, dmg))
+    }
+
+    /// [`DiskImage::attach`] with the attach step supplied, so a test can make
+    /// it fail after the kernel has already mounted the image.
+    fn attach_using(
+        mountpoint: &Path,
+        size_mib: u32,
+        attach: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<Self> {
         if !mountpoint.is_absolute() {
             return Err(invalid("mountpoint must be an absolute path"));
         }
@@ -91,11 +101,13 @@ impl DiskImage {
             _dir: dir,
             mounted: false,
         };
-        run(Command::new("hdiutil")
-            .args(["attach", "-nobrowse", "-noverify", "-noautoopen"])
-            .arg("-mountpoint")
-            .arg(mountpoint)
-            .arg(&dmg))?;
+        if let Err(e) = attach(&dmg) {
+            // A failure is not proof that nothing was mounted: the timeout
+            // kills `hdiutil`, not the kernel's attach, which may already have
+            // landed. A volume at the mountpoint is ours, so take it down.
+            reclaim(mountpoint, parent);
+            return Err(e);
+        }
         image.mounted = true;
 
         let (inside, outside) = (
@@ -173,6 +185,29 @@ impl Drop for DiskImage {
             );
         }
     }
+}
+
+/// Best effort, after a failed attach: force-detach whatever is mounted at
+/// `mountpoint`, which is something only when it is on a different device from
+/// its parent. Errors are ignored; the attach error is the one reported.
+fn reclaim(mountpoint: &Path, parent: &Path) {
+    let dev = |p: &Path| std::fs::metadata(p).map(|m| m.dev());
+    if let (Ok(inside), Ok(outside)) = (dev(mountpoint), dev(parent)) {
+        if inside != outside {
+            let _ = run(Command::new("hdiutil")
+                .args(["detach", "-force"])
+                .arg(mountpoint));
+        }
+    }
+}
+
+/// Attach `dmg` at `mountpoint`, hidden from Finder.
+fn hdiutil_attach(mountpoint: &Path, dmg: &Path) -> io::Result<()> {
+    run(Command::new("hdiutil")
+        .args(["attach", "-nobrowse", "-noverify", "-noautoopen"])
+        .arg("-mountpoint")
+        .arg(mountpoint)
+        .arg(dmg))
 }
 
 /// Run `hdiutil` (or anything) with the standard time limit.
@@ -308,6 +343,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("boom"), "{err}");
+    }
+
+    #[test]
+    fn an_attach_that_fails_after_mounting_detaches_what_it_mounted() {
+        // `hdiutil attach` killed by the timeout after the kernel attached is
+        // the case: the command reports failure, yet a volume is mounted and
+        // `mounted` was never set. Simulated deterministically by attaching
+        // for real and then reporting a timeout.
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let mut attached = false;
+
+        let err = DiskImage::attach_using(&mnt, 16, |dmg| {
+            hdiutil_attach(&mnt, dmg)?;
+            attached = is_mounted(&mnt);
+            Err(io::Error::new(io::ErrorKind::TimedOut, "simulated kill"))
+        })
+        .unwrap_err();
+
+        assert!(attached, "precondition: the image really was mounted");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::TimedOut,
+            "the attach error is kept"
+        );
+        let leaked = is_mounted(&mnt);
+        if leaked {
+            // Never leave the machine with a volume attached, even on failure.
+            let _ = run(Command::new("hdiutil").args(["detach", "-force"]).arg(&mnt));
+        }
+        assert!(!leaked, "a failed attach left the image mounted");
     }
 
     #[test]

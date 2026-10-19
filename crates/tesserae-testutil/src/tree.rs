@@ -141,7 +141,7 @@ impl Fixture {
     /// this would otherwise be able to change permissions outside the root.
     pub fn chmod(&self, rel: &str, mode: u32) -> io::Result<&Self> {
         let path = self.resolve_unchecked(rel)?;
-        self.refuse_symlinks(&path)?;
+        self.refuse_symlinks(&path, Last::Refuse)?;
         // Record first: if the chmod below succeeds we must be able to undo it.
         self.chmodded
             .lock()
@@ -164,6 +164,8 @@ impl Fixture {
         }
         let mut path = self.resolve_unchecked(dir)?;
         path.push(OsStr::from_bytes(name));
+        // `dir` itself is now an intermediate: refuse it if it is a link.
+        self.refuse_symlinks(&path, Last::Allow)?;
         // `OpenOptions` hands the OS string's bytes to open(2) unchanged and
         // rejects interior NUL, so no `unsafe` is needed for byte-exactness.
         let file = OpenOptions::new()
@@ -177,17 +179,23 @@ impl Fixture {
     }
 
     /// Resolve `rel` under the root, creating its parent directories.
+    ///
+    /// For a path about to be created, so an existing symlink at `rel` itself
+    /// is refused too: `File::create` follows one, even a dangling one.
     fn resolve(&self, rel: &str) -> io::Result<PathBuf> {
         let path = self.resolve_unchecked(rel)?;
+        self.refuse_symlinks(&path, Last::Refuse)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(at("mkdir", parent))?;
         }
         Ok(path)
     }
 
-    /// Resolve `rel` under the root without touching the filesystem.
+    /// Resolve `rel` under the root without creating anything.
     /// Rejects absolute paths and `..` so a fixture can never write outside
-    /// its own temp dir.
+    /// its own temp dir, and an existing symlink among the parent components,
+    /// which the lexical check cannot see through: `create_dir_all` and every
+    /// creating call would follow it out of the root.
     fn resolve_unchecked(&self, rel: &str) -> io::Result<PathBuf> {
         let rel = Path::new(OsStr::new(rel));
         if rel.components().any(|c| {
@@ -200,28 +208,48 @@ impl Fixture {
                 "fixture paths must be relative and stay inside the root",
             ));
         }
-        Ok(self.root.path().join(rel))
+        let path = self.root.path().join(rel);
+        self.refuse_symlinks(&path, Last::Allow)?;
+        Ok(path)
     }
 
-    /// Error if `path` (under the root) or any component of it is a symlink.
-    fn refuse_symlinks(&self, path: &Path) -> io::Result<()> {
+    /// Error if an existing component of `path` (under the root) is a
+    /// symlink; the last one is checked only for [`Last::Refuse`].
+    ///
+    /// Stops at the first component that does not exist: it and everything
+    /// below it are about to be created, so none can be a link yet. A missing
+    /// path is left to the operation itself to report.
+    fn refuse_symlinks(&self, path: &Path, last: Last) -> io::Result<()> {
         let mut cur = self.root.path().to_path_buf();
         let rel = path.strip_prefix(&cur).unwrap_or(path);
-        for comp in rel.components() {
+        let mut comps = rel.components().peekable();
+        while let Some(comp) = comps.next() {
+            if comps.peek().is_none() && last == Last::Allow {
+                break;
+            }
             cur.push(comp);
             match fs::symlink_metadata(&cur) {
                 Ok(md) if md.file_type().is_symlink() => {
                     return Err(invalid(&format!(
-                        "refusing to chmod through symlink {}",
+                        "refusing to go through symlink {}",
                         cur.display()
                     )));
                 }
                 Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => break,
                 Err(e) => return Err(at("lstat", &cur)(e)),
             }
         }
         Ok(())
     }
+}
+
+/// Whether [`Fixture::refuse_symlinks`] also refuses a link as the final
+/// component, or only on the way to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Last {
+    Allow,
+    Refuse,
 }
 
 impl Drop for Fixture {
@@ -591,6 +619,60 @@ mod tests {
         }
         drop(fx);
         assert_eq!(std::fs::metadata(&victim).unwrap().mode(), before);
+    }
+
+    #[test]
+    fn writes_refuse_symlinks_and_never_reach_the_target() {
+        let outside = Fixture::new().unwrap();
+        let empty = |p: &Path| std::fs::read_dir(p).unwrap().count() == 0;
+        assert!(
+            empty(outside.path()),
+            "precondition: the target starts empty"
+        );
+
+        let fx = Fixture::new().unwrap();
+        fx.file("seed.bin", 8).unwrap();
+        fx.symlink(outside.path().to_str().unwrap(), "link")
+            .unwrap();
+        // Dangling, into `outside`: creating a file *at* it creates the target.
+        let victim = outside.path().join("victim");
+        fx.symlink(victim.to_str().unwrap(), "flink").unwrap();
+        // Precondition: without the guard, every write below would land in
+        // `outside`, so an empty `outside` afterwards means each was refused.
+        assert!(std::fs::symlink_metadata(fx.path().join("link"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::canonicalize(fx.path().join("link")).unwrap(),
+            std::fs::canonicalize(outside.path()).unwrap()
+        );
+
+        type Write = fn(&Fixture) -> std::io::Result<&Fixture>;
+        let writes: [(&str, Write); 10] = [
+            ("file", |fx| fx.file("link/x", 1)),
+            ("file below a new dir", |fx| fx.file("link/new/x", 1)),
+            ("sparse", |fx| fx.sparse("link/s", 1 << 20)),
+            ("dir", |fx| fx.dir("link/d")),
+            ("raw_name", |fx| fx.raw_name("link", b"r", 1)),
+            ("clone_of dst", |fx| fx.clone_of("seed.bin", "link/c")),
+            ("hardlink dst", |fx| fx.hardlink("seed.bin", "link/h")),
+            ("symlink dst", |fx| fx.symlink("seed.bin", "link/l")),
+            // A link as the final component: `File::create` follows it.
+            ("file at a link", |fx| fx.file("flink", 1)),
+            ("sparse at a link", |fx| fx.sparse("flink", 1)),
+        ];
+        for (what, write) in writes {
+            let Err(err) = write(&fx) else {
+                panic!("{what}: wrote through the link");
+            };
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::InvalidInput,
+                "{what}: {err}"
+            );
+        }
+        assert!(empty(outside.path()), "a fixture write escaped its root");
     }
 
     #[test]
