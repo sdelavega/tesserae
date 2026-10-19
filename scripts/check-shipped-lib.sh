@@ -33,7 +33,9 @@
 #
 #   1. cargo's own feature resolution for a normal (non-dev) build of
 #      tesserae-ffi does not include the feature;
-#   2. the release archive does not contain the hook's panic message.
+#   2. the release archive does not contain the hooks' marker symbol
+#      (TESSERAE_TEST_HOOKS_PRESENT in tesserae-core's test_hooks.rs, kept by
+#      #[used] and exported by #[no_mangle] so LTO cannot remove it).
 #
 # The second is run against a control first: the same search, on a release
 # build of the same archive with the hooks forced on, must find the message, or
@@ -51,7 +53,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-marker='test-hooks: injected worker panic'
+marker='tesserae-test-hooks-present'
 
 tree="$(cargo tree -p tesserae-ffi -e features --edges normal)"
 if [ "$(printf '%s\n' "$tree" | grep -c 'feature "test-hooks"' || true)" != 0 ]; then
@@ -80,7 +82,7 @@ if [ -z "$control" ] || [ "$(grep -ac "$marker" "$control" || true)" = 0 ]; then
             (cd "$members" && ar -x "$control" 2>&1 || true)
             echo "member types:"
             file -b "$members"/* 2>/dev/null | sort | uniq -c || true
-            for part in 'test-hooks' 'injected worker panic' 'injected'; do
+            for part in 'tesserae-test-hooks' 'TESSERAE_TEST_HOOKS_PRESENT' 'injected worker panic'; do
                 echo "occurrences of '$part': $(grep -ac "$part" "$control" || true)"
             done
             rm -rf "$members"
@@ -96,7 +98,7 @@ if [ ! -f "$lib" ]; then
     exit 1
 fi
 if [ "$(grep -ac "$marker" "$lib" || true)" != 0 ]; then
-    echo "error: $lib contains the test-hooks panic message" >&2
+    echo "error: $lib contains the test-hooks marker" >&2
     exit 1
 fi
 echo "ok: $lib has no test hooks"
