@@ -42,13 +42,21 @@ public struct TreemapView: NSViewRepresentable {
     public var palette: [SIMD4<Float>]
     public var colourOf: (Tile) -> UInt16
     public var dark: Bool
+    public var selection: Selection?
+    public var onZoomChanged: ((Bool) -> Void)?
+    public var onDroppedTiles: ((Int) -> Void)?
     public var navigator: Navigator?
     public var onHover: ((Int?) -> Void)?
 
     public init(
         tiles: [Tile], palette: [SIMD4<Float>], dark: Bool, navigator: Navigator? = nil,
+        selection: Selection? = nil, onZoomChanged: ((Bool) -> Void)? = nil,
+        onDroppedTiles: ((Int) -> Void)? = nil,
         onHover: ((Int?) -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
     ) {
+        self.selection = selection
+        self.onZoomChanged = onZoomChanged
+        self.onDroppedTiles = onDroppedTiles
         self.tiles = tiles
         self.palette = palette
         self.dark = dark
@@ -61,6 +69,7 @@ public struct TreemapView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSView {
         let interaction = context.coordinator.interaction
+        interaction.selection = selection
         interaction.navigator = navigator
         interaction.onHover = onHover
         _ = interaction.setTiles(tiles)
@@ -87,6 +96,9 @@ public struct TreemapView: NSViewRepresentable {
 
     public func updateNSView(_ nsView: NSView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.onZoomChanged = onZoomChanged
+        coordinator.onDroppedTiles = onDroppedTiles
+        coordinator.interaction.selection = selection
         coordinator.interaction.navigator = navigator
         coordinator.interaction.onHover = onHover
         let zoomFrom = coordinator.interaction.setTiles(tiles)
@@ -102,6 +114,7 @@ public struct TreemapView: NSViewRepresentable {
             coordinator.startZoom(from: zoomFrom, in: view, beforeUpdate: renderer.beginZoom())
         }
         renderer.update(tiles: tiles, colourOf: colourOf, palette: palette)
+        coordinator.reportDropped(renderer.droppedTileCount)
         nsView.needsDisplay = true
     }
 
@@ -240,6 +253,24 @@ public struct TreemapView: NSViewRepresentable {
         var renderer: TreemapRenderer?
         let interaction = TreemapInteraction()
         private(set) var player = ZoomPlayer()
+        var onZoomChanged: ((Bool) -> Void)?
+        var onDroppedTiles: ((Int) -> Void)?
+        private var lastDropped: Int?
+        private var reportedZoom = false
+
+        func reportDropped(_ count: Int) {
+            guard count != lastDropped else { return }
+            lastDropped = count
+            let report = onDroppedTiles
+            Task { @MainActor in report?(count) }
+        }
+
+        private func reportZoom(_ running: Bool) {
+            guard running != reportedZoom else { return }
+            reportedZoom = running
+            let report = onZoomChanged
+            Task { @MainActor in report?(running) }
+        }
 
         /// Starts the zoom from `rect` (old-layout points) if the renderer
         /// kept the old layout (`began`); either way any running zoom stops.
@@ -250,11 +281,13 @@ public struct TreemapView: NSViewRepresentable {
                     now: CACurrentMediaTime())
             else { return stopZoom(view) }
             // Frame by frame until it finishes.
+            reportZoom(true)
             view.enableSetNeedsDisplay = false
             view.isPaused = false
         }
 
         private func stopZoom(_ view: MTKView) {
+            reportZoom(false)
             player.cancel()
             renderer?.endZoom()
             view.isPaused = true

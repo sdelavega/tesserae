@@ -167,6 +167,13 @@ public final class FileTableRows: ObservableObject {
     /// The rows shown now; empty while loading.
     public var rows: [UInt32] { content?.rows ?? [] }
 
+    /// Immediately discard all content and invalidate any asynchronous result.
+    public func reset() {
+        _ = beginRequest()
+        model = nil
+        content = nil
+    }
+
     /// Show `model` (nil for none) with its default rows, dropping every sort in flight.
     /// The default rows are computed off the main actor too.
     public func load(_ model: FileTableModel?) async {

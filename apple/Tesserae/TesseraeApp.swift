@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import SwiftUI
 
 @main
@@ -22,5 +23,14 @@ struct TesseraeApp: App {
         WindowGroup {
             ContentView()
         }
+        #if DEBUG
+        .commands {
+            CommandMenu("Diagnostics") {
+                Button("Use Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
+                Button("Use Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+                Button("Follow System Appearance") { NSApp.appearance = nil }
+            }
+        }
+        #endif
     }
 }

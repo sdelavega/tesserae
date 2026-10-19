@@ -28,8 +28,8 @@ import CoreGraphics
 ///   pointer position is hit-tested again, so Return works without moving
 ///   the mouse.
 /// * A click (`press` then `release` on the same tile) on a directory
-///   descends into it; on a file, an aggregate or a placeholder, or when the
-///   button is released over another tile, it does nothing. Return descends
+///   descends into it; clicking a node also writes the shared selection.
+///   Aggregates/placeholders and release over a different tile do nothing. Return descends
 ///   into the first descendable of the hovered tile and the first tile
 ///   flagged selected. ⌘↑ ascends; ← / → move to the previous / next sibling.
 /// * A descend records the clicked rect. The navigator's owner lays out the
@@ -67,6 +67,7 @@ final class TreemapInteraction {
     var navigator: Navigator? {
         didSet { if oldValue !== navigator { pendingZoom = nil } }
     }
+    var selection: Selection?
     var onHover: ((Int?) -> Void)?
     private(set) var tiles: [Tile] = []
     private(set) var hovered: Int?
@@ -117,6 +118,8 @@ final class TreemapInteraction {
     func release(at p: CGPoint) -> Bool {
         defer { pressed = nil }
         guard let i = hitTester.tile(at: p, in: tiles), i == pressed else { return false }
+        let node = tiles[i].node
+        if node != Tile.noNode { selection?.nodes = [node] }
         return descend(into: i)
     }
 

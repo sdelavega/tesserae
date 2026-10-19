@@ -52,6 +52,7 @@ public struct FileTableView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = c.makeTableView()
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
         return scroll
     }
 
