@@ -37,7 +37,8 @@ static_assert(sizeof(TileInstance) == 32, "TileInstance stride must match Swift"
 struct Uniforms {
     float2 viewSize;  // points
     float scale;      // device pixels per point (the drawable's contentsScale)
-    float alpha;      // whole-layer opacity, for the zoom cross-fade
+    float alpha;      // multiplies each tile's alpha (1 for the zoom's opaque layers)
+    float4 zoom;      // sx, sy, tx, ty: rect -> (xy * s + t, wh * s), the zoom's old-layout transform
 };
 
 // The border rule: the inner border is the fill's sRGB-encoded RGB scaled by
@@ -59,12 +60,15 @@ vertex TileVertexOut tile_vertex(uint vid [[vertex_id]],
                                  const device TileInstance *tiles [[buffer(0)]],
                                  constant Uniforms &u [[buffer(1)]]) {
     const TileInstance t = tiles[iid];
+    // The transform is applied to the rect, so the border stays one device
+    // pixel wide however far the old layout is zoomed.
+    const float4 rect = float4(t.rect.xy * u.zoom.xy + u.zoom.zw, t.rect.zw * u.zoom.xy);
     const float2 corner = float2(float(vid & 1), float(vid >> 1));
-    const float2 p = t.rect.xy + corner * t.rect.zw;
+    const float2 p = rect.xy + corner * rect.zw;
     TileVertexOut out;
     out.position = float4(p.x / u.viewSize.x * 2.0 - 1.0, 1.0 - p.y / u.viewSize.y * 2.0, 0.0, 1.0);
-    out.localPixels = corner * t.rect.zw * u.scale;
-    out.sizePixels = t.rect.zw * u.scale;
+    out.localPixels = corner * rect.zw * u.scale;
+    out.sizePixels = rect.zw * u.scale;
     out.colorIdx = t.colorIdx;
     return out;
 }
@@ -80,6 +84,31 @@ fragment float4 tile_fragment(TileVertexOut in [[stage_in]],
     const bool border = min(edge.x, edge.y) < kBorderWidthPixels;
     const float3 rgb = border ? fill.rgb * kBorderShade : fill.rgb;
     return float4(rgb, fill.a * u.alpha);
+}
+
+// The zoom's cross-fade (spec §8): the old and the new layout are each drawn
+// opaque into a texture of the target's size, then this pass writes
+// mix(old, new, alpha) per pixel. Fading whole layers, not tiles, keeps the
+// fade uniform: a pixel where a child paints over its parent fades exactly
+// like one covered by a single tile.
+struct CompositeOut {
+    float4 position [[position]];
+};
+
+// One triangle covering the target: (-1,-1) (3,-1) (-1,3).
+vertex CompositeOut composite_vertex(uint vid [[vertex_id]]) {
+    const float2 p = float2(float((vid << 1) & 2), float(vid & 2)) * 2.0 - 1.0;
+    CompositeOut out;
+    out.position = float4(p, 0.0, 1.0);
+    return out;
+}
+
+fragment float4 composite_fragment(CompositeOut in [[stage_in]],
+                                   texture2d<float, access::read> oldLayer [[texture(0)]],
+                                   texture2d<float, access::read> newLayer [[texture(1)]],
+                                   constant float &alpha [[buffer(0)]]) {
+    const uint2 px = uint2(in.position.xy);
+    return mix(oldLayer.read(px), newLayer.read(px), alpha);
 }
 
 // Test hook for MetalRendererTests: echoes how this file sees each instance

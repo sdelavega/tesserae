@@ -343,3 +343,28 @@ a 16.7 ms frame, which the zoom animation does not need anyway (it lays out
 once per zoom, not per frame; spec §8). The `measure` averages run higher
 than the hand-timed loop because XCTest's first iterations include warm-up
 (the root's ten values fall from 2.1 ms to 0.7 ms).
+
+## Phase 2: hit testing
+
+`HitTester.tile(at:in:)` (`apple/TesseraeKit/Interaction/HitTester.swift`),
+timed by `HitTesterTests.test_hit_test_of_50k_tiles_measured`. Run on
+2026-10-19 (same machine, Xcode 27.2, load average about 8) at commit
+`26ff07e` plus this change.
+
+The input is the instance budget: 50,000 tiles, a root and 49,999 leaves in
+a grid. Each of 100 queries per `measure` block first drops the last-hit
+cache (`invalidate()`) and lands in the top rows of the grid, so the
+backward scan walks almost the whole list before it hits: the worst case.
+A query that stays inside the cached leaf tile costs one rect test.
+
+| build | `measure` (10 blocks of 100 queries) average | per query | last blocks, per query |
+|---|---|---|---|
+| Debug (`just app-test`, `-Onone`) | 60 ms | 0.60 ms | 0.57 ms |
+| Debug compiled with `-O` (`SWIFT_OPTIMIZATION_LEVEL=-O`, as for the layout above) | 8 ms | 0.08 ms | 0.055 ms |
+
+The `-O` run's first block is 15.6 ms and the last 5.5 ms (warm-up), hence
+its 37% deviation. A standalone `swiftc -O` build of the same source on the
+same input gave 0.048 ms per worst-case query (best of 10 blocks). So at
+mouse-event frequency even a full scan of 50,000 rects is well under a
+millisecond in an optimized build (spec §8 "Hit testing"); only the
+unoptimized test build approaches one.

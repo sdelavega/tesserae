@@ -36,6 +36,16 @@
 		BAB2C3D4E5F60718293A4B5C /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AAB2C3D4E5F60718293A4B5C /* Shaders.metal */; };
 		BBB2C3D4E5F60718293A4B5C /* TreemapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */; };
 		D7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */; };
+		F2A0011D2E3F4A5B6C7D8E /* Navigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0011D2E3F4A5B6C7D8E /* Navigator.swift */; };
+		F2A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift */; };
+		F2A0031D2E3F4A5B6C7D8E /* HitTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0031D2E3F4A5B6C7D8E /* HitTester.swift */; };
+		F2A0041D2E3F4A5B6C7D8E /* Inspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0041D2E3F4A5B6C7D8E /* Inspector.swift */; };
+		F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift */; };
+		F2A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift */; };
+		F2A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift */; };
+		F2A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */; };
+		F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */; };
+		F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -112,6 +122,16 @@
 		AAB2C3D4E5F60718293A4B5C /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapView.swift; sourceTree = "<group>"; };
 		C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRendererTests.swift; sourceTree = "<group>"; };
+		F1A0011D2E3F4A5B6C7D8E /* Navigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Navigator.swift; sourceTree = "<group>"; };
+		F1A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomAnimation.swift; sourceTree = "<group>"; };
+		F1A0031D2E3F4A5B6C7D8E /* HitTester.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HitTester.swift; sourceTree = "<group>"; };
+		F1A0041D2E3F4A5B6C7D8E /* Inspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Inspector.swift; sourceTree = "<group>"; };
+		F1A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapInteraction.swift; sourceTree = "<group>"; };
+		F1A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigatorTests.swift; sourceTree = "<group>"; };
+		F1A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomAnimationTests.swift; sourceTree = "<group>"; };
+		F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HitTesterTests.swift; sourceTree = "<group>"; };
+		F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorTests.swift; sourceTree = "<group>"; };
+		F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSnapshot.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -154,6 +174,10 @@
 				C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */,
 				C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */,
 				A1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift */,
+				F1A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift */,
+				F1A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift */,
+				F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */,
+				F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
 			path = TesseraeKitTests;
@@ -188,6 +212,8 @@
 				E1B2C3D4E5F60718293A4B5C /* Layout */,
 				E6B2C3D4E5F60718293A4B5C /* Colour */,
 				E7B2C3D4E5F60718293A4B5C /* Render */,
+				F3A0010000000000000000A1 /* Navigation */,
+				F3A0020000000000000000A2 /* Interaction */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -239,8 +265,28 @@
 			children = (
 				C4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift */,
 				C5B2C3D4E5F60718293A4B5C /* SplitMix64.swift */,
+				F1A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift */,
 			);
 			path = Support;
+			sourceTree = "<group>";
+		};
+		F3A0010000000000000000A1 /* Navigation */ = {
+			isa = PBXGroup;
+			children = (
+				F1A0011D2E3F4A5B6C7D8E /* Navigator.swift */,
+				F1A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift */,
+			);
+			path = Navigation;
+			sourceTree = "<group>";
+		};
+		F3A0020000000000000000A2 /* Interaction */ = {
+			isa = PBXGroup;
+			children = (
+				F1A0031D2E3F4A5B6C7D8E /* HitTester.swift */,
+				F1A0041D2E3F4A5B6C7D8E /* Inspector.swift */,
+				F1A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift */,
+			);
+			path = Interaction;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -409,6 +455,11 @@
 				B1C9D4E5F60718293A4B5C01 /* CGTreemapRenderer.swift in Sources */,
 				BAB2C3D4E5F60718293A4B5C /* Shaders.metal in Sources */,
 				BBB2C3D4E5F60718293A4B5C /* TreemapView.swift in Sources */,
+				F2A0011D2E3F4A5B6C7D8E /* Navigator.swift in Sources */,
+				F2A0021D2E3F4A5B6C7D8E /* ZoomAnimation.swift in Sources */,
+				F2A0031D2E3F4A5B6C7D8E /* HitTester.swift in Sources */,
+				F2A0041D2E3F4A5B6C7D8E /* Inspector.swift in Sources */,
+				F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -434,6 +485,11 @@
 				B1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift in Sources */,
 				D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */,
 				D5B2C3D4E5F60718293A4B5C /* SplitMix64.swift in Sources */,
+				F2A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift in Sources */,
+				F2A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift in Sources */,
+				F2A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift in Sources */,
+				F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */,
+				F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
