@@ -68,6 +68,18 @@ impl ScanId {
         )
     }
 
+    /// The id as a plain integer, for an atomic that has to hold one.
+    /// [`ScanId::from_bits`] is the inverse.
+    pub(crate) const fn to_bits(self) -> u64 {
+        self.0
+    }
+
+    /// The id whose [`ScanId::to_bits`] is `bits`. Any `u64` is accepted, as
+    /// for any id: [`Arena::get`] validates.
+    pub(crate) const fn from_bits(bits: u64) -> ScanId {
+        ScanId(bits)
+    }
+
     /// The arena this id was issued by.
     pub fn thread(self) -> u16 {
         (self.0 >> (CHUNK_BITS + SLOT_BITS)) as u16

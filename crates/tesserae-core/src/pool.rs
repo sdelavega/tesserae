@@ -25,10 +25,11 @@
 //!
 //! # Shape
 //!
-//! Each worker owns a LIFO [`Worker`] deque, an [`Arena`] tagged with its
-//! index, its own [`WalkStats`] and its own read buffer. An [`Injector`] holds
-//! the one task the walk starts with, the scan root. Every other task is a
-//! directory some worker enumerated and chose not to descend immediately.
+//! Each worker owns a LIFO [`Worker`] deque, a [`Lane`] holding an [`Arena`]
+//! tagged with its index and its own [`WalkStats`], and its own read buffer.
+//! An [`Injector`] holds the one task the walk starts with, the scan root.
+//! Every other task is a directory some worker enumerated and chose not to
+//! descend immediately.
 //!
 //! **Depth-first within a worker, breadth-shared across workers.** A worker
 //! descends with `openat` from the descriptor it already holds, so its open
@@ -70,19 +71,48 @@
 //! queued (so it is `pop`-able by its owner and `steal`-able by anyone). A
 //! worker that finds nothing yet sees `pending > 0` is looking at work that
 //! belongs to a busy worker's local deque, and that worker will reach it. No
-//! worker ever blocks, so there is nothing to deadlock; an idle worker yields
-//! and looks again.
+//! worker ever blocks on another, so there is nothing to deadlock; an idle
+//! worker yields and looks again. (A worker blocked in the *kernel* holds its
+//! task forever, and `pending` never reaches zero: that is the stall, and the
+//! watchdog below is what ends it.)
 //!
 //! Relaxed ordering is enough for the counter itself: a single atomic has a
 //! total modification order, so reading zero means every increment so far has
-//! been matched, and the argument above rules out a later one. The release on
-//! the decrement and the acquire on the read are what publish each worker's
-//! arena writes to whoever reads the counter afterwards.
+//! been matched, and the argument above rules out a later one. The arenas are
+//! published by their lanes' locks, which the supervisor takes to collect them.
 //!
 //! A panic is the one way out of a task that does not decrement, so
 //! [`HaltOnPanic`] raises the halt on an unwind. Otherwise the remaining
-//! workers would spin on a task that will never complete, and the join would
-//! hang instead of reporting the panic.
+//! workers would spin on a task that will never complete, and the supervisor
+//! would wait for them instead of reporting the panic.
+//!
+//! # The supervisor, and abandonment
+//!
+//! The workers are not scoped threads, and the walk does not join them all.
+//! Spec section 11 requires that a worker blocked in an uninterruptible
+//! syscall — an `openat` on a hung volume — leaks while the walk returns its
+//! partial result, and a scope that joins every thread before it returns
+//! cannot do that. So everything a worker can touch is owned by one [`Shared`]
+//! behind an `Arc` (the opener, the hardlink set, the budget, the halt, the
+//! counters, the root's descriptor and the lanes), which a worker left behind
+//! keeps alive for as long as it needs it.
+//!
+//! The calling thread supervises; [`supervise`] has the loop. Every [`TICK`]
+//! it copies the walk's counters into the caller's [`Progress`], turns a
+//! cancel into the halt, and runs the watchdog: if no worker has completed a
+//! syscall for `stall_timeout` while one is inside one, that directory's path
+//! is recorded and the halt is raised as [`Incomplete::Stalled`].
+//!
+//! The walk is over when every worker has finished, or — once the halt is up
+//! — when every worker has either finished or is inside a syscall. Those are
+//! abandoned. Their threads are detached and their lanes taken anyway: a
+//! worker never holds its lane's lock across a syscall (see [`Lane`]), so the
+//! lock is free, and taking the arena rather than dropping it is what keeps
+//! every other arena's references to it from dangling at freeze. An
+//! abandoned worker that comes back finds its lane empty and exits without
+//! touching anything. Abandoning a worker only because it happened to be in a
+//! quick syscall when the halt went up costs nothing: the walk was ending
+//! anyway, and the thread exits a moment later.
 //!
 //! # Descriptors
 //!
@@ -91,17 +121,21 @@
 //! failing the scan; see [`worker_count`].
 
 use std::io;
-use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{JoinHandle, Thread};
+use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Stealer, Worker};
 
 use crate::arena::{Arena, ScanId};
+use crate::boundary::VolumeId;
 use crate::dedup::InodeSet;
+use crate::progress::Progress;
 use crate::walk::{
-    check_options, open_root, root_volume_of, Halt, Incomplete, NodeBudget, OpenAt, Share,
-    WalkOptions, WalkStats, Walker, WalkerCtx,
+    check_options, join_root, open_root, root_volume_of, DirOpener, Halt, Incomplete, Lane,
+    NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
 };
 use std::os::fd::{AsFd, OwnedFd};
 
@@ -125,6 +159,13 @@ const PUBLISH_TARGET: usize = 32;
 const SPINS_BEFORE_SLEEP: u32 = 64;
 /// Shards in the walk's hardlink set, per worker.
 const INODE_SHARDS_PER_WORKER: usize = 8;
+/// How often the supervisor wakes when nothing wakes it sooner: the latency
+/// of a cancel, of the caller's counters, and of the watchdog. Finer than the
+/// one-second poll the watchdog strictly needs, because the same tick carries
+/// the cancel, and 100 wake-ups a second of a thread that only reads a few
+/// dozen atomics cost nothing measurable. A finishing worker wakes the
+/// supervisor at once, so a walk that ends on its own does not wait for it.
+pub(crate) const TICK: Duration = Duration::from_millis(10);
 
 /// One directory to walk.
 enum Task {
@@ -140,22 +181,23 @@ enum Task {
     },
 }
 
-/// What the workers share: the queues, the task count that decides when the
-/// walk is over, the halt, and the flags that belong to another arena.
-struct Pool<'a> {
+/// The queues, the task count that decides when the walk is over, and the
+/// flags that belong to another arena.
+struct Pool {
     /// Tasks created and not yet completed. See the module's termination note:
     /// this, not an idle count, is what says the walk is finished.
     pending: AtomicUsize,
     injector: Injector<Task>,
     stealers: Vec<Stealer<Task>>,
-    halt: &'a Halt,
     /// `(node, flags)` for nodes a worker learned something about but does not
-    /// own. Applied once the workers have joined; taken only on a permission
-    /// denial on a stolen directory, so essentially never.
+    /// own. Applied once the lanes are taken; taken only on a permission
+    /// denial on a stolen directory, so essentially never. A worker pushes
+    /// here only while holding its own lane, so once every lane is taken
+    /// nothing more can arrive.
     foreign: Mutex<Vec<(ScanId, u16)>>,
 }
 
-impl Pool<'_> {
+impl Pool {
     /// A task to walk, or `None` if nothing could be found this time round.
     ///
     /// Own deque first (LIFO, so the most recently published sibling, whose
@@ -176,7 +218,7 @@ impl Pool<'_> {
 
 /// One worker's end of the pool: what [`Walker`] publishes through.
 struct Hand<'a> {
-    pool: &'a Pool<'a>,
+    pool: &'a Pool,
     local: &'a Worker<Task>,
 }
 
@@ -194,7 +236,11 @@ impl Share for Hand<'_> {
     }
 
     fn flag_foreign(&self, node: ScanId, flags: u16) -> bool {
-        let mut queue = self.pool.foreign.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = self
+            .pool
+            .foreign
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         // If the one slot cannot be reserved the flag is lost and the caller
         // records `OutOfMemory`, as every other reserve failure in the walk
         // does: the directory would otherwise render as an empty folder
@@ -209,8 +255,8 @@ impl Share for Hand<'_> {
 
 /// Stops every other worker if this one unwinds. Without it a panic would
 /// leave `pending` above zero for a task nothing will ever complete, and the
-/// other workers would spin until the join deadlocked — hiding the panic
-/// behind a hang.
+/// other workers would spin while the supervisor waited for them — hiding the
+/// panic behind a hang.
 struct HaltOnPanic<'a>(&'a Halt);
 
 impl Drop for HaltOnPanic<'_> {
@@ -222,6 +268,65 @@ impl Drop for HaltOnPanic<'_> {
             self.0.raise(Incomplete::Cancelled);
         }
     }
+}
+
+/// What a test can make one worker's arena do. Production passes none, so
+/// outside tests nothing constructs one.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum ArenaLimit {
+    /// The arena's own ceiling of this many nodes: [`Arena::push_node`]
+    /// refuses the next with `NodeBudgetExceeded`.
+    Cap(u64),
+    /// Refuse every push once the arena holds this many nodes, as if the
+    /// allocator had refused a chunk: `OutOfMemory`.
+    #[cfg(test)]
+    OutOfMemoryAfter(u64),
+}
+
+/// One worker as the supervisor sees it.
+struct Seat {
+    lane: Lane,
+    /// Set as the worker's thread finishes, however it finishes; the last
+    /// thing it does. Never set for a worker blocked in a syscall.
+    done: AtomicBool,
+}
+
+/// Marks a worker finished as its thread's last act — returning, failing or
+/// unwinding — and wakes the supervisor to look.
+struct Finished<'a> {
+    seat: &'a Seat,
+    supervisor: &'a Thread,
+}
+
+impl Drop for Finished<'_> {
+    fn drop(&mut self) {
+        self.seat.done.store(true, Ordering::Release);
+        self.supervisor.unpark();
+    }
+}
+
+/// Everything the workers share, owned, behind one `Arc`: a worker abandoned
+/// in a blocked syscall outlives the call that started it, so nothing it can
+/// still reach may be borrowed from that call. See the module note.
+struct Shared<O> {
+    opener: Arc<O>,
+    inodes: InodeSet,
+    budget: NodeBudget,
+    halt: Halt,
+    /// The walk's own counters. Not the caller's [`Progress`], which is only
+    /// borrowed: the supervisor copies these into it.
+    counters: Progress,
+    root_volume: VolumeId,
+    /// The scan root, open for the whole walk and for as long as any worker
+    /// abandoned in it lives: every published directory is reopened beneath
+    /// it.
+    root_fd: OwnedFd,
+    opts: WalkOptions,
+    pool: Pool,
+    seats: Vec<Seat>,
+    /// The calling thread, which the workers wake as they finish.
+    supervisor: Thread,
 }
 
 /// Walk `opts.root` with `opts.workers` threads.
@@ -236,29 +341,38 @@ impl Drop for HaltOnPanic<'_> {
 /// `Err` means nothing could be scanned: bad options, or the root itself could
 /// not be opened. Everything after that is absorbed into the stats, as in a
 /// serial walk, and a walk cut short returns `Ok` with
-/// [`WalkStats::incomplete`] set.
+/// [`WalkStats::incomplete`] set — including one cut short by a stall, which
+/// may leave a worker thread behind; see [`WalkOptions::stall_timeout`]. For
+/// live counters and cancellation, see
+/// [`crate::progress::walk_with_progress`].
 ///
 /// [`walk_serial`]: crate::walk::walk_serial
 ///
 /// # Panics
 ///
-/// Resumes a worker thread's panic on the calling thread.
+/// Resumes a worker thread's panic on the calling thread. A worker abandoned
+/// in a syscall that panics after the walk has returned panics alone.
 pub fn walk(opts: &WalkOptions) -> io::Result<(Vec<Arena>, WalkStats)> {
-    walk_with(opts, &OpenAt, &[])
+    walk_with(opts, Arc::new(OpenAt), &[], &Progress::default())
 }
 
-/// [`walk`] with the caller's opener, and a per-worker arena ceiling.
+/// [`walk`] with the caller's opener and counters, and per-worker arena
+/// limits.
 ///
-/// `arena_caps` is empty in production: the walk's limit is the shared
+/// `limits` is empty in production: the walk's limit is the shared
 /// [`NodeBudget`], and a per-arena ceiling would multiply by the worker count.
-/// `arena_caps[i]` caps worker `i`'s arena and anything past the end is
-/// uncapped, which is how a test makes *one* worker's push fail while every
+/// `limits[i]` applies to worker `i`'s arena and anything past the end is
+/// unlimited, which is how a test makes *one* worker's push fail while every
 /// other worker and the shared budget still have room — the only way to reach
 /// the "one worker failed" path on purpose.
-pub(crate) fn walk_with<O: crate::walk::DirOpener>(
+///
+/// The opener is shared by `Arc` because a worker can outlive this call, and
+/// a test keeps its own handle to inspect afterwards.
+pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     opts: &WalkOptions,
-    opener: &O,
-    arena_caps: &[u64],
+    opener: Arc<O>,
+    limits: &[ArenaLimit],
+    progress: &Progress,
 ) -> io::Result<(Vec<Arena>, WalkStats)> {
     check_options(opts)?;
     let workers = worker_count(opts.workers, opts.max_depth, raise_nofile(NOFILE_TARGET));
@@ -277,98 +391,290 @@ pub(crate) fn walk_with<O: crate::walk::DirOpener>(
         .try_clone()
         .map_err(|e| io::Error::new(e.kind(), format!("dup {}: {e}", opts.root.display())))?;
 
-    let inodes = InodeSet::new(workers * INODE_SHARDS_PER_WORKER);
-    let budget = NodeBudget::new(opts.node_budget);
-    let halt = Halt::new();
-    let ctx = WalkerCtx {
-        opener,
-        inodes: &inodes,
-        budget: &budget,
-        halt: &halt,
-        root_volume,
-        root_path: &opts.root,
-        root_dir: Some(root_fd.as_fd()),
-    };
-
     let deques: Vec<Worker<Task>> = (0..workers).map(|_| Worker::new_lifo()).collect();
-    let pool = Pool {
-        // The root task, counted before it is pushed.
-        pending: AtomicUsize::new(1),
-        injector: Injector::new(),
-        stealers: deques.iter().map(Worker::stealer).collect(),
-        halt: &halt,
-        foreign: Mutex::new(Vec::new()),
-    };
-    pool.injector.push(Task::Root(root_task_fd));
-
-    let results = std::thread::scope(|scope| {
-        let threads: Vec<_> = deques
-            .into_iter()
-            .enumerate()
-            .map(|(i, local)| {
-                let (pool, ctx) = (&pool, &ctx);
-                scope.spawn(move || {
-                    // `i < workers <= MAX_WORKERS`, well inside a tag.
-                    let cap = arena_caps.get(i).copied().unwrap_or(u64::MAX);
-                    run_worker(pool, local, ctx, opts, i as u16, cap)
-                })
-            })
-            .collect();
-        threads
-            .into_iter()
-            .map(|t| t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-            .collect::<Vec<_>>()
+    let seats = (0..workers)
+        .map(|i| {
+            let limit = limits.get(i).copied();
+            let cap = match limit {
+                Some(ArenaLimit::Cap(cap)) => cap,
+                _ => u64::MAX,
+            };
+            // `i < workers <= MAX_WORKERS`, well inside a tag.
+            let lane = Lane::new(Arena::new(i as u16, cap));
+            #[cfg(test)]
+            if let Some(ArenaLimit::OutOfMemoryAfter(nodes)) = limit {
+                lane.fail_after(nodes);
+            }
+            Seat {
+                lane,
+                done: AtomicBool::new(false),
+            }
+        })
+        .collect();
+    let shared = Arc::new(Shared {
+        opener,
+        inodes: InodeSet::new(workers * INODE_SHARDS_PER_WORKER),
+        budget: NodeBudget::new(opts.node_budget),
+        halt: Halt::new(),
+        counters: Progress::default(),
+        root_volume,
+        root_fd,
+        opts: opts.clone(),
+        pool: Pool {
+            // The root task, counted before it is pushed.
+            pending: AtomicUsize::new(1),
+            injector: Injector::new(),
+            stealers: deques.iter().map(Worker::stealer).collect(),
+            foreign: Mutex::new(Vec::new()),
+        },
+        seats,
+        supervisor: std::thread::current(),
     });
+    shared.pool.injector.push(Task::Root(root_task_fd));
+
+    let mut threads: Vec<Option<JoinHandle<io::Result<()>>>> = Vec::new();
+    let mut spawn_failed = None;
+    for (i, local) in deques.into_iter().enumerate() {
+        if spawn_failed.is_some() {
+            // Never started, so there is nothing to wait for.
+            shared.seats[i].done.store(true, Ordering::Release);
+            continue;
+        }
+        let worker = Arc::clone(&shared);
+        let spawned = std::thread::Builder::new()
+            .name(format!("tesserae-walk-{i}"))
+            .spawn(move || run_worker(&worker, i, local));
+        match spawned {
+            Ok(thread) => threads.push(Some(thread)),
+            Err(e) => {
+                // Stop the workers already running: the caller gets this
+                // error, not a scan done by fewer threads than it was told.
+                shared.halt.raise(Incomplete::Cancelled);
+                shared.seats[i].done.store(true, Ordering::Release);
+                threads.push(None);
+                spawn_failed = Some(e);
+            }
+        }
+    }
+
+    let stalled_at = supervise(&shared, progress);
+
+    // Join the workers that finished, in index order, so that the first
+    // failure is the one reported; leave the abandoned ones behind. Dropping
+    // a handle detaches its thread.
+    let mut failure = spawn_failed;
+    for (seat, thread) in shared.seats.iter().zip(threads) {
+        let Some(thread) = thread else { continue };
+        if seat.done.load(Ordering::Acquire) {
+            match thread.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    failure.get_or_insert(e);
+                }
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+    }
+    if let Some(e) = failure {
+        return Err(e);
+    }
 
     let mut arenas: Vec<Arena> = Vec::new();
     arenas
-        .try_reserve_exact(results.len())
+        .try_reserve_exact(workers)
         .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
     let mut stats = WalkStats::default();
-    for result in results {
-        let (arena, worker_stats) = result?;
+    for seat in &shared.seats {
+        // Taken in index order, so arena `i` still carries thread tag `i`,
+        // which is what `apply_foreign` and freeze rely on. A lane is taken
+        // only here, so each is still there.
+        let (arena, worker_stats, unpublished) = seat
+            .lane
+            .take()
+            .expect("only the supervisor takes a lane, once");
+        // What the worker had stored but not yet published, so that the
+        // counters end equal to the result whatever stopped the walk.
+        shared.counters.add(unpublished);
         merge(&mut stats, worker_stats)?;
         arenas.push(arena);
     }
-    apply_foreign(
-        &mut arenas,
-        pool.foreign.into_inner().unwrap_or_else(|e| e.into_inner()),
+    let foreign = std::mem::take(
+        &mut *shared
+            .pool
+            .foreign
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
     );
+    apply_foreign(&mut arenas, foreign);
+    // The halt names what stopped the walk. The workers that saw it recorded
+    // it themselves, but a cancel or a stall is raised here, and an abandoned
+    // worker records nothing.
+    if let Some(why) = shared.halt.reason() {
+        stats.incomplete = Some(why);
+    }
+    if stalled_at.is_some() {
+        stats.stalled_at = stalled_at;
+    }
+    progress.set(shared.counters.snapshot());
     Ok((arenas, stats))
 }
 
-/// One worker: take tasks until the walk is over, then hand back its arena
-/// and what it saw.
-fn run_worker<O: crate::walk::DirOpener>(
-    pool: &Pool<'_>,
+/// The calling thread's part: wait for the walk to end, and end it early when
+/// it should. Returns the stalled directory's path if the watchdog fired.
+///
+/// Every [`TICK`], or sooner when a finishing worker wakes it:
+///
+/// 1. copy the walk's counters into the caller's `progress`;
+/// 2. if the caller cancelled, raise the halt as [`Incomplete::Cancelled`];
+/// 3. stop waiting when every worker has finished, or — once the halt is up —
+///    when every worker has finished or is inside a syscall (abandoned);
+/// 4. otherwise, the watchdog: total syscalls completed is the measure of
+///    progress, and when it has not moved for `stall_timeout` and some
+///    worker is inside a syscall, that worker's directory is the stall.
+///
+/// More than one worker can be blocked at once (a dead volume blocks every
+/// worker that reaches it); the lowest-indexed is reported, since any of them
+/// is a true answer to "stalled at what".
+fn supervise<O>(shared: &Shared<O>, progress: &Progress) -> Option<PathBuf> {
+    let total_ticks = || {
+        shared
+            .seats
+            .iter()
+            .fold(0u64, |sum, seat| sum.wrapping_add(seat.lane.ticks()))
+    };
+    let mut ticks = total_ticks();
+    let mut moved = Instant::now();
+    let mut stalled_at = None;
+    loop {
+        progress.set(shared.counters.snapshot());
+        if progress.is_cancelled() {
+            shared.halt.raise(Incomplete::Cancelled);
+        }
+        let halted = shared.halt.reason().is_some();
+        let done = |seat: &Seat| seat.done.load(Ordering::Acquire);
+        if shared.seats.iter().all(done) {
+            break;
+        }
+        if halted
+            && shared
+                .seats
+                .iter()
+                .all(|seat| done(seat) || seat.lane.busy_on().is_some())
+        {
+            break;
+        }
+        if !halted {
+            let now = total_ticks();
+            if now != ticks {
+                ticks = now;
+                moved = Instant::now();
+            } else if moved.elapsed() >= shared.opts.stall_timeout {
+                if let Some(id) = shared.seats.iter().find_map(|seat| seat.lane.busy_on()) {
+                    let path = stalled_path(shared, id);
+                    shared.halt.raise(Incomplete::Stalled);
+                    // Only if the stall is what stopped the walk: a reason
+                    // raised a moment earlier wins, and then nothing stalled.
+                    if shared.halt.reason() == Some(Incomplete::Stalled) {
+                        stalled_at = path;
+                    }
+                }
+            }
+        }
+        std::thread::park_timeout(TICK);
+    }
+    stalled_at
+}
+
+/// The absolute path of `id`, by climbing from it to the root through
+/// whichever arenas hold its ancestors: a stolen directory's node is in the
+/// arena of the worker that enumerated its parent, not the one walking it.
+///
+/// Each lane is locked only for the one node read from it, and never while
+/// another is held (see [`Lane`] on lock order). The climb is bounded by the
+/// depth cap, so a malformed chain ends in `None` rather than a loop. `None`
+/// also if a name cannot be copied for want of memory: the walk still stops
+/// as stalled, it just cannot say where.
+fn stalled_path<O>(shared: &Shared<O>, id: ScanId) -> Option<PathBuf> {
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    let mut cur = id;
+    for _ in 0..=usize::from(shared.opts.max_depth) {
+        let seat = shared.seats.get(usize::from(cur.thread()))?;
+        let (name, parent) = seat.lane.read(|arena| {
+            let node = arena.get(cur)?;
+            let bytes = arena.name_bytes(node.name);
+            let mut name = Vec::new();
+            name.try_reserve_exact(bytes.len()).ok()?;
+            name.extend_from_slice(bytes);
+            Some((name, node.parent))
+        })??;
+        if parent == ScanId::NONE {
+            // `name` is the root's, which is the scan root's path as the
+            // caller gave it: `join_root` supplies that.
+            let len = names.iter().map(|n| n.len() + 1).sum();
+            let mut rel: Vec<u8> = Vec::new();
+            rel.try_reserve_exact(len).ok()?;
+            for name in names.iter().rev() {
+                if !rel.is_empty() {
+                    rel.push(b'/');
+                }
+                rel.extend_from_slice(name);
+            }
+            return join_root(&shared.opts.root, &rel).ok();
+        }
+        names.try_reserve(1).ok()?;
+        names.push(name);
+        cur = parent;
+    }
+    None
+}
+
+/// One worker: take tasks until the walk is over. Its arena and stats stay
+/// in its lane, where the supervisor takes them.
+fn run_worker<O: DirOpener>(
+    shared: &Shared<O>,
+    index: usize,
     local: Worker<Task>,
-    ctx: &WalkerCtx<'_, O>,
-    opts: &WalkOptions,
-    thread: u16,
-    arena_cap: u64,
-) -> io::Result<(Arena, WalkStats)> {
-    let _halt_on_panic = HaltOnPanic(pool.halt);
+) -> io::Result<()> {
+    let seat = &shared.seats[index];
+    // Declared first so it is dropped last: `done` is set only once
+    // everything else this worker holds, its open directories included, has
+    // been released.
+    let _finished = Finished {
+        seat,
+        supervisor: &shared.supervisor,
+    };
+    let _halt_on_panic = HaltOnPanic(&shared.halt);
+    let ctx = WalkerCtx {
+        opener: &*shared.opener,
+        inodes: &shared.inodes,
+        budget: &shared.budget,
+        halt: &shared.halt,
+        progress: &shared.counters,
+        root_volume: shared.root_volume,
+        root_path: &shared.opts.root,
+        root_dir: Some(shared.root_fd.as_fd()),
+    };
     let hand = Hand {
-        pool,
+        pool: &shared.pool,
         local: &local,
     };
-    let mut walker = match Walker::with_arena_cap(ctx, Some(&hand), opts, thread, arena_cap) {
+    let mut walker = match Walker::new(&ctx, Some(&hand), &shared.opts, &seat.lane) {
         Ok(walker) => walker,
         Err(e) => {
             // This worker cannot walk at all, so the caller gets an `Err`
             // and no partial result. Stop the others rather than let them
             // finish a scan that is going to be thrown away; the reason is
             // only a signal, since `e` is what the caller sees.
-            pool.halt.raise(Incomplete::OutOfMemory);
+            shared.halt.raise(Incomplete::OutOfMemory);
             return Err(e);
         }
     };
     let mut idle = 0u32;
     loop {
-        if pool.halt.reason().is_some() {
+        if shared.halt.reason().is_some() {
             break;
         }
-        match pool.find(&local) {
+        match shared.pool.find(&local) {
             Some(task) => {
                 idle = 0;
                 let outcome = match task {
@@ -378,14 +684,14 @@ fn run_worker<O: crate::walk::DirOpener>(
                 // After the task is finished, and so after every directory it
                 // published was counted. This is the half of the protocol that
                 // makes `pending == 0` mean what it says.
-                pool.pending.fetch_sub(1, Ordering::Release);
+                shared.pool.pending.fetch_sub(1, Ordering::Release);
                 if outcome.is_err() {
                     // `run_root` / `run_dir` have already raised the halt.
                     break;
                 }
             }
             None => {
-                if pool.pending.load(Ordering::Acquire) == 0 {
+                if shared.pool.pending.load(Ordering::Acquire) == 0 {
                     break;
                 }
                 idle = idle.saturating_add(1);
@@ -397,7 +703,7 @@ fn run_worker<O: crate::walk::DirOpener>(
             }
         }
     }
-    Ok(walker.finish())
+    Ok(())
 }
 
 /// Fold one worker's stats into the running total.
@@ -865,7 +1171,13 @@ mod tests {
         let mut attempts = 0;
         let (arenas, stats) = loop {
             attempts += 1;
-            let (arenas, stats) = walk_with(&o, &OpenAt, &[CAP]).unwrap();
+            let (arenas, stats) = walk_with(
+                &o,
+                Arc::new(OpenAt),
+                &[ArenaLimit::Cap(CAP)],
+                &Progress::default(),
+            )
+            .unwrap();
             if arenas[0].len() == CAP {
                 break (arenas, stats);
             }
@@ -912,7 +1224,13 @@ mod tests {
     fn descriptor_exhaustion_survives_the_merge() {
         let fx = wide_fixture();
 
-        let (_, stats) = walk_with(&opts(fx.path()), &FailEveryOpen, &[]).unwrap();
+        let (_, stats) = walk_with(
+            &opts(fx.path()),
+            Arc::new(FailEveryOpen),
+            &[],
+            &Progress::default(),
+        )
+        .unwrap();
 
         assert_eq!(stats.incomplete, Some(Incomplete::FdExhausted));
         assert_eq!(stats.errors, 0, "not filed with the benign races");
@@ -1010,17 +1328,18 @@ mod tests {
                     fx.file(&format!("decoy/s{k}/decoy{f}.bin"), 64).unwrap();
                 }
             }
-            let opener = SwapAncestorBeforeReopen {
+            let opener = Arc::new(SwapAncestorBeforeReopen {
                 root: fx.path().to_path_buf(),
                 stash: elsewhere.path().join("victim"),
                 fired: std::sync::atomic::AtomicU32::new(0),
                 reopened_under_victim: std::sync::atomic::AtomicU32::new(0),
                 gate: Mutex::new(()),
-            };
+            });
             let mut o = opts(fx.path());
             o.workers = 16;
 
-            let (arenas, stats) = walk_with(&o, &opener, &[]).unwrap();
+            let (arenas, stats) =
+                walk_with(&o, Arc::clone(&opener), &[], &Progress::default()).unwrap();
 
             // The precondition: the swap really fired, and it fired inside a
             // reopen-by-path, which is the only place this opener swaps.

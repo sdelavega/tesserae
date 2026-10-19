@@ -22,6 +22,7 @@ pub mod freeze;
 pub mod node;
 pub mod parse;
 pub mod pool;
+pub mod progress;
 pub mod walk;
 
 #[cfg(test)]
