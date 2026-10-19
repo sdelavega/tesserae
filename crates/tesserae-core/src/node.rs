@@ -70,14 +70,15 @@ const _: () = {
     assert!(seen == 0b1_1111);
 };
 
-/// One entry of the frozen tree. 40 bytes, `#[repr(C)]`.
+/// One entry of the frozen tree. 40 bytes, C layout.
 ///
-/// A directory's children are `nodes[child_start .. child_start + child_count]`,
-/// sorted descending by `allocated`. A node with no children has
+/// A directory's children are the entries `child_start` up to
+/// `child_start + child_count` of the node array, sorted descending by
+/// `allocated`. A node with no children has
 /// `child_count == 0` and `child_start == 0`. That `0` is not an index and
 /// must not be read as one: `child_count == 0` is the guard. It is `0` rather
 /// than the next free position (which for the last leaves would equal the
-/// array length) so a consumer that checks `child_start < nodes.len()` never
+/// array length) so a consumer that checks `child_start < count` never
 /// rejects a leaf.
 ///
 /// There are 4 bytes of padding after `child_count`, because the next field is
@@ -85,12 +86,13 @@ const _: () = {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TessNode {
-    /// Byte offset of this node's name in [`Snapshot::names`].
+    /// Byte offset of this node's name in the snapshot's name arena.
     pub name_off: u32,
     pub name_len: u16,
-    /// See [`FLAG_DIR`], [`FLAG_SYMLINK`] and the walker's flags.
+    /// The `TESS_FLAG_*` bits: directory, symlink, hardlink duplicate,
+    /// permission denied, aggregated.
     pub flags: u16,
-    /// Index of the parent in [`Snapshot::nodes`], or [`NODE_NONE`] for the root.
+    /// Index of the parent in the node array, or `u32::MAX` for the root.
     pub parent: u32,
     pub child_start: u32,
     pub child_count: u32,

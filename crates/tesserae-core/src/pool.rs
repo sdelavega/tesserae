@@ -677,6 +677,8 @@ fn run_worker<O: DirOpener>(
         match shared.pool.find(&local) {
             Some(task) => {
                 idle = 0;
+                #[cfg(feature = "test-hooks")]
+                crate::test_hooks::before_task(&shared.opts.root);
                 let outcome = match task {
                     Task::Root(fd) => walker.run_root(fd),
                     Task::Dir { rel, node, depth } => walker.run_dir(rel, node, depth),

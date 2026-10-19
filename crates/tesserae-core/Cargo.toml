@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Fault injection for other crates' tests; see `test_hooks`. Never enabled by a
+# normal build: tesserae-ffi turns it on in [dev-dependencies] only.
+test-hooks = []
+
 [dependencies]
 crossbeam-deque = "0.8.8"
 libc = "0.2"

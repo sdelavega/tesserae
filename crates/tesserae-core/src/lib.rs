@@ -23,6 +23,8 @@ pub mod node;
 pub mod parse;
 pub mod pool;
 pub mod progress;
+#[cfg(feature = "test-hooks")]
+pub mod test_hooks;
 pub mod walk;
 
 #[cfg(test)]

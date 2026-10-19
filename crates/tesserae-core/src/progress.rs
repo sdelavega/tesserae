@@ -53,8 +53,12 @@
 //! boundary.
 //!
 //! A [`Progress`] that is already cancelled when the walk starts cancels it at
-//! the first tick. The counters are overwritten, not added to, so one
-//! [`Progress`] can be reused across walks.
+//! the first tick.
+//!
+//! Use one [`Progress`] per walk. A cancel is never undone, so a cancelled
+//! [`Progress`] cancels every walk handed it from then on; and the counters
+//! are overwritten, not added to, so walks running at once would overwrite
+//! each other's numbers.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
