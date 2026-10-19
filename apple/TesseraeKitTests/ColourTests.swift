@@ -145,6 +145,13 @@ final class ColourTests: XCTestCase {
         }
         XCTAssertEqual(ageSlot(secondsAgo: 0), 0)
         XCTAssertEqual(ageSlot(secondsAgo: 100 * 365 * day), 6)
+        XCTAssertEqual(ageSlot(secondsAgo: 2_000_000_000), 6, "modified == 0 is the oldest bucket")
+        let extreme = Fake([.init(name: "f", modified: Int64.min), .init(name: "g", modified: Int64.max)])
+        XCTAssertEqual(
+            Int(colourIndex(0, depth: 0, in: extreme.snapshot, mode: .age(now: now))), Palette.firstColourIndex + 6,
+            "Int64.min must saturate, not trap")
+        XCTAssertEqual(
+            Int(colourIndex(1, depth: 0, in: extreme.snapshot, mode: .age(now: now))), Palette.firstColourIndex)
         XCTAssertEqual(ageSlot(secondsAgo: -3600), 0, "a future file counts as recent")
         XCTAssertEqual(ageSlot(secondsAgo: -1000 * day), 0)
         // Directories use the same rule on their rolled-up time.
@@ -157,15 +164,17 @@ final class ColourTests: XCTestCase {
         let f = Fake([
             .init(name: "a.mp4"), .init(name: "b.png"), .init(name: "c.mp3"), .init(name: "d.zip"),
             .init(name: "e.pdf"), .init(name: "f.xyz"), .init(name: "d", dir: true),
+            .init(name: "movies.mp4", dir: true),
         ])
         let four: [FileKind] = [.video, .images, .audio, .archives]
-        let idx = (0..<7).map { colourIndex(UInt32($0), depth: 0, in: f.snapshot, mode: .typeFocus(four)) }
+        let idx = (0..<8).map { colourIndex(UInt32($0), depth: 0, in: f.snapshot, mode: .typeFocus(four)) }
         let first = UInt16(Palette.firstColourIndex), neutral = UInt16(Palette.neutralIndex)
         XCTAssertEqual(Array(idx[0..<3]), [first, first + 1, first + 2])
         XCTAssertEqual(idx[3], neutral, "a fourth kind has no slot")
         XCTAssertEqual(idx[4], neutral)
         XCTAssertEqual(idx[5], neutral)
         XCTAssertEqual(idx[6], neutral, "directories are neutral")
+        XCTAssertEqual(idx[7], neutral, "a directory named like a video is still neutral")
         // One kind: only its slot is used.
         XCTAssertEqual(colourIndex(3, depth: 0, in: f.snapshot, mode: .typeFocus([.archives])), first)
         XCTAssertEqual(colourIndex(0, depth: 0, in: f.snapshot, mode: .typeFocus([.archives])), neutral)

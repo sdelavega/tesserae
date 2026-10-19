@@ -56,6 +56,9 @@ public struct Palette {
         rgb(dark ? 0x1a1a19 : 0xfcfcfb)
     }
 
+    /// The palette buffer for `m` (layout above). The `SIMD4<Float>` values are
+    /// sRGB-encoded (hex / 255), not linear: a shader must not blend them as
+    /// if they were linear light.
     public static func colours(_ m: ColourMode, dark: Bool) -> [SIMD4<Float>] {
         let ramp: [UInt32]
         switch m {
@@ -67,7 +70,8 @@ public struct Palette {
     }
 }
 
-/// Upper bounds (inclusive, seconds) of the first six age buckets.
+/// Upper bounds (inclusive, seconds) of the first six age buckets (a year is
+/// taken as 365 days).
 private let ageLimits: [Int64] = [7, 30, 90, 365, 730, 1825].map { $0 * 86_400 }
 
 /// The palette-buffer index for node `node` at layout depth `depth`.
@@ -84,7 +88,8 @@ public func colourIndex(_ node: UInt32, depth: UInt8, in src: Snapshot, mode: Co
         return UInt16(first + Int(depth) % 5)
     case .age(let now):
         let nowSecs = Int64(now.timeIntervalSince1970.rounded(.down))
-        let delta = nowSecs - src.nodes[Int(node)].modified
+        let (diff, overflow) = nowSecs.subtractingReportingOverflow(src.nodes[Int(node)].modified)
+        let delta = overflow ? Int64.max : diff  // only a hugely negative `modified` overflows: oldest
         let bucket = ageLimits.firstIndex { delta <= $0 } ?? ageLimits.count
         return UInt16(first + bucket)
     case .typeFocus(let kinds):
