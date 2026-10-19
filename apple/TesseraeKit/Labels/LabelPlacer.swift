@@ -41,9 +41,8 @@ private let minKeptCharacters = 3
 /// * Candidates are visited largest tile first (ties in tile order) and at
 ///   most `max` labels are placed.
 /// * A *subdivided* directory gets none (its children cover it, and a label
-///   there would sit under theirs): one with a child that has a tile, or
-///   whose children collapsed into an aggregate or unreadable-folders tile
-///   inside it. A leaf, a terminal directory, a file and an aggregate can.
+///   there would sit under theirs): one that is the `parent` of any tile,
+///   whether a node, an aggregate or an unreadable-folders square. A leaf, a terminal directory, a file and an aggregate can.
 /// * Permission-denied placeholders (`permDenied` with a node) get none; the
 ///   collapsed "N unreadable folders" square does, as do aggregates
 ///   ("N smaller items — X"), with the inspector's wording.
@@ -66,17 +65,10 @@ public func placeLabels(
 ) -> [PlacedLabel] {
     guard max > 0 else { return [] }
     let pad = labelPadding
-    // Nodes that are the parent of a node with a tile, and where the tiles
-    // standing for no node (aggregates) are, by depth.
-    var parentsWithTiles = Set<UInt32>()
-    var anonymous: [UInt8: [CGPoint]] = [:]
-    for t in tiles {
-        if t.node == Tile.noNode {
-            anonymous[t.depth, default: []].append(CGPoint(x: t.rect.midX, y: t.rect.midY))
-        } else if Int(t.node) < s.nodes.count, s.nodes[Int(t.node)].parent != UInt32.max {
-            parentsWithTiles.insert(s.nodes[Int(t.node)].parent)
-        }
-    }
+    // Directories that were subdivided: the parent of any tile (a node, an
+    // aggregate or a placeholder). One pass; no per-directory search.
+    var subdivided = Set<UInt32>()
+    for t in tiles where t.parent != Tile.noNode { subdivided.insert(t.parent) }
     let order = tiles.indices.filter { i in
         let r = tiles[i].rect
         return r.width > 2 * pad && r.height > 2 * pad
@@ -91,7 +83,7 @@ public func placeLabels(
         let t = tiles[i]
         guard
             let parts = labelParts(
-                for: t, in: s, subdivided: parentsWithTiles, anonymous: anonymous, locale: locale)
+                for: t, in: s, subdivided: subdivided, locale: locale)
         else { continue }
         let room = CGSize(width: t.rect.width - 2 * pad, height: t.rect.height - 2 * pad)
         guard let (text, size) = fit(parts.words, suffix: parts.suffix, in: room, measure: measure) else { continue }
@@ -106,7 +98,7 @@ public func placeLabels(
 /// The truncatable words and the fixed tail of tile `t`'s label, or nil for a
 /// tile that gets none.
 private func labelParts(
-    for t: Tile, in s: Snapshot, subdivided: Set<UInt32>, anonymous: [UInt8: [CGPoint]], locale: Locale
+    for t: Tile, in s: Snapshot, subdivided: Set<UInt32>, locale: Locale
 ) -> (words: String, suffix: String)? {
     if t.node == Tile.noNode {
         if t.isPermissionDenied {
@@ -117,12 +109,7 @@ private func labelParts(
     }
     if t.isPermissionDenied { return nil }
     precondition(Int(t.node) < s.nodes.count, "placeLabels: tile node \(t.node) outside the snapshot")
-    if s.isDirectory(t.node) {
-        if subdivided.contains(t.node) { return nil }
-        // Children collapsed into an aggregate or placeholder square: the
-        // nearest such tile one level down, inside this one.
-        if let p = anonymous[t.depth &+ 1], t.depth != UInt8.max, p.contains(where: { t.rect.contains($0) }) { return nil }
-    }
+    if subdivided.contains(t.node) { return nil }
     return (labelName(t.node, s), "  " + displaySize(s.allocated(t.node), locale: locale))
 }
 

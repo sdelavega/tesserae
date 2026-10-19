@@ -36,10 +36,15 @@ public struct Tile: Equatable, Sendable {
     public var flags: UInt8  // bit 0 selected, 1 staged, 2 permDenied, 3 aggregated (spec §8)
     public var aggregateCount: UInt32  // number of collapsed siblings, 0 otherwise
     public var aggregateBytes: UInt64
+    /// The directory whose subtree this tile was laid out in (the node whose
+    /// children it is one of, or an aggregate / placeholder for); `noNode` for
+    /// the layout's root tile. Lets a caller find which directories were
+    /// subdivided in one pass.
+    public var parent: UInt32
 
     public init(
         rect: CGRect, node: UInt32, depth: UInt8, flags: UInt8 = 0,
-        aggregateCount: UInt32 = 0, aggregateBytes: UInt64 = 0
+        aggregateCount: UInt32 = 0, aggregateBytes: UInt64 = 0, parent: UInt32 = Tile.noNode
     ) {
         self.rect = rect
         self.node = node
@@ -47,6 +52,7 @@ public struct Tile: Equatable, Sendable {
         self.flags = flags
         self.aggregateCount = aggregateCount
         self.aggregateBytes = aggregateBytes
+        self.parent = parent
     }
 
     public var isAggregate: Bool { flags & Flag.aggregated != 0 }

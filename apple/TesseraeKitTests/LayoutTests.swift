@@ -737,4 +737,43 @@ final class LayoutTests: XCTestCase {
         }
         bench(snap, root: largest, label: "largest directory (\(snap.path(largest)))")
     }
+
+    /// Every tile's `parent` is the directory whose subtree it was laid out
+    /// in; the root tile's is `Tile.noNode`, even for a subtree root.
+    func test_tile_parent_is_the_node_it_was_laid_out_in() {
+        let tiny = (0..<60).map { _ in SyntheticTree.Spec.file(1) }
+        let denied = (0..<20).map { _ in SyntheticTree.Spec.denied }
+        let trees = [
+            SyntheticTree(.dir([.file(1_000_000), .dir([.file(500_000), .dir(tiny + [.file(300_000)])]) , .dir(tiny + denied + [.file(900_000)])])),
+            SyntheticTree.random(seed: 7), SyntheticTree.balanced(seed: 3),
+        ]
+        let b = CGRect(x: 0, y: 0, width: 800, height: 600)
+        for (n, t) in trees.enumerated() {
+            for root in [UInt32(0), 1] where Int(root) < t.count && t.isDirectory(root) {
+                let tiles = squarify(t, root: root, in: b)
+                XCTAssertFalse(tiles.isEmpty)
+                XCTAssertEqual(tiles[0].parent, Tile.noNode, "tree \(n) root \(root): the root tile")
+                var sawAggregate = false, sawPlaceholder = false
+                for (i, tile) in tiles.enumerated() where i > 0 {
+                    XCTAssertNotEqual(tile.parent, Tile.noNode, "tree \(n) tile \(i)")
+                    if tile.node != Tile.noNode {
+                        XCTAssertEqual(tile.parent, t.parents[Int(tile.node)], "tree \(n) tile \(i)")
+                        sawPlaceholder = sawPlaceholder || tile.isPermissionDenied
+                    } else {
+                        sawAggregate = true
+                        sawPlaceholder = sawPlaceholder || tile.isPermissionDenied
+                    }
+                    // Whatever the tile, its parent's tile holds it, one level up.
+                    guard let up = tiles[..<i].last(where: { $0.node == tile.parent }) else {
+                        XCTFail("tree \(n) tile \(i): parent \(tile.parent) has no earlier tile"); continue
+                    }
+                    XCTAssertEqual(up.depth + 1, tile.depth)
+                    XCTAssertTrue(up.rect.insetBy(dx: -1e-6, dy: -1e-6).contains(tile.rect), "tree \(n) tile \(i)")
+                }
+                if n == 0 && root == 0 {
+                    XCTAssertTrue(sawAggregate && sawPlaceholder, "precondition: aggregates and placeholders occur")
+                }
+            }
+        }
+    }
 }

@@ -36,8 +36,10 @@ final class LabelTests: XCTestCase {
     /// a truncation that splits or miscounts a grapheme cluster.
     private let measureUnits: (String) -> CGSize = { CGSize(width: 7 * CGFloat($0.utf16.count), height: 12) }
 
-    private func tile(_ node: UInt32, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> Tile {
-        Tile(rect: CGRect(x: x, y: y, width: w, height: h), node: node, depth: 1)
+    private func tile(
+        _ node: UInt32, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, parent: UInt32 = Tile.noNode
+    ) -> Tile {
+        Tile(rect: CGRect(x: x, y: y, width: w, height: h), node: node, depth: 1, parent: parent)
     }
 
     func test_labels_only_where_they_fit() {
@@ -73,7 +75,7 @@ final class LabelTests: XCTestCase {
         }
 
         // A directory that is subdivided is covered by its children's tiles: no label.
-        let tiles = [tile(t["pack"], 0, 0, 400, 100), tile(t["inner.bin"], 0, 0, 400, 100)]
+        let tiles = [tile(t["pack"], 0, 0, 400, 100), tile(t["inner.bin"], 0, 0, 400, 100, parent: t["pack"])]
         let both = place(tiles, in: s, measure: measure)
         XCTAssertEqual(both.map(\.text), ["inner.bin  1 GB"])
         // ...but the same directory as a terminal tile (no child tile) is labelled.
@@ -296,20 +298,55 @@ final class LabelTests: XCTestCase {
         let s = t.snapshot
         let agg = Tile(
             rect: CGRect(x: 0, y: 0, width: 300, height: 100), node: Tile.noNode, depth: 2,
-            flags: Tile.Flag.aggregated, aggregateCount: 30, aggregateBytes: 30 * 1024)
+            flags: Tile.Flag.aggregated, aggregateCount: 30, aggregateBytes: 30 * 1024, parent: t["onlytiny"])
         let dirTile = Tile(rect: CGRect(x: 0, y: 0, width: 300, height: 100), node: t["onlytiny"], depth: 1)
         // The aggregate is labelled; the directory around it is not.
         XCTAssertEqual(place([dirTile, agg], in: s, measure: measure).map(\.text), ["30 smaller items — 31 kB"])
         XCTAssertEqual(place([dirTile], in: s, measure: measure).map(\.text), ["onlytiny  31 kB"], "alone it is terminal")
         // A placeholder square child (a node with a tile) covers it too.
-        let ph = Tile(rect: CGRect(x: 0, y: 0, width: 4, height: 4), node: t["locked"], depth: 2, flags: Tile.Flag.permDenied)
+        let ph = Tile(rect: CGRect(x: 0, y: 0, width: 4, height: 4), node: t["locked"], depth: 2, flags: Tile.Flag.permDenied, parent: t["onlylocked"])
         let lockedDir = Tile(rect: CGRect(x: 0, y: 0, width: 300, height: 100), node: t["onlylocked"], depth: 1)
         XCTAssertTrue(place([lockedDir, ph], in: s, measure: measure).isEmpty)
         // An aggregate elsewhere (not inside) does not hide it.
         let far = Tile(
             rect: CGRect(x: 500, y: 500, width: 300, height: 100), node: Tile.noNode, depth: 2,
-            flags: Tile.Flag.aggregated, aggregateCount: 3, aggregateBytes: 3000)
+            flags: Tile.Flag.aggregated, aggregateCount: 3, aggregateBytes: 3000, parent: t["bare"])
         XCTAssertEqual(place([dirTile, far], in: s, measure: measure).count, 2)
+    }
+
+    func test_placement_with_20000_tiles_and_many_aggregates_is_linear_enough() {
+        // 2,000 directories, each with a terminal-sized child, an aggregate and a
+        // placeholder square: 20,000 tiles in all, and 4,000 anonymous ones.
+        let dirs = (0..<2000).map { TestSnapshot.Spec.dir("d\($0)", [.file("f\($0)", 1_000_000)]) }
+        let t = TestSnapshot(.dir("/R", dirs))
+        let s = t.snapshot
+        var tiles: [Tile] = []
+        for i in 0..<2000 {
+            let x = CGFloat(i % 20) * 200, y = CGFloat(i / 20) * 40
+            let d = t["d\(i)"]
+            tiles.append(Tile(rect: CGRect(x: x, y: y, width: 200, height: 40), node: d, depth: 1, parent: 0))
+            tiles.append(Tile(rect: CGRect(x: x, y: y, width: 100, height: 40), node: t["f\(i)"], depth: 2, parent: d))
+            tiles.append(
+                Tile(
+                    rect: CGRect(x: x + 100, y: y, width: 100, height: 40), node: Tile.noNode, depth: 2,
+                    flags: Tile.Flag.aggregated, aggregateCount: 5, aggregateBytes: 5000, parent: d))
+            tiles.append(
+                Tile(
+                    rect: CGRect(x: x, y: y + 30, width: 4, height: 4), node: Tile.noNode, depth: 2,
+                    flags: Tile.Flag.permDenied | Tile.Flag.aggregated, aggregateCount: 3, parent: d))
+            for k in 0..<6 {
+                tiles.append(
+                    Tile(
+                        rect: CGRect(x: x + 100 + CGFloat(k) * 3, y: y + 30, width: 3, height: 3), node: Tile.noNode,
+                        depth: 2, flags: Tile.Flag.aggregated, aggregateCount: 1, aggregateBytes: 10, parent: d))
+            }
+        }
+        XCTAssertEqual(tiles.count, 20_000)
+        let start = Date()
+        let labels = place(tiles, in: s, measure: { CGSize(width: CGFloat($0.count), height: 12) })
+        print("placeLabels over \(tiles.count) tiles: \(Date().timeIntervalSince(start) * 1000) ms, \(labels.count) labels")
+        XCTAssertEqual(labels.count, 400, "precondition: the cap was reached by real labels")
+        XCTAssertFalse(labels.contains { $0.text.hasPrefix("d") }, "no covered directory is labelled")
     }
 
     /// German writes "4,2 GB" with a no-break space; compare with plain ones.

@@ -269,7 +269,7 @@ private func layoutChildren(
     for (i, r) in scratch.rects.enumerated() {
         if i < keptCount {
             let c = range.lowerBound + UInt32(i)
-            tiles.append(Tile(rect: r, node: c, depth: childDepth))
+            tiles.append(Tile(rect: r, node: c, depth: childDepth, parent: node))
             if src.isDirectory(c) && min(r.width, r.height) >= p.subdivideMin {
                 queue.append((c, r, childDepth))
             }
@@ -277,7 +277,7 @@ private func layoutChildren(
             tiles.append(
                 Tile(
                     rect: r, node: Tile.noNode, depth: childDepth, flags: Tile.Flag.aggregated,
-                    aggregateCount: tailCount, aggregateBytes: tailBytes))
+                    aggregateCount: tailCount, aggregateBytes: tailBytes, parent: node))
         }
     }
     // Placeholders last: after every sized sibling, packed line by line from
@@ -292,13 +292,13 @@ private func layoutChildren(
                 : CGPoint(x: Double(rect.minX) + along, y: Double(rect.minY) + line)
             let r = CGRect(origin: origin, size: CGSize(width: cell, height: cell))
             if deniedTiles == deniedCount {
-                tiles.append(Tile(rect: r, node: scratch.denied[i], depth: childDepth, flags: Tile.Flag.permDenied))
+                tiles.append(Tile(rect: r, node: scratch.denied[i], depth: childDepth, flags: Tile.Flag.permDenied, parent: node))
             } else {
                 tiles.append(
                     Tile(
                         rect: r, node: Tile.noNode, depth: childDepth,
                         flags: Tile.Flag.permDenied | Tile.Flag.aggregated,
-                        aggregateCount: UInt32(deniedCount), aggregateBytes: 0))
+                        aggregateCount: UInt32(deniedCount), aggregateBytes: 0, parent: node))
             }
         }
     }
