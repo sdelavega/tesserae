@@ -1,6 +1,6 @@
 /*
  * Tesserae: a disk-space visualizer.
- * Copyright (C) 2026 Stephen de la Vega. All rights reserved.
+ * Copyright (C) 2026 Stephen de la Vega
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
