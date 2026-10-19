@@ -46,8 +46,8 @@ export CARGO_TERM_COLOR=never
 nightly="${TESSERAE_NIGHTLY:-$(cat scripts/nightly-toolchain)}"
 
 # Floors, as of Task 5: 15 tests in parse::tests::synthetic, 21 in parse::.
-MIRI_MIN_TESTS=15
-ASAN_MIN_TESTS=21
+MIRI_MIN_TESTS=17
+ASAN_MIN_TESTS=23
 
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
