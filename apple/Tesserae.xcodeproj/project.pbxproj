@@ -49,6 +49,11 @@
 		F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */; };
 		F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */; };
 		F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */; };
+		F2B012A12E3F4A5B6C7D8E /* FileTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B012A12E3F4A5B6C7D8E /* FileTableModel.swift */; };
+		F2B012A22E3F4A5B6C7D8E /* FileTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B012A22E3F4A5B6C7D8E /* FileTableView.swift */; };
+		F2B012A32E3F4A5B6C7D8E /* TopK.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B012A32E3F4A5B6C7D8E /* TopK.swift */; };
+		F2B012A42E3F4A5B6C7D8E /* Selection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B012A42E3F4A5B6C7D8E /* Selection.swift */; };
+		F2B012A52E3F4A5B6C7D8E /* TableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B012A52E3F4A5B6C7D8E /* TableTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -138,6 +143,11 @@
 		F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelPlacer.swift; sourceTree = "<group>"; };
 		F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelsOverlay.swift; sourceTree = "<group>"; };
 		F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelTests.swift; sourceTree = "<group>"; };
+		F1B012A12E3F4A5B6C7D8E /* FileTableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTableModel.swift; sourceTree = "<group>"; };
+		F1B012A22E3F4A5B6C7D8E /* FileTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTableView.swift; sourceTree = "<group>"; };
+		F1B012A32E3F4A5B6C7D8E /* TopK.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopK.swift; sourceTree = "<group>"; };
+		F1B012A42E3F4A5B6C7D8E /* Selection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Selection.swift; sourceTree = "<group>"; };
+		F1B012A52E3F4A5B6C7D8E /* TableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -183,6 +193,7 @@
 				F1A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift */,
 				F1A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift */,
 				F1A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift */,
+				F1B012A52E3F4A5B6C7D8E /* TableTests.swift */,
 				F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */,
 				F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
@@ -222,6 +233,7 @@
 				F3A0010000000000000000A1 /* Navigation */,
 				F3A0020000000000000000A2 /* Interaction */,
 				F3A0030000000000000000A3 /* Labels */,
+				F3B0040000000000000000A4 /* Table */,
 				1144847A770A0D81429BC788 /* FFI */,
 			);
 			path = TesseraeKit;
@@ -304,6 +316,17 @@
 				F1A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift */,
 			);
 			path = Interaction;
+			sourceTree = "<group>";
+		};
+		F3B0040000000000000000A4 /* Table */ = {
+			isa = PBXGroup;
+			children = (
+				F1B012A12E3F4A5B6C7D8E /* FileTableModel.swift */,
+				F1B012A22E3F4A5B6C7D8E /* FileTableView.swift */,
+				F1B012A32E3F4A5B6C7D8E /* TopK.swift */,
+				F1B012A42E3F4A5B6C7D8E /* Selection.swift */,
+			);
+			path = Table;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -479,6 +502,10 @@
 				F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */,
 				F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */,
 				F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */,
+				F2B012A12E3F4A5B6C7D8E /* FileTableModel.swift in Sources */,
+				F2B012A22E3F4A5B6C7D8E /* FileTableView.swift in Sources */,
+				F2B012A32E3F4A5B6C7D8E /* TopK.swift in Sources */,
+				F2B012A42E3F4A5B6C7D8E /* Selection.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -507,6 +534,7 @@
 				F2A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift in Sources */,
 				F2A0071D2E3F4A5B6C7D8E /* ZoomAnimationTests.swift in Sources */,
 				F2A0081D2E3F4A5B6C7D8E /* HitTesterTests.swift in Sources */,
+				F2B012A52E3F4A5B6C7D8E /* TableTests.swift in Sources */,
 				F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */,
 				F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */,
 				F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */,

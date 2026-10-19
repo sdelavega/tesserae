@@ -129,6 +129,13 @@ extension FileKind {
     }
 }
 
+/// The kind of node `node`: a folder, a file of a known `FileKind`, or a file.
+/// The inspector and the file table share it, so they always agree.
+func nodeKind(_ node: UInt32, in s: Snapshot) -> InspectorInfo.Kind {
+    if s.isDirectory(node) { return .folder }
+    return FileKind.kind(forName: s.nameBytes(node)).map { .fileKind($0) } ?? .file
+}
+
 /// The inspector's view of node `node`.
 ///
 /// * Sizes are the node's own: for a directory, rolled up over its subtree.
@@ -142,12 +149,7 @@ extension FileKind {
 public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
     precondition(Int(node) < s.nodes.count, "inspect: node \(node) outside the snapshot")
     let n = s.nodes[Int(node)]
-    let kind: InspectorInfo.Kind
-    if s.isDirectory(node) {
-        kind = .folder
-    } else {
-        kind = FileKind.kind(forName: s.nameBytes(node)).map { .fileKind($0) } ?? .file
-    }
+    let kind = nodeKind(node, in: s)
     return InspectorInfo(
         subject: .node(path: s.path(node)), allocated: n.allocated, logical: n.logical, kind: kind,
         modified: n.modified == 0 ? nil : Date(timeIntervalSince1970: TimeInterval(n.modified)))

@@ -1,0 +1,338 @@
+// Tesserae: a disk-space visualizer.
+// Copyright (C) 2026 Stephen de la Vega
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import AppKit
+import XCTest
+
+@testable import TesseraeKit
+
+/// The file table (spec §8 "File table", §12 accessibility).
+final class TableTests: XCTestCase {
+    private let en = Locale(identifier: "en_US")
+
+    private func names(_ rows: [UInt32], _ s: Snapshot) -> [String] { rows.map { s.name($0) } }
+
+    // MARK: Sorting
+
+    private func fixture() -> TestSnapshot {
+        TestSnapshot(
+            .dir(
+                "/R",
+                [
+                    .file("b10.txt", 300, logical: 10, modified: 500),
+                    .file("b2.txt", 200, logical: 400, modified: 0),
+                    .file("A.mov", 100, logical: 300, modified: 100),
+                    .file("c.zip", 400, logical: 20, modified: -50),
+                    .file("noext", 50, logical: 5, modified: 900),
+                    .dir("d", [.file("inner.png", 250, logical: 30, modified: 700)]),
+                ]))
+    }
+
+    func test_sort_orders_indices_not_nodes_for_every_key() async {
+        let t = fixture()
+        let s = t.snapshot
+        let model = FileTableModel(snapshot: s, scope: 0)
+        let ranOnMain = LockedFlags()
+        model.onSort = { ranOnMain.record($0) }
+
+        let cases: [(SortKey, [String])] = [
+            (.name, ["A.mov", "b2.txt", "b10.txt", "c.zip", "inner.png", "noext"]),
+            (.allocated, ["noext", "A.mov", "b2.txt", "inner.png", "b10.txt", "c.zip"]),
+            (.logical, ["noext", "b10.txt", "c.zip", "inner.png", "A.mov", "b2.txt"]),
+            // A time of 0 (never read) is the oldest of all, older than -50.
+            (.modified, ["b2.txt", "c.zip", "A.mov", "b10.txt", "inner.png", "noext"]),
+            // Equal kinds (the two documents) keep the default order, b10 then b2.
+            (.kind, ["c.zip", "b10.txt", "b2.txt", "noext", "inner.png", "A.mov"]),
+        ]
+        let universe = Set(model.defaultRows())
+        XCTAssertEqual(universe.count, 6, "precondition: the six files; the directory d is not a row")
+        XCTAssertFalse(universe.contains(t["d"]))
+        for (key, ascendingNames) in cases {
+            let up = await model.sorted(by: key, ascending: true)
+            XCTAssertEqual(names(up, s), ascendingNames, "\(key) ascending")
+            XCTAssertEqual(Set(up), universe, "\(key): the same indices, reordered")
+            XCTAssertTrue(up.allSatisfy { Int($0) < s.nodes.count }, "rows are node indices")
+            let down = await model.sorted(by: key, ascending: false)
+            // Descending reverses the order of distinct keys but not of ties.
+            let expectedDown: [String] =
+                key == .kind
+                ? ["A.mov", "inner.png", "noext", "b10.txt", "b2.txt", "c.zip"] : ascendingNames.reversed()
+            XCTAssertEqual(names(down, s), expectedDown, "\(key) descending")
+        }
+        XCTAssertFalse(ranOnMain.values.isEmpty, "precondition: the sort ran")
+        XCTAssertFalse(ranOnMain.values.contains(true), "sorting must run off the main thread")
+    }
+
+    func test_sort_is_stable_on_ties() async {
+        // Few distinct sizes and kinds, so there are many ties.
+        var rng = SplitMix64(seed: 0x57AB1E)
+        let exts = ["mov", "png", "zip", "txt", "bin"]
+        var files: [TestSnapshot.Spec] = []
+        for i in 0..<300 {
+            let size = UInt64(1 + rng.next() % 6) * 100
+            files.append(.file("f\(i).\(exts[Int(rng.next() % 5)])", size, logical: UInt64(1 + rng.next() % 3)))
+        }
+        let t = TestSnapshot(.dir("/R", files))
+        let s = t.snapshot
+        let model = FileTableModel(snapshot: s, scope: 0)
+        let base = model.defaultRows()
+        XCTAssertEqual(base.count, 300)
+        XCTAssertLessThan(Set(base.map { s.allocated($0) }).count, 10, "precondition: heavy ties")
+
+        let keys: [(SortKey, (UInt32) -> String)] = [
+            (.allocated, { String(format: "%020llu", s.allocated($0)) }),
+            (.logical, { String(format: "%020llu", s.nodes[Int($0)].logical) }),
+            (.kind, { nodeKind($0, in: s).displayName }),
+        ]
+        for (key, sortable) in keys {
+            XCTAssertLessThan(Set(base.map(sortable)).count, 10, "precondition: \(key) has ties")
+            for ascending in [true, false] {
+                let got = await model.sorted(by: key, ascending: ascending)
+                // Reference: group by key; groups ordered by key, members in default order.
+                let groups = Dictionary(grouping: base, by: sortable)
+                let order = groups.keys.sorted { ascending ? $0 < $1 : $0 > $1 }
+                let expected = order.flatMap { groups[$0]! }
+                XCTAssertEqual(got, expected, "\(key) ascending=\(ascending)")
+            }
+        }
+    }
+
+    // MARK: Top-K
+
+    func test_top_k_matches_a_full_sort() {
+        var sawDirBiggerThanFile = 0
+        var sawTruncation = 0
+        for seed in 0..<200 {
+            var rng = SplitMix64(seed: UInt64(seed) ^ 0x70B_C0DE)
+            var budget = 60 + Int(rng.next() % 200)
+            func dir(_ name: String, depth: Int) -> TestSnapshot.Spec {
+                var kids: [TestSnapshot.Spec] = []
+                let n = min(budget, 1 + Int(rng.next() % 9))
+                budget -= n
+                for j in 0..<n {
+                    if depth < 4 && rng.unit() < 0.3 {
+                        kids.append(dir("\(name).d\(j)", depth: depth + 1))
+                    } else {
+                        // Few distinct sizes so ties are common.
+                        kids.append(.file("\(name).f\(j)", UInt64(rng.next() % 12) * 1000))
+                    }
+                }
+                return .dir(name, kids)
+            }
+            let t = TestSnapshot(dir("r", depth: 0))
+            let s = t.snapshot
+            // Scope: the root, or any directory.
+            let dirs = (0..<UInt32(s.nodes.count)).filter { s.isDirectory($0) }
+            let scope = seed % 3 == 0 ? UInt32(0) : dirs[Int(rng.next() % UInt64(dirs.count))]
+            var files: [UInt32] = []
+            var stack = [scope]
+            while let i = stack.popLast() {
+                if s.isDirectory(i) { stack.append(contentsOf: s.children(i)) } else { files.append(i) }
+            }
+            let full = files.sorted {
+                s.allocated($0) != s.allocated($1) ? s.allocated($0) > s.allocated($1) : $0 < $1
+            }
+            if let top = full.first, let d = dirs.first(where: { s.allocated($0) > s.allocated(top) }) {
+                _ = d
+                sawDirBiggerThanFile += 1
+            }
+            for k in [0, 1, 5, 17, files.count, files.count + 10] {
+                let got = topK(k, files: s, under: scope)
+                XCTAssertEqual(got, Array(full.prefix(k)), "seed \(seed) scope \(scope) k \(k)")
+                XCTAssertTrue(got.allSatisfy { !s.isDirectory($0) }, "files only")
+                if k > 0 && k < files.count { sawTruncation += 1 }
+            }
+        }
+        XCTAssertGreaterThan(sawDirBiggerThanFile, 100, "precondition: directories outweigh files, so including one would show")
+        XCTAssertGreaterThan(sawTruncation, 250, "precondition: the heap really had to evict")
+    }
+
+    func test_table_default_view_is_the_top_1000_files() async {
+        let files = (0..<1500).map { TestSnapshot.Spec.file("f\($0)", UInt64($0 + 1)) }
+        let t = TestSnapshot(.dir("/R", files))
+        let model = FileTableModel(snapshot: t.snapshot, scope: 0)
+        let rows = model.defaultRows()
+        XCTAssertEqual(rows.count, 1000)
+        XCTAssertEqual(t.snapshot.allocated(rows[0]), 1500)
+        XCTAssertEqual(t.snapshot.allocated(rows[999]), 501)
+        let sorted = await model.sorted(by: .allocated, ascending: true)
+        XCTAssertEqual(sorted.count, 1000, "sorting reorders the 1000, it does not widen them")
+    }
+
+    // MARK: Staleness
+
+    @MainActor
+    func test_a_stale_sort_is_never_applied_to_a_newer_snapshot() async {
+        let a = TestSnapshot(.dir("/A", [.file("a1", 10), .file("a2", 20)]))
+        let b = TestSnapshot(.dir("/B", [.file("b1", 5), .file("b2", 6), .file("b3", 7)]))
+        let rows = FileTableRows()
+        await rows.load(FileTableModel(snapshot: a.snapshot, scope: 0))
+        XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"])
+
+        // A sort of A is in flight; B is loaded before it lands.
+        let staleToken = rows.beginSort()
+        let staleResult = await rows.model!.sorted(by: .allocated, ascending: true)
+        XCTAssertEqual(names(staleResult, a.snapshot), ["a1", "a2"], "precondition: the stale result differs from what B shows")
+        await rows.load(FileTableModel(snapshot: b.snapshot, scope: 0))
+        XCTAssertFalse(rows.accept(staleResult, generation: staleToken))
+        XCTAssertEqual(names(rows.rows, b.snapshot), ["b3", "b2", "b1"], "B's rows stand")
+
+        // Same through the public async path: load another scope during a sort.
+        let sortTask = Task { @MainActor in await rows.sort(by: .name, ascending: true) }
+        await Task.yield()
+        await rows.load(FileTableModel(snapshot: a.snapshot, scope: 0))
+        let applied = await sortTask.value
+        XCTAssertFalse(applied, "a sort begun before the reload is dropped")
+        XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"], "the reload's default order, not the stale sort")
+
+        // And a later sort of the current model is applied.
+        let ok = await rows.sort(by: .name, ascending: true)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(names(rows.rows, a.snapshot), ["a1", "a2"])
+    }
+
+    @MainActor
+    func test_the_newest_of_two_sorts_wins() async {
+        let a = TestSnapshot(.dir("/A", [.file("a1", 10), .file("a2", 20)]))
+        let rows = FileTableRows()
+        await rows.load(FileTableModel(snapshot: a.snapshot, scope: 0))
+        let first = beginAndSort(rows, .allocated, true)
+        let second = beginAndSort(rows, .allocated, false)
+        let (r1, r2) = (await first.value, await second.value)
+        XCTAssertFalse(r1, "the older request is superseded")
+        XCTAssertTrue(r2)
+        XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"])
+    }
+
+    @MainActor
+    private func beginAndSort(_ rows: FileTableRows, _ k: SortKey, _ asc: Bool) -> Task<Bool, Never> {
+        Task { @MainActor in await rows.sort(by: k, ascending: asc) }
+    }
+
+    // MARK: Selection
+
+    func test_apply_selection_sets_and_clears_bit_zero() {
+        var tiles = [
+            Tile(rect: .zero, node: 0, depth: 0),
+            Tile(rect: .zero, node: 3, depth: 1, flags: Tile.Flag.selected | Tile.Flag.staged),
+            Tile(rect: .zero, node: 4, depth: 1, flags: Tile.Flag.staged),
+            Tile(rect: .zero, node: Tile.noNode, depth: 1, flags: Tile.Flag.aggregated, aggregateCount: 3),
+        ]
+        applySelection(&tiles, [4, Tile.noNode])
+        XCTAssertEqual(tiles.map { $0.flags & Tile.Flag.selected }, [0, 0, 1, 0])
+        XCTAssertEqual(tiles[1].flags, Tile.Flag.staged, "other bits survive, the stale selection clears")
+        XCTAssertEqual(tiles[2].flags, Tile.Flag.staged | Tile.Flag.selected)
+        XCTAssertEqual(tiles[3].flags, Tile.Flag.aggregated, "an aggregate is never selected")
+    }
+
+    @MainActor
+    func test_selection_round_trips_between_table_and_treemap() {
+        let t = TestSnapshot(
+            .dir("/R", [.file("a", 40), .file("b", 30), .file("c", 20), .file("d", 10), .dir("sub", [.file("e", 5)])]))
+        let s = t.snapshot
+        let rows = topK(10, files: s, under: 0)
+        XCTAssertEqual(rows.count, 5)
+        let selection = Selection()
+        let coord = FileTableView.Coordinator(snapshot: s, rows: rows, selection: selection, locale: en)
+        let table = coord.makeTableView()
+        XCTAssertEqual(table.numberOfRows, 5)
+        XCTAssertTrue(table.selectedRowIndexes.isEmpty, "precondition: nothing selected")
+
+        func flagged(_ tiles: [Tile]) -> Set<UInt32> {
+            var copy = tiles
+            applySelection(&copy, selection.nodes)
+            return Set(copy.filter { $0.flags & Tile.Flag.selected != 0 }.map(\.node))
+        }
+        let tiles = (0..<UInt32(s.nodes.count)).map { Tile(rect: .zero, node: $0, depth: 0) }
+
+        // Table -> selection -> treemap tiles.
+        let b = rows.firstIndex(of: t["b"])!, d = rows.firstIndex(of: t["d"])!
+        table.selectRowIndexes(IndexSet([b, d]), byExtendingSelection: false)
+        XCTAssertEqual(selection.nodes, [t["b"], t["d"]])
+        XCTAssertEqual(flagged(tiles), [t["b"], t["d"]])
+
+        // Treemap click (writes the shared set) -> table rows.
+        selection.nodes = [t["a"], t["c"]]
+        XCTAssertEqual(table.selectedRowIndexes, IndexSet([rows.firstIndex(of: t["a"])!, rows.firstIndex(of: t["c"])!]))
+        XCTAssertEqual(flagged(tiles), [t["a"], t["c"]])
+
+        // A node the table does not list (a directory) is kept in the set until the table writes it.
+        selection.nodes = [t["sub"], t["d"]]
+        XCTAssertEqual(table.selectedRowIndexes, IndexSet([d]))
+        XCTAssertEqual(selection.nodes, [t["sub"], t["d"]], "showing the table's share did not rewrite the set")
+
+        // Clearing either side clears the other.
+        table.deselectAll(nil)
+        XCTAssertTrue(selection.nodes.isEmpty)
+        selection.nodes = [t["a"]]
+        selection.nodes = []
+        XCTAssertTrue(table.selectedRowIndexes.isEmpty)
+    }
+
+    // MARK: VoiceOver
+
+    @MainActor
+    func test_table_cells_have_voiceover_labels() throws {
+        let t = TestSnapshot(
+            .dir(
+                "/R",
+                [
+                    .file("report.pdf", 4_200_000_000, logical: 4_100_000_000, modified: 1_700_000_000),
+                    .file("tiny", 1500, logical: 7, modified: 0),
+                ]))
+        let s = t.snapshot
+        let rows = topK(10, files: s, under: 0)
+        let coord = FileTableView.Coordinator(snapshot: s, rows: rows, selection: Selection(), locale: en)
+        let table = coord.makeTableView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 200), styleMask: [.titled], backing: .buffered, defer: true)
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        scroll.documentView = table
+        window.contentView!.addSubview(scroll)
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertEqual(table.tableColumns.map(\.title), ["Name", "Allocated", "Logical", "Modified", "Kind"])
+
+        let pdfRow = try XCTUnwrap(rows.firstIndex(of: t["report.pdf"]))
+        for column in 0..<table.numberOfColumns {
+            for row in 0..<table.numberOfRows {
+                let cell = try XCTUnwrap(table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTableCellView)
+                let label = try XCTUnwrap(cell.accessibilityLabel(), "column \(column) row \(row)")
+                let name = s.name(rows[row])
+                XCTAssertTrue(label.hasPrefix(name + ", "), "\(label) names the file")
+                XCTAssertTrue(label.contains(displaySize(s.allocated(rows[row]), locale: en)), "\(label) gives the size")
+                XCTAssertFalse(try XCTUnwrap(cell.textField?.stringValue).isEmpty)
+            }
+        }
+        let nameCell = try XCTUnwrap(table.view(atColumn: 0, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
+        XCTAssertEqual(nameCell.accessibilityLabel(), "report.pdf, 4.2 GB")
+        XCTAssertEqual(nameCell.textField?.stringValue, "report.pdf")
+        let logicalCell = try XCTUnwrap(table.view(atColumn: 2, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
+        XCTAssertEqual(logicalCell.textField?.stringValue, "4.1 GB")
+        XCTAssertEqual(logicalCell.accessibilityLabel(), "report.pdf, 4.2 GB, logical 4.1 GB")
+        let kindCell = try XCTUnwrap(table.view(atColumn: 4, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
+        XCTAssertEqual(kindCell.textField?.stringValue, "Document", "the Inspector's kind")
+        let tinyRow = try XCTUnwrap(rows.firstIndex(of: t["tiny"]))
+        let undated = try XCTUnwrap(table.view(atColumn: 3, row: tinyRow, makeIfNecessary: true) as? NSTableCellView)
+        XCTAssertEqual(undated.textField?.stringValue, "—", "a stored 0 is unknown, not 1970")
+    }
+}
+
+/// Collects values recorded from another thread.
+private final class LockedFlags: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [Bool] = []
+    func record(_ v: Bool) { lock.lock(); _values.append(v); lock.unlock() }
+    var values: [Bool] { lock.lock(); defer { lock.unlock() }; return _values }
+}
