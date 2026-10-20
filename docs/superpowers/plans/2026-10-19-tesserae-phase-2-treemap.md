@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-tesserae-design.md` — §5 (architecture), §6 (node and FFI contract), §8 (layout, rendering, interaction), §11 Rendering, §12 Swift and Lifetime/visual/accessibility tests, §14 (Rust inside Xcode, entitlements, CI, repo layout). Deferred Phase 1 work: `docs/phase-2-backlog.md`.
 
-**Status (2026-10-19): Phase 2 complete.** All fourteen tasks are implemented and reviewed, and the frame gate (Task 14) passed on a Release build (`docs/benchmarks.md`). This plan has since been amended in place to describe what was built: where a ruling changed a task, an **As built** note says what and why, citing the ruling (`P1`–`P3` below, `T1-1`, `T4-1`, `T6-1`…, `G-1`) from the execution ledger kept beside the plan's working files (local, not committed). The original task text stands where it still holds.
+**Status (2026-10-19): Phase 2 complete.** All fourteen tasks are implemented and reviewed, and the frame gate (Task 14) passed on a Release build (`docs/benchmarks.md`). This plan has since been amended in place to describe what was built: where a ruling changed a task, an **As built** note says what and why, citing the ruling (`P1`–`P3` below, `T1-1`, `T4-1`, `T6-1`…, `G-1`) from the execution ledger kept beside the plan's working files (local, not committed). Every ruling the plan or the code cites is restated in **Appendix: Rulings** at the end, so this plan stands on its own. The original task text stands where it still holds.
 
 ## Global Constraints
 
@@ -688,3 +688,42 @@ Spec §17: "Fluid zoom on a million-node tree." Defined here as: on the developm
 - **macOS 13/14 golden-buffer capture and the `O_NOFOLLOW_ANY` check on a 13.x kernel** need a machine or VM running those versions; they stay first in `docs/phase-2-backlog.md`.
 - **Dataless (iCloud) directories** — the spec §16 decision needs a probe that evicts a folder in your iCloud Drive (`brctl evict`), which syncs through your iCloud account. It gets its own short task once you agree to that side effect.
 - Reconciliation, scan report, FDA onboarding (Phase 3); Jetsam and deletion (Phase 4); signing, notarization, Sparkle (Phase 5).
+
+---
+
+## Appendix: Rulings
+
+Copied from the execution ledger (which is local and not committed), one line per ruling: the decision, then the reason. IDs are the ledger's; unnumbered rulings are listed by the name the plan uses for them.
+
+**Pre-flight (before Task 1)**
+
+- **P1** — Task 2 may modify `crates/tesserae-core/src/walk/` to carry `modified` from `RawEntry` into the arena. Reason: the field cannot reach the node otherwise; the plan under-listed a file.
+- **P2** — Task 8's `TreemapView` shows a plain placeholder when there is no Metal device; Task 9 replaces it with the CoreGraphics fallback (spec §11). Reason: keeps each task buildable in order.
+- **P3** — Task 9's Review-Focus-4 test covers layout and both renderers at 0×0, 0.5×0.5 and 1×1 without animation; Task 10 adds `resize_to_zero_mid_animation_emits_no_nan` once `ZoomAnimation` exists. Reason: the animation does not exist until Task 10.
+
+**Task rulings**
+
+- **T1-1** — `walk/mod.rs` was 1,818 lines (over 900) after the split, so two more pure moves were allowed: tests into `walk/tests.rs`, the `Walker` into `walk/walker.rs`. Reason: the 900-line bound exists so later tasks do not land on a giant file.
+- **R2-1** — measure the fixed-region attribute layouts on HFS+, exFAT and FAT32 too (temporary disk images, always detached), not APFS only. Reason: the strict parser would fail scans of external drives whose layout differed.
+- **R2-2** — the directory `modified` rollup ignores contributions later than the scan's start; leaf values stay as read. Reason: 170 files dated 2076 made every directory above them, up to the volume root, read 2076, so Age mode would show the whole disk as recent.
+- **R2-3** — on msdos volumes, allocation is the logical size rounded up to the cluster (from `fstatfs`, measured, not assumed). Reason: `getattrlistbulk` returns 0 `ALLOCSIZE` on FAT, so a FAT32 USB stick scanned as nearly empty (spec §1 criterion 3).
+- **T4-1** — `Snapshot` enforces index and range checks with `precondition` (kept in `-O` builds), not silent fallbacks. Reason: a bad index is a bug and trapping is memory-safe; a crash instead of a wrong label is the point.
+- **T6-1** (a plan defect, accepted) — "worst aspect ratio ≤ 20" is asserted strictly only when siblings differ by at most 10×; heavy-tailed trees are checked against the greedy row rule exactly and their worst ratio is reported. Reason: arbitrary sizes cannot meet 20 (97.7 % / 2.3 % siblings in a square force about 44).
+- **T6-2** — every permission-denied directory child gets a fixed placeholder tile (area = `cullArea`) after its sized siblings, flagged `permDenied`; more than 16 collapse into one "N unreadable folders" tile flagged `permDenied | aggregated`. Reason: an unreadable folder has 0 bytes and would get no tile, and invisible unreadable space is worse than a little borrowed area (spec §1 criterion 3).
+- **T6-3** — placeholders get their own square cells (side √`cullArea`, in a strip) instead of joining the squarified row. Reason: inside a row the first version came out a 0.27 px sliver, invisible, defeating T6-2.
+- **Uncovered strip cells** (accepted with T6-3) — the cells a placeholder strip leaves empty belong to no tile and show the parent tile; coverage is tiles plus those cells. Reason: making a sized rect absorb them would cost it either being a rect or being proportional.
+- **No label on a subdivided directory tile** (Task 11, accepted) — its children are labelled and the breadcrumb names the root. Reason: the children already say what the directory holds.
+- **T11-1** — `Tile` gains `parent: UInt32`, set by the layout, and label placement finds subdivided directories with a set lookup. Reason: the aggregate-cover scan was quadratic in the worst case and ran on the main thread after every zoom.
+- **Replace the complete session on rescan** (Task 13) — `AppSession` owns one snapshot and all index-bearing UI state, and a rescan publishes a new session. Reason: an old view or callback keeps its own snapshot and cannot write new-session state, so no stale index survives.
+- **`FileTableRows.reset` clears synchronously** (Task 13) — it invalidates requests and clears before any asynchronous scope load. Reason: otherwise an old table, or a superseded sort, could stay visible during navigation.
+- **Add the return-to-ancestor animation** (Task 14) — ascending animates too, using the existing transform with a virtual old-layout window. Reason: the frame gate requires both directions, in and out.
+- **Report the cadences separately** (Task 14) — CPU, GPU, preparation, draw cadence and presented cadence are recorded apart, and the gate is judged on presentation. Reason: GPU completion alone is not visible smoothness; reporting them together risked a false pass.
+- **G-1** — measure the frame gate on a Release build before any further optimisation or change to the gate's definition. Reason: the gate is about what ships; this corrected the measurement and did not relax the threshold.
+- **G-2** — label placement moves off the main actor (text measured with CoreText, results applied on the main actor under the generation guard). Reason: it blocked the main actor about 67 ms after each settle, overlapping the next transition in the gate's back-to-back protocol.
+
+**Review finding IDs cited here and in the code** (from review reports, not rulings)
+
+- **P3-1** — `verify-ffi-fresh` missed a deleted or renamed source and a toolchain change with an mtime check alone; closed by the content-hash stamp.
+- **Final review C1** — `aggregateLogical` computed `depth + 1` on a `UInt8`: a single-child chain 255 or more levels deep saturates the layout's depth, so hovering the aggregate trapped (in Release too) and the parent could not be found at a saturated depth. Fixed by looking the parent up through `Tile.parent`; no code does depth arithmetic on `UInt8` any more.
+- **Final review I1** — `InspectorInfo`'s path was lossy display text yet documented as what actions use. A node's actionable identity is now its index plus its raw path bytes (`Snapshot.rawPath`, `InspectorInfo.rawPath`); `displayPath` is for reading only, and path assembly traps on a parent cycle.
+- **Final review I2** — the table, its VoiceOver labels and the breadcrumb used `Snapshot.name`, which neutralises only C0 controls. Every name the user reads now goes through the labels' sanitiser (`Snapshot.displayName`): bidi overrides and isolates and other format characters become U+FFFD (the joiners U+200C/U+200D excepted), newlines and tabs become spaces.

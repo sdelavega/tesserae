@@ -732,8 +732,9 @@ visible children with no sorting at layout time.
   contiguous** in the array.
 - **The aggregate covers its share even when small.** The tail tile is
   emitted even if its own area is below the 16px² cull, so siblings plus
-  aggregate always cover the parent exactly; it is the one tile that may be
-  smaller than the cull threshold.
+  aggregate always cover the parent exactly (or, when the parent has
+  permission-denied placeholders, the rect their strip leaves; see the next
+  item); it is the one tile that may be smaller than the cull threshold.
 - **Permission-denied directories get placeholders.** An unreadable
   directory has 0 bytes, so by size it would get no tile and the reserved
   status colour would have nothing to paint. Each one instead gets a

@@ -43,10 +43,11 @@ pub const FLAG_SYMLINK: u16 = 1 << 1;
 // Bit 2 is `arena::FLAG_HARDLINK_DUP` and bit 3 is `arena::FLAG_PERM_DENIED`;
 // both are set by the walker and carried through freeze unchanged.
 
-/// [`TessNode::flags`] bit 4: the node stands for several siblings merged by
-/// the treemap's tail aggregation. Phase 2 sets it on its own layout output;
-/// freeze never does. It is defined here only so that no other flag can claim
-/// the bit.
+/// [`TessNode::flags`] bit 4: reserved for a node standing for several
+/// siblings merged by the treemap's tail aggregation. Nothing sets it: freeze
+/// never does (a test asserts it), and the snapshot is immutable, so the app's
+/// layout marks aggregate tiles on its own `Tile` flags (a separate set of
+/// bits). It is defined here only so that no other flag can claim the bit.
 pub const FLAG_AGGREGATED: u16 = 1 << 4;
 
 // The five bits are fixed by the spec and read by Phase 2; two flags sharing a

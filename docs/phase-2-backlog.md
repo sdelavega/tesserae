@@ -137,3 +137,99 @@ rulings list kept outside the repo.
   project's hardened runtime enabled. The measurements used a command-line-only
   `ENABLE_HARDENED_RUNTIME=NO` override. Resolve development/distribution signing
   deliberately; keep the shipped hardened-runtime setting enabled.
+
+## Phase 2 → Phase 3 (deferred by the Phase 2 final review)
+
+Everything the Phase 2 final whole-branch review deferred rather than fixed before
+merge, one line each with the review's reason. (Its critical and important
+findings C1, I1 and I2, and its doc batch, were fixed before merge.)
+
+**Minor findings**
+
+- **M1 — performance paths the frame gate never exercised.** The gate ran Depth mode
+  only. Type focus calls `FileKind.kind(forName:)` per tile, allocating a `Data` and a
+  `String` each time (about 15–20 ms per 50k lookups at `-O`), before the first zoom
+  frame on every navigation and selection change, and the CG fallback recomputes
+  `tiles.map(colourOf)` for its cache key on every SwiftUI update, hover included. Each
+  hover republishes `AppSession.inspector`, re-evaluating `SessionView.body`: two full
+  `filter`s over the tiles, three `[Tile]` comparisons and a palette allocation. Fix
+  together: a per-node kind byte computed off the main actor, the inspector in its own
+  `ObservableObject`, selected and denied tile lists precomputed when `tiles` is set,
+  and Age, Type focus and hover-sweep runs added to the gate protocol.
+- **M2 — the Age reference time is fixed at launch** (`AppModel.swift`,
+  `ageReference = Date()`). After a day of uptime a rescan buckets ages against a stale
+  "now" and anything newer lands in "future → most recent". Use the snapshot's scan
+  start, or a `Date()` captured per session.
+- **M3 — a hung root open blocks every later scan until relaunch**
+  (`ScanCoordinator.start` awaits the previous task). A `finish` stuck in `open` on a
+  dead SMB/NFS share never returns; Cancel abandons only the waiting scan, new scans
+  chain behind it at zero counts, and the call holds a cooperative-pool thread. This
+  is the UI half of the engine item "hung root open not covered by the watchdog".
+- **M4 — duplicated logic.** `sizeText` in `ContentView.swift` duplicates
+  `displaySize` without the locale injection. `Snapshot.name` (C0 only) and
+  `Snapshot.displayName` (the label rules) are still two sanitisers; every display
+  site now uses `displayName`, but the table's name sort still keys on `name`.
+  (`aggregateLogical`'s copy of the tail rule went with the C1 fix.)
+- **M5 — dead or vestigial code.** `Snapshot.generation` is public, Debug-only and
+  unused outside tests. `TessNode`'s `AGGREGATED` bit is reserved and set by nothing
+  (now documented so). `Tile.Flag.staged`, and `TileInstance.depth`/`.flags`, which the
+  shader never reads, are reserved by the spec (`staged` is documented as reserved for
+  Phase 3).
+- **M6 — the FFI input stamp includes `crates/tesserae-testutil`**, which is not an
+  input of the shipped library, so editing a test utility forces `just ffi`. Scope
+  `ffi_inputs` to `tesserae-core`, `tesserae-ffi`, the manifests and the header.
+- **M7 — CLI doc wording** (`crates/tesserae-cli/src/main.rs`): the root's `modified`
+  is the newest *not later than the scan's start*, not "the newest anywhere beneath
+  it" — the cutoff exists for the 2076-dated files.
+- **M8 — a refused `tess_scan_begin` shows `strerror(EINVAL)`** ("Invalid argument")
+  in the welcome view; "Couldn't start the scan" would be accurate.
+- **M9 — `FileTableContent` is `@unchecked Sendable`** but could be plain `Sendable`
+  (`Snapshot` is Sendable, and so is `[UInt32]`).
+
+**Parked items deferred by the review's triage**
+
+- `assemble_path` doc on '/'-terminated components (P1-2): behaviour is correct and
+  tested; a one-line doc clarification.
+- FAT symlink 1,536-byte rule measured on a 4-byte target only (P2-1): XSym is
+  fixed-format and the doc argues the whole 1,025–1,536 range rounds the same; measure
+  one 1,024-byte target to close it. FAT symlinks are rare.
+- Bundle ID `io.github.sdelavega.*` is a placeholder: needs the user's decision before
+  the first signing; does not block merge.
+- The FFI stamp ignores `include_str!`/`include_bytes!` and `.cargo/config.toml`: the
+  only includes are in benches, and there is no `.cargo/config.toml` or build.rs.
+  Revisit if the shipped crates gain any.
+- An unreadable folder under a zero-size directory gets no tile (P6-1): it is counted
+  in the banner's unreadable total, so nothing is silent; the Phase 3 scan report lists
+  it (spec §8 records the deferral).
+- The placeholder-cap branch is untested (P6-2): reachable only with non-default
+  parameters; a test with a custom `LayoutParameters` is cheap.
+- `balancedSlivers` is printed, not asserted (P6-3): weakens one test, not behaviour.
+- `typeFocus([])`, more than three kinds and duplicates are not asserted: correct by
+  inspection (`prefix(3)`, `firstIndex`).
+- `FileKind` lookup allocates per call: fix with M1.
+- Border corner and fractional-coverage render cases are untested: CG and GPU agree
+  byte for byte on the snapshot fixtures.
+- Thread-safety of `TreemapRenderer.renderOffscreen` and `draw` is undocumented: mark
+  the type `@MainActor` (or document it main-only); every caller already is.
+- `Int()` of length/cell in the placeholder strip can trap at absurd bounds (about
+  1e100 pt): unreachable from the UI; clamp as a `Double` when next touched.
+- The `stripArea` test helper mirrors the implementation: add one hard-coded expected
+  strip.
+- The watchdog test's `elapsed < 2500 ms` is not retried: already a known flake risk.
+- No layer-resize test: covered indirectly by the resize-cancels-zoom tests.
+- Label overlay frame and offset are untested: verified visually in the gate runs; a
+  view-hosting test would pin them.
+- The table's `viewFor` constructs cells per call: 1,000 rows; reuse cells with
+  `makeView(withIdentifier:)` later.
+- Table column titles are not localised: for the localisation phase.
+- `sawDirBiggerThanFile` scope in a table test: test hygiene.
+- Label line height is a constant that matches AppKit only for the tested fonts: a
+  test checks it across scripts; revisit for exotic fallback fonts.
+- Labels flicker during live resize: visual only; hide them for the whole live resize
+  and fade in after it ends.
+
+**Found while fixing the review's findings**
+
+- `Navigator.breadcrumb` (and its `parent` walk) has no parent-cycle bound, unlike
+  `Snapshot`'s path builders, which now trap on a cycle. Only a malformed snapshot can
+  have one; bound the loop by the node count when next touched.

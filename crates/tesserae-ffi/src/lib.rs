@@ -76,8 +76,12 @@ pub const TESS_FLAG_HARDLINK_DUP: u16 = 1 << 2;
 /// `TessNode.flags` bit: a directory that could not be read for lack of
 /// permission, so it holds no children and no bytes.
 pub const TESS_FLAG_PERM_DENIED: u16 = 1 << 3;
-/// `TessNode.flags` bit: a node standing for several siblings merged by the
-/// treemap's tail aggregation. Set by the app's layout, never by a scan.
+/// `TessNode.flags` bit: reserved for a node standing for several siblings
+/// merged by the treemap's tail aggregation. Nothing sets it: no scan does (a
+/// freeze test asserts it), and the snapshot is immutable, so the app's layout
+/// marks aggregate tiles on its own `Tile` flags instead (a separate set of
+/// bits, where `aggregated` is `1 << 3`). Defined so no other flag can claim
+/// the bit.
 pub const TESS_FLAG_AGGREGATED: u16 = 1 << 4;
 
 /// `TessNode.parent` of the root, and `TessView.root` of a snapshot that holds
