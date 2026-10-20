@@ -671,3 +671,39 @@ status 3. A file already at the output path is not removed, so the exit status,
 not the file's presence, says whether this run succeeded.
 The `ENABLE_HARDENED_RUNTIME=NO` override is the same local-only signing
 decision as above; the project's settings are unchanged.
+
+## Phase 2: Release frame gate — PASSED (2026-10-19)
+
+The gate measured on the configuration that ships. Same M5, 60 Hz display, Xcode 27.2 (27B48),
+commit `26e4ac5`, Release build with the local-only `ENABLE_HARDENED_RUNTIME=NO` override above.
+Launched with `open -n -W --env TESSERAE_FRAME_TIMING=1 --env TESSERAE_FRAME_GATE_AUTORUN=/System/Volumes/Data
+--env TESSERAE_FRAME_GATE_OUT=…` so Tesserae is its own responsible process for privacy prompts.
+Two runs of the same binary, no rebuild between them: the first cleared any access prompts and warmed
+the file cache (its result is recorded below as a cross-check, not counted); the second is the measured run.
+
+Both runs: 6,153,124 nodes, incomplete = NONE, 1,006 unreadable, viewport 1679 × 493.5 pt,
+the unchanged five-directory (Users, Applications, System, Library, opt), three-repetition, in/out protocol.
+
+| measurement (measured run) | samples | max ms | p99 ms | median ms |
+|---|---:|---:|---:|---:|
+| Presentation interval | 414 | 16.668 | 16.667 | 16.667 |
+| Draw callback interval | 414 | 17.734 | 17.690 | 16.665 |
+| GPU execution | 444 | 9.312 | 6.892 | 1.464 |
+| CPU frame encode | 444 | 0.874 | 0.473 | 0.076 |
+| Raw layout | 30 | 1.202 | 1.202 | 0.467 |
+| Preparation before animation | 30 | 1.281 | 1.281 | 0.490 |
+| Label placement (off the main actor) | 30 | 51.517 | 51.517 | 43.666 |
+| Label apply (main actor) | 30 | 0.124 | 0.124 | 0.041 |
+
+Presentation intervals spanning more than one refresh (> 25 ms): **0 of 414** (warm-up run: 0 of 415,
+maximum 16.671 ms). The largest presentation interval, 16.668 ms, is one refresh period; the 1 µs over
+16.667 ms is timestamp jitter on a frame that did not miss its refresh. **Every zoom frame was presented
+at the display's refresh cadence (the plan's "16.7 ms at 60 Hz"), and relayout stayed far under 100 ms:
+the Phase 2 gate passes.**
+
+What changed against the failed Debug `-O` captures: the Release build drops Snapshot's debug liveness
+lock and assertions, and label measurement moved off the main actor (Core Text). Draw-callback intervals
+of 17.7 ms are MTKView callback jitter, not missed presentations.
+
+Raw capture (minified): [`benchmarks/2026-10-19-phase2-release-gate.json`](benchmarks/2026-10-19-phase2-release-gate.json);
+summarise with `python3 scripts/frame-gate-summary.py <capture>`.
