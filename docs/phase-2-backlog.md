@@ -228,6 +228,25 @@ findings C1, I1 and I2, and its doc batch, were fixed before merge.)
 - Labels flicker during live resize: visual only; hide them for the whole live resize
   and fade in after it ends.
 
+**Resolved after the review**
+
+- ~~**I3 — label ink unreadable on the darker ramp steps.**~~ Resolved: the user
+  chose per-tile ink. Each label (and the unreadable-folder lock badge) uses
+  whichever of `#0b0b0b` and `#f0efec` has the higher WCAG 2.x contrast against
+  its tile's actual fill, in every mode and appearance (spec §8 "Labels"). The
+  worst case over every shipped colour is now 4.46:1, on `#2a78d6` (light depth
+  step 3 and light type-focus slot 1, with `#0b0b0b`), just under the 4.5:1 AA
+  text threshold; every other fill is at least 4.69:1. A test pins the 4.46 so
+  any palette change re-reports it. Bringing `#2a78d6` to 4.5 needs a palette
+  change, a spec decision.
+- ~~**Watchdog test's wall-clock bound.**~~ `watchdog_names_a_blocked_reopen_across_arenas`
+  now asserts the ordering it means (the walk returned before the blocked
+  reopen's sleep ended, read from a flag the hook sets after its sleep)
+  instead of `elapsed < 2500 ms`, which failed once at 2.58 s. The sibling
+  `watchdog_reports_the_path_a_worker_stalled_on` still carries the same
+  `elapsed < 2500 ms` bound (alongside its ordering check) and could flake the
+  same way.
+
 **Found while fixing the review's findings**
 
 - `Navigator.breadcrumb` (and its `parent` walk) has no parent-cycle bound, unlike

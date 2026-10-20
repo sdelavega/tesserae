@@ -21,10 +21,14 @@ import Foundation
 public struct PlacedLabel: Equatable, Sendable {
     public var rect: CGRect
     public var text: String
+    /// The tile the label sits on, so the overlay can choose its ink from the
+    /// tile's colour in whatever mode and appearance are current.
+    public var tile: Tile
 
-    public init(rect: CGRect, text: String) {
+    public init(rect: CGRect, text: String, tile: Tile) {
         self.rect = rect
         self.text = text
+        self.tile = tile
     }
 }
 
@@ -92,7 +96,7 @@ public func placeLabels(
         out.append(
             PlacedLabel(
                 rect: CGRect(x: t.rect.minX + pad, y: t.rect.minY + pad, width: size.width, height: size.height),
-                text: text))
+                text: text, tile: t))
     }
     return out
 }

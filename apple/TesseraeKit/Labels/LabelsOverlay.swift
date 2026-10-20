@@ -18,20 +18,50 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// The label font and ink (spec §8 "Labels"): text wears the ink tokens
-/// `#0b0b0b` (light) and `#f0efec` (dark), never a tile's colour.
+/// The label font and ink (spec §8 "Labels"): text wears one of the two ink
+/// tokens, `#0b0b0b` and `#f0efec`, never a tile's colour. Which one is
+/// chosen per tile: the token with the higher WCAG 2.x contrast against that
+/// tile's fill (`ink(over:)`; final review I3).
 public enum LabelStyle {
     public static let fontSize: CGFloat = 11
     public static var font: NSFont { .systemFont(ofSize: fontSize) }
 
-    /// The ink as sRGB 0...255 components.
+    /// The appearance's ink token as sRGB 0...255 components: `#0b0b0b` in
+    /// light mode, `#f0efec` in dark. Text over a tile uses `ink(over:)`.
     public static func ink(dark: Bool) -> (red: Int, green: Int, blue: Int) {
         dark ? (0xf0, 0xef, 0xec) : (0x0b, 0x0b, 0x0b)
     }
 
-    public static func inkColour(dark: Bool) -> Color {
-        let c = ink(dark: dark)
-        return Color(.sRGB, red: Double(c.red) / 255, green: Double(c.green) / 255, blue: Double(c.blue) / 255)
+    /// The ink token that reads better on `fill` (sRGB-encoded, as the
+    /// palette is): whichever of `#0b0b0b` and `#f0efec` has the higher WCAG
+    /// 2.x contrast ratio against it; the dark token on a tie.
+    public static func ink(over fill: SIMD4<Float>) -> (red: Int, green: Int, blue: Int) {
+        let darkInk = ink(dark: false), lightInk = ink(dark: true)
+        let f = relativeLuminance(Double(fill.x), Double(fill.y), Double(fill.z))
+        func lum(_ c: (red: Int, green: Int, blue: Int)) -> Double {
+            relativeLuminance(Double(c.red) / 255, Double(c.green) / 255, Double(c.blue) / 255)
+        }
+        return contrast(f, lum(darkInk)) >= contrast(f, lum(lightInk)) ? darkInk : lightInk
+    }
+
+    /// WCAG 2.x relative luminance of an sRGB-encoded colour (components 0...1).
+    static func relativeLuminance(_ r: Double, _ g: Double, _ b: Double) -> Double {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// WCAG 2.x contrast ratio of two relative luminances.
+    static func contrast(_ a: Double, _ b: Double) -> Double {
+        (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    public static func inkColour(dark: Bool) -> Color { colour(ink(dark: dark)) }
+
+    /// `ink(over:)` as a SwiftUI colour.
+    public static func inkColour(over fill: SIMD4<Float>) -> Color { colour(ink(over: fill)) }
+
+    private static func colour(_ c: (red: Int, green: Int, blue: Int)) -> Color {
+        Color(.sRGB, red: Double(c.red) / 255, green: Double(c.green) / 255, blue: Double(c.blue) / 255)
     }
 
     /// The label font as a Core Text font. Core Text fonts and lines are
@@ -78,7 +108,10 @@ public enum LabelStyle {
     }
 }
 
-/// Positioned `Text` views over the treemap, one per `PlacedLabel`.
+/// Positioned `Text` views over the treemap, one per `PlacedLabel`, each in
+/// the ink that reads better on its tile's colour (`ink(for:)`): the colour
+/// the renderer paints, from the same `palette` and `colourOf`, so the ink
+/// follows the colour mode and the appearance without a relayout.
 ///
 /// Hidden while a zoom animates (`zoomRunning`, i.e. a `ZoomAnimation` that is
 /// not `isFinished`) so SwiftUI never diffs hundreds of views per frame, and
@@ -87,15 +120,36 @@ public enum LabelStyle {
 /// the pointer from the treemap underneath.
 public struct LabelsOverlay: View {
     public var labels: [PlacedLabel]
+    public var palette: [SIMD4<Float>]
+    public var colourOf: (Tile) -> UInt16
     public var dark: Bool
     public var zoomRunning: Bool
     public var labelsReady: Bool
 
-    public init(labels: [PlacedLabel], dark: Bool, zoomRunning: Bool, labelsReady: Bool) {
+    public init(
+        labels: [PlacedLabel], palette: [SIMD4<Float>], colourOf: @escaping (Tile) -> UInt16, dark: Bool,
+        zoomRunning: Bool, labelsReady: Bool
+    ) {
         self.labels = labels
+        self.palette = palette
+        self.colourOf = colourOf
         self.dark = dark
         self.zoomRunning = zoomRunning
         self.labelsReady = labelsReady
+    }
+
+    /// The ink for `label`: the token that reads better on its tile's fill,
+    /// or the appearance's token if the tile's colour index is outside the
+    /// palette (never expected; the renderer would not paint it either).
+    public func ink(for label: PlacedLabel) -> (red: Int, green: Int, blue: Int) {
+        let i = Int(colourOf(label.tile))
+        guard palette.indices.contains(i) else { return LabelStyle.ink(dark: dark) }
+        return LabelStyle.ink(over: palette[i])
+    }
+
+    private func inkColour(for label: PlacedLabel) -> Color {
+        let c = ink(for: label)
+        return Color(.sRGB, red: Double(c.red) / 255, green: Double(c.green) / 255, blue: Double(c.blue) / 255)
     }
 
     public var body: some View {
@@ -103,7 +157,7 @@ public struct LabelsOverlay: View {
             ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
                 Text(label.text)
                     .font(Font(LabelStyle.font))
-                    .foregroundColor(LabelStyle.inkColour(dark: dark))
+                    .foregroundColor(inkColour(for: label))
                     .lineLimit(1)
                     .fixedSize()
                     .offset(x: label.rect.minX, y: label.rect.minY)

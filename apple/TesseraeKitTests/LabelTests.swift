@@ -17,6 +17,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import TesseraeKit
@@ -57,7 +58,11 @@ final class LabelTests: XCTestCase {
 
         // Exactly the label plus 4 pt on every side: it fits, 4 pt in from the corner.
         let exact = place([tile(t["movie.mov"], 10, 20, 127, 20)], in: s, measure: measure)
-        XCTAssertEqual(exact, [PlacedLabel(rect: CGRect(x: 14, y: 24, width: 119, height: 12), text: text)])
+        XCTAssertEqual(
+            exact,
+            [PlacedLabel(
+                rect: CGRect(x: 14, y: 24, width: 119, height: 12), text: text,
+                tile: tile(t["movie.mov"], 10, 20, 127, 20))])
 
         // One point too narrow for the full text: the name is cut, not the size.
         let narrow = place([tile(t["movie.mov"], 0, 0, 126, 20)], in: s, measure: measure)
@@ -159,7 +164,7 @@ final class LabelTests: XCTestCase {
             flags: Tile.Flag.aggregated, aggregateCount: 12_345, aggregateBytes: 4_200_000_000)
         XCTAssertEqual(
             place([agg], in: s, measure: measure),
-            [PlacedLabel(rect: CGRect(x: 4, y: 4, width: 203, height: 12), text: "12,345 smaller items — 4.2 GB")])
+            [PlacedLabel(rect: CGRect(x: 4, y: 4, width: 203, height: 12), text: "12,345 smaller items — 4.2 GB", tile: agg)])
         let one = Tile(
             rect: CGRect(x: 0, y: 0, width: 300, height: 30), node: Tile.noNode, depth: 1,
             flags: Tile.Flag.aggregated, aggregateCount: 1, aggregateBytes: 1_000_000)
@@ -196,6 +201,164 @@ final class LabelTests: XCTestCase {
         // And a permission-denied tile that is big enough (an unreadable root).
         let big = Tile(rect: CGRect(x: 0, y: 0, width: 300, height: 300), node: t["locked0"], depth: 0, flags: Tile.Flag.permDenied)
         XCTAssertTrue(place([big], in: s, measure: measure).isEmpty)
+    }
+
+    // MARK: Ink per tile (final review I3)
+
+    /// WCAG 2.x contrast of two sRGB-encoded colours, computed here
+    /// independently of `LabelStyle`.
+    private func wcag(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double {
+        func lum(_ c: SIMD3<Double>) -> Double {
+            func lin(_ v: Double) -> Double {
+                let s = (v * 255).rounded() / 255
+                return s <= 0.04045 ? s / 12.92 : pow((s + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * lin(c.x) + 0.7152 * lin(c.y) + 0.0722 * lin(c.z)
+        }
+        let x = lum(a), y = lum(b)
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    private func rgb(_ c: SIMD4<Float>) -> SIMD3<Double> { SIMD3(Double(c.x), Double(c.y), Double(c.z)) }
+    private func rgb(_ c: (red: Int, green: Int, blue: Int)) -> SIMD3<Double> {
+        SIMD3(Double(c.red), Double(c.green), Double(c.blue)) / 255
+    }
+    private func hex(_ c: SIMD3<Double>) -> String {
+        String(format: "#%02x%02x%02x", Int((c.x * 255).rounded()), Int((c.y * 255).rounded()), Int((c.z * 255).rounded()))
+    }
+
+    private static let kinds: [FileKind] = [.video, .images, .audio]
+    nonisolated(unsafe) private static let modes: [(String, ColourMode)] = [
+        ("depth", .depth), ("age", .age(now: Date(timeIntervalSince1970: 2_000_000_000))), ("type focus", .typeFocus(kinds)),
+    ]
+
+    /// Every colour of every shipped palette (depth, age, type focus; light and
+    /// dark; with the neutral and status entries each palette carries) gets
+    /// whichever ink token reads better on it. The minimum best contrast is
+    /// reported and pinned: it is below 4.5:1 on #2a78d6, and this test
+    /// records that, it does not hide it.
+    func test_label_ink_is_the_token_with_the_higher_contrast_on_every_palette_colour() {
+        let darkInk = rgb(LabelStyle.ink(dark: false)), lightInk = rgb(LabelStyle.ink(dark: true))
+        XCTAssertEqual(hex(darkInk), "#0b0b0b", "precondition: the light-mode token")
+        XCTAssertEqual(hex(lightInk), "#f0efec", "precondition: the dark-mode token")
+        var minimum = (ratio: Double.infinity, colour: "", palette: "")
+        var seen = Set<String>()
+        for (name, mode) in Self.modes {
+            for dark in [false, true] {
+                let palette = Palette.colours(mode, dark: dark)
+                XCTAssertGreaterThanOrEqual(palette.count, 5, "precondition: neutral, status and a ramp")
+                for (i, colour) in palette.enumerated() {
+                    let fill = rgb(colour)
+                    let onDark = wcag(fill, darkInk), onLight = wcag(fill, lightInk)
+                    let chosen = rgb(LabelStyle.ink(over: colour))
+                    let expected = onDark >= onLight ? darkInk : lightInk
+                    let label = "\(name) \(dark ? "dark" : "light") [\(i)] \(hex(fill))"
+                    XCTAssertEqual(hex(chosen), hex(expected), label)
+                    XCTAssertEqual(wcag(fill, chosen), max(onDark, onLight), label)
+                    seen.insert(hex(fill))
+                    let best = max(onDark, onLight)
+                    if best < minimum.ratio { minimum = (best, hex(fill), label) }
+                }
+            }
+        }
+        XCTAssertEqual(seen.count, 19, "precondition: every distinct shipped colour was visited")
+        print("label ink: minimum best contrast \(String(format: "%.3f", minimum.ratio)):1 on \(minimum.colour) (\(minimum.palette))")
+        XCTAssertEqual(minimum.colour, "#2a78d6")
+        XCTAssertEqual((minimum.ratio * 100).rounded() / 100, 4.46)
+    }
+
+    /// The overlay picks each label's ink from its tile's actual colour, so the
+    /// ink follows the mode and the appearance without a relayout: the darkest
+    /// depth step, a neutral aggregate and an unreadable (status) tile.
+    @MainActor
+    func test_overlay_ink_follows_each_tiles_colour_in_every_mode() {
+        let t = TestSnapshot(.dir("/R", [.file("deep.bin", 10), .denied("locked")]))
+        let s = t.snapshot
+        let deep = Tile(rect: CGRect(x: 0, y: 0, width: 100, height: 20), node: t["deep.bin"], depth: 4, parent: 0)
+        let agg = Tile(
+            rect: CGRect(x: 0, y: 20, width: 100, height: 20), node: Tile.noNode, depth: 1,
+            flags: Tile.Flag.aggregated, aggregateCount: 3, aggregateBytes: 30, parent: 0)
+        let locked = Tile(
+            rect: CGRect(x: 0, y: 40, width: 100, height: 20), node: t["locked"], depth: 1,
+            flags: Tile.Flag.permDenied, parent: 0)
+        let labels = [deep, agg, locked].map { PlacedLabel(rect: $0.rect, text: "x", tile: $0) }
+        let darkInk = "#0b0b0b", lightInk = "#f0efec"
+        func inks(_ mode: ColourMode, dark: Bool) -> [String] {
+            let overlay = LabelsOverlay(
+                labels: labels, palette: Palette.colours(mode, dark: dark),
+                colourOf: { colourIndex(for: $0, in: s, mode: mode) }, dark: dark, zoomRunning: false, labelsReady: true)
+            return labels.map { hex(rgb(overlay.ink(for: $0))) }
+        }
+        let age = Self.modes[1].1
+        XCTAssertEqual(colourIndex(for: deep, in: s, mode: .depth), UInt16(Palette.firstColourIndex + 4), "precondition")
+        // Light depth: #104281 (darkest) light ink; #5598e7 for the aggregate at depth 1; amber.
+        XCTAssertEqual(inks(.depth, dark: false), [lightInk, darkInk, darkInk])
+        // Dark depth: #9ec5f4 (lightest) dark ink; #256abf light ink; amber.
+        XCTAssertEqual(inks(.depth, dark: true), [darkInk, lightInk, darkInk])
+        // Age: the aggregate is neutral (#d6d5cf / #3a3a37); amber stays dark ink.
+        XCTAssertEqual(inks(age, dark: false)[1...], [darkInk, darkInk])
+        XCTAssertEqual(inks(age, dark: true)[1...], [lightInk, darkInk])
+        // An index outside the palette falls back to the appearance's token.
+        let broken = LabelsOverlay(
+            labels: labels, palette: [], colourOf: { _ in 7 }, dark: true, zoomRunning: false, labelsReady: true)
+        XCTAssertEqual(hex(rgb(broken.ink(for: labels[0]))), lightInk)
+    }
+
+    /// Each label carries the tile it was placed on (the overlay's ink comes
+    /// from that tile's colour), not some other tile of the layout.
+    func test_each_label_carries_its_own_tile() {
+        let t = TestSnapshot(.dir("/R", [.file("a", 30), .file("b", 20), .file("c", 10)]))
+        let tiles = [
+            tile(t["a"], 0, 0, 200, 30, parent: 0), tile(t["b"], 0, 30, 200, 30, parent: 0),
+            tile(t["c"], 0, 60, 200, 30, parent: 0),
+        ]
+        let labels = place(tiles, in: t.snapshot, measure: measure)
+        XCTAssertEqual(labels.count, 3, "precondition: every tile is labelled")
+        for label in labels {
+            XCTAssertTrue(label.tile.rect.insetBy(dx: labelPadding, dy: labelPadding).contains(label.rect), label.text)
+            XCTAssertTrue(label.text.hasPrefix(t.snapshot.displayName(label.tile.node)), label.text)
+        }
+        XCTAssertEqual(Set(labels.map(\.tile.node)), Set(tiles.map(\.node)))
+    }
+
+    /// Drawn for real: a label over the darkest light-mode depth step
+    /// (#104281) is painted in the light ink, so its glyphs are lighter than
+    /// the fill, where the old fixed light-mode ink drew them darker.
+    @MainActor
+    func test_a_label_over_the_darkest_depth_step_renders_in_the_light_ink() throws {
+        let t = TestSnapshot(.dir("/R", [.file("deep.bin", 10)]))
+        let s = t.snapshot
+        let size = CGSize(width: 200, height: 40)
+        let deep = Tile(rect: CGRect(origin: .zero, size: size), node: t["deep.bin"], depth: 4, parent: 0)
+        let palette = Palette.colours(.depth, dark: false)
+        let fillIndex = Int(colourIndex(for: deep, in: s, mode: .depth))
+        let fill = palette[fillIndex]
+        XCTAssertEqual(hex(rgb(fill)), "#104281", "precondition: the darkest light-mode depth step")
+        let label = PlacedLabel(rect: CGRect(x: 4, y: 4, width: 150, height: 14), text: "WWWW MMMM 4.2 GB", tile: deep)
+        let view = NSHostingView(
+            rootView: ZStack(alignment: .topLeading) {
+                Color(.sRGB, red: Double(fill.x), green: Double(fill.y), blue: Double(fill.z))
+                LabelsOverlay(
+                    labels: [label], palette: palette, colourOf: { colourIndex(for: $0, in: s, mode: .depth) },
+                    dark: false, zoomRunning: false, labelsReady: true)
+            }.frame(width: size.width, height: size.height))
+        view.frame = CGRect(origin: .zero, size: size)
+        view.appearance = NSAppearance(named: .aqua)
+        view.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let srgb = try XCTUnwrap(rep.converting(to: .sRGB, renderingIntent: .default))
+        var brightest = 0.0, darkest = 1.0
+        let w = srgb.pixelsWide, h = srgb.pixelsHigh
+        for y in 0..<h { for x in 0..<w {
+            guard let c = srgb.colorAt(x: x, y: y) else { continue }
+            let l = (c.redComponent + c.greenComponent + c.blueComponent) / 3
+            brightest = max(brightest, l)
+            darkest = min(darkest, l)
+        } }
+        let fillLevel = Double(fill.x + fill.y + fill.z) / 3
+        XCTAssertGreaterThan(brightest, 0.8, "glyphs in the light ink (#f0efec) appear over the fill")
+        XCTAssertGreaterThan(darkest, fillLevel - 0.06, "nothing is drawn darker than the fill (no dark ink)")
     }
 
     func test_overlay_ink_tokens_and_fade() {

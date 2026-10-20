@@ -180,8 +180,9 @@ private struct SessionView: View {
                                     onHover: { session.hover(tile: $0) },
                                     colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) })
                                 LabelsOverlay(
-                                    labels: session.labels, dark: dark, zoomRunning: session.zoomRunning,
-                                    labelsReady: session.labelsReady)
+                                    labels: session.labels, palette: Palette.colours(mode, dark: dark),
+                                    colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) }, dark: dark,
+                                    zoomRunning: session.zoomRunning, labelsReady: session.labelsReady)
                                 ForEach(Array(session.tiles.enumerated().filter { $0.element.flags & Tile.Flag.selected != 0 }), id: \.offset) { _, tile in
                                     Rectangle().stroke(Color.primary, lineWidth: 2)
                                         .frame(width: tile.rect.width, height: tile.rect.height)
@@ -209,7 +210,7 @@ private struct SessionView: View {
         ForEach(Array(session.tiles.enumerated().filter { $0.element.isPermissionDenied }), id: \.offset) { _, tile in
             Image(systemName: "lock.fill")
                 .font(.system(size: min(11, max(3, min(tile.rect.width, tile.rect.height) - 1))))
-                .foregroundStyle(LabelStyle.inkColour(dark: dark))
+                .foregroundStyle(LabelStyle.inkColour(over: Palette.colours(mode, dark: dark)[Palette.statusIndex]))
                 .frame(width: tile.rect.width, height: tile.rect.height, alignment: .topLeading)
                 .offset(x: tile.rect.minX, y: tile.rect.minY)
                 .accessibilityLabel("Unreadable folder")

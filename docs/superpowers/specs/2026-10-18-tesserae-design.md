@@ -888,8 +888,15 @@ then labels fade in over 0.15s, keyed on the labels *arriving* rather than on
 the zoom ending — this avoids SwiftUI diffing
 hundreds of views per frame and reads as intentional. Name plus size,
 middle-truncated, only where it fits (inside the tile with 4pt padding, largest
-tiles first, at most 400). Text wears ink tokens
-(`#0b0b0b` / `#f0efec`), never a tile's series colour.
+tiles first, at most 400). Text wears one of the two ink tokens
+(`#0b0b0b` / `#f0efec`), never a tile colour. The ink is **chosen per tile**,
+not per appearance: of the two tokens, whichever has the higher WCAG 2.x
+contrast ratio against that tile's fill as currently painted (the palette is
+sRGB-encoded), so it follows the colour mode, the appearance and the neutral,
+status and aggregate fills. Over every shipped colour the chosen ink reaches
+at least 4.46:1; the one fill below 4.5:1 is `#2a78d6` (light depth step 3,
+light type-focus slot 1) at 4.46:1 with `#0b0b0b`. The lock badge on an
+unreadable tile takes the ink the same way (on the status amber, `#0b0b0b`).
 
 As built:
 
