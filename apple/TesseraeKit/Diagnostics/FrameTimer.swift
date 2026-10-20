@@ -160,6 +160,8 @@ public final class FrameTimer: @unchecked Sendable {
 ///   the capture and quit.
 /// * `TESSERAE_FRAME_GATE_OUT=<absolute path>` is where the capture goes;
 ///   by default `tesserae-frame-gate.json` in `NSTemporaryDirectory()`.
+/// * `TESSERAE_FRAME_GATE_TIMEOUT=<seconds>` (default 900) bounds the whole
+///   autorun: waiting for a visible window, the scan and the protocol.
 public struct FrameGateConfiguration: Equatable, Sendable {
     public struct Invalid: Error, CustomStringConvertible {
         public let description: String
@@ -168,6 +170,8 @@ public struct FrameGateConfiguration: Equatable, Sendable {
     public let timingEnabled: Bool
     public let autorunRoot: URL?
     public let output: URL
+    /// One deadline for the whole autorun: window, scan and protocol.
+    public let timeout: Duration
 
     public static func timingRequested(in environment: [String: String]) -> Bool {
         environment["TESSERAE_FRAME_TIMING"] == "1"
@@ -186,6 +190,14 @@ public struct FrameGateConfiguration: Equatable, Sendable {
         }
         output = try absolute("TESSERAE_FRAME_GATE_OUT")
             ?? temporaryDirectory.appendingPathComponent("tesserae-frame-gate.json")
+        if let value = environment["TESSERAE_FRAME_GATE_TIMEOUT"], !value.isEmpty {
+            guard let seconds = Double(value), seconds.isFinite, seconds * 1000 >= 1 else {
+                throw Invalid(description: "TESSERAE_FRAME_GATE_TIMEOUT must be a positive number of seconds, not \(value)")
+            }
+            timeout = .milliseconds(Int64((seconds * 1000).rounded()))
+        } else {
+            timeout = .seconds(900)
+        }
     }
 
     /// This process's configuration.
@@ -220,6 +232,9 @@ public final class PhaseGateRunner: ObservableObject {
     }
 
     deinit { task?.cancel() }
+
+    /// Stops a running gate before it writes anything; it reports `.failed`.
+    public func cancel() { task?.cancel() }
 
     /// Runs the gate on `session` if its snapshot is a scan of `requiredRoot`
     /// with at least `minimumNodes` nodes, writes the capture to `output`
@@ -344,60 +359,91 @@ public final class PhaseGateRunner: ObservableObject {
     }
 }
 
+/// One deadline shared by every stage of an autorun.
+public struct FrameGateDeadline: Sendable {
+    public let end: ContinuousClock.Instant
+
+    public init(after duration: Duration) { end = .now + duration }
+
+    public func isExpired() -> Bool { ContinuousClock.now >= end }
+
+    /// Polls `condition` every `poll` until it holds (true), or the deadline
+    /// passes or the task is cancelled (false). Once expired, every wait
+    /// fails at once, even for a condition that holds.
+    @MainActor
+    public func wait(every poll: Duration = .milliseconds(50), until condition: () -> Bool) async -> Bool {
+        while !Task.isCancelled {
+            let now = ContinuousClock.now
+            guard now < end else { return false }
+            if condition() { return true }
+            try? await Task.sleep(for: min(poll, end - now))
+        }
+        return false
+    }
+}
+
 /// `TESSERAE_FRAME_GATE_AUTORUN`: scan the root, fill the main screen's
 /// visible frame, run the gate, write the capture, quit. Progress and the
-/// outcome go to standard error; the exit status is 0 only if a capture was
-/// saved.
+/// outcome go to standard error. Exit status: 0 only if a valid capture was
+/// saved; 1 if the scan or the run failed; 3 if `timeout` passed first (no
+/// window became visible, the scan or the protocol took too long), in which
+/// case nothing is written.
 @MainActor
 public enum FrameGateAutorun {
-    public static func run(root: URL, output: URL, model: AppModel, runner: PhaseGateRunner) async {
+    public static func run(root: URL, output: URL, timeout: Duration, model: AppModel, runner: PhaseGateRunner) async {
+        let deadline = FrameGateDeadline(after: timeout)
         func log(_ line: String) { FileHandle.standardError.write(Data(("tesserae frame gate: " + line + "\n").utf8)) }
         func quit(_ code: Int32) {
             if code == 0 { NSApp.terminate(nil) } else { exit(code) }
         }
-        log("scanning \(root.path)")
+        func expired(_ stage: String) {
+            log("timed out after \(timeout) waiting for \(stage); no capture was written")
+            quit(3)
+        }
+        log("scanning \(root.path) (timeout \(timeout))")
         model.scan(root)
         // Fill the screen as soon as the window exists; the scan runs meanwhile.
-        while !Task.isCancelled {
-            if let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }),
-                let screen = window.screen ?? NSScreen.main {
-                // Launched from a shell the app may not be frontmost, and an
-                // occluded window's MTKView never draws.
-                NSApp.activate(ignoringOtherApps: true)
-                window.setFrame(screen.visibleFrame, display: true)
-                window.makeKeyAndOrderFront(nil)
-                log("window \(Int(screen.visibleFrame.width)) x \(Int(screen.visibleFrame.height)) points")
-                break
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
+        var window: NSWindow?
+        guard await deadline.wait(until: {
+            window = NSApp.windows.first { $0.isVisible && $0.canBecomeMain }
+            return window != nil
+        }), let window, let screen = window.screen ?? NSScreen.main else { return expired("a visible window") }
+        // Launched from a shell the app may not be frontmost, and an
+        // occluded window's MTKView never draws.
+        NSApp.activate(ignoringOtherApps: true)
+        window.setFrame(screen.visibleFrame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        log("window \(Int(screen.visibleFrame.width)) x \(Int(screen.visibleFrame.height)) points")
         var lastReport = ContinuousClock.now
-        scanning: while !Task.isCancelled {
+        guard await deadline.wait(every: .milliseconds(100), until: {
             switch model.scanState {
-            case .failed(let errno):
-                log("scan failed: \(String(cString: strerror(errno)))")
-                return quit(1)
-            case .finished:
-                break scanning
+            case .finished, .failed: return true
             case .scanning(let progress) where ContinuousClock.now - lastReport > .seconds(10):
                 lastReport = .now
                 log("scanned \(progress.dirs) folders, \(progress.files) files")
-            case .idle, .scanning:
-                break
+                return false
+            case .idle, .scanning: return false
             }
-            try? await Task.sleep(for: .milliseconds(100))
+        }) else { return expired("the scan") }
+        if case .failed(let errno) = model.scanState {
+            log("scan failed: \(String(cString: strerror(errno)))")
+            return quit(1)
         }
         guard let session = model.session else {
             log("the scan produced no snapshot")
             return quit(1)
         }
         // Let the window settle at its new size and lay out.
-        let deadline = ContinuousClock.now + .seconds(10)
-        while session.tiles.isEmpty && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        guard await deadline.wait(until: { !session.tiles.isEmpty }) else { return expired("the first layout") }
         try? await Task.sleep(for: .milliseconds(500))
         log("running on \(session.snapshot.nodes.count) nodes")
-        let outcome = await withCheckedContinuation { (done: CheckedContinuation<PhaseGateRunner.Outcome, Never>) in
-            runner.run(session: session, requiredRoot: root.path, minimumNodes: 0, output: output) { done.resume(returning: $0) }
+        var outcome: PhaseGateRunner.Outcome?
+        runner.run(session: session, requiredRoot: root.path, minimumNodes: 0, output: output) { outcome = $0 }
+        guard await deadline.wait(every: .milliseconds(100), until: { outcome != nil }), let outcome else {
+            // The runner writes and reports in one main-actor step, so with no
+            // outcome yet nothing has been written; cancelling keeps it so.
+            runner.cancel()
+            return expired("the protocol")
         }
         switch outcome {
         case .saved(let url):

@@ -45,7 +45,8 @@ struct ContentView: View {
         .task {
             guard let phaseGate, case .success(let gate) = FrameGateConfiguration.current,
                 let root = gate.autorunRoot else { return }
-            await FrameGateAutorun.run(root: root, output: gate.output, model: model, runner: phaseGate)
+            await FrameGateAutorun.run(
+                root: root, output: gate.output, timeout: gate.timeout, model: model, runner: phaseGate)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -178,7 +179,9 @@ private struct SessionView: View {
                                     onDroppedTiles: { session.droppedTileCount = $0 },
                                     onHover: { session.hover(tile: $0) },
                                     colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) })
-                                LabelsOverlay(labels: session.labels, dark: dark, zoomRunning: session.zoomRunning)
+                                LabelsOverlay(
+                                    labels: session.labels, dark: dark, zoomRunning: session.zoomRunning,
+                                    labelsReady: session.labelsReady)
                                 ForEach(Array(session.tiles.enumerated().filter { $0.element.flags & Tile.Flag.selected != 0 }), id: \.offset) { _, tile in
                                     Rectangle().stroke(Color.primary, lineWidth: 2)
                                         .frame(width: tile.rect.width, height: tile.rect.height)

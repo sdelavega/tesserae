@@ -217,6 +217,85 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(FrameTimer(enabled: false).isEnabled)
     }
 
+    func test_frame_gate_timeout_from_the_environment() throws {
+        let tmp = URL(fileURLWithPath: "/private/tmp/gate-test", isDirectory: true)
+        XCTAssertEqual(try FrameGateConfiguration(environment: [:], temporaryDirectory: tmp).timeout, .seconds(900))
+        XCTAssertEqual(
+            try FrameGateConfiguration(environment: ["TESSERAE_FRAME_GATE_TIMEOUT": "120"], temporaryDirectory: tmp).timeout,
+            .seconds(120))
+        XCTAssertEqual(
+            try FrameGateConfiguration(environment: ["TESSERAE_FRAME_GATE_TIMEOUT": "2.5"], temporaryDirectory: tmp).timeout,
+            .milliseconds(2500))
+        for bad in ["0", "-5", "soon", "nan", "inf"] {
+            XCTAssertThrowsError(
+                try FrameGateConfiguration(environment: ["TESSERAE_FRAME_GATE_TIMEOUT": bad], temporaryDirectory: tmp), bad)
+        }
+    }
+
+    func test_frame_gate_deadline_bounds_every_wait() async throws {
+        let clock = ContinuousClock()
+        // A condition that never holds: the wait gives up at the deadline, not later.
+        let short = FrameGateDeadline(after: .milliseconds(150))
+        XCTAssertFalse(short.isExpired(), "precondition")
+        let start = clock.now
+        let ended = expectation(description: "the wait ended")
+        var met: Bool?
+        // In a task, so a wait that ignored its deadline fails here instead of hanging the suite.
+        let waiting = Task { @MainActor in
+            met = await short.wait(every: .milliseconds(20)) { false }
+            ended.fulfill()
+        }
+        await fulfillment(of: [ended], timeout: 2)
+        waiting.cancel()
+        let waited = clock.now - start
+        XCTAssertEqual(met, false)
+        XCTAssertTrue(short.isExpired())
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(140))
+        XCTAssertLessThan(waited, .seconds(2), "the wait ends at the deadline")
+        // Once expired, later waits fail at once: one deadline covers every stage.
+        let again = clock.now
+        let late = await short.wait { false }
+        XCTAssertFalse(late)
+        XCTAssertLessThan(clock.now - again, .milliseconds(100))
+        // A condition that holds returns true, including one that becomes true later.
+        let long = FrameGateDeadline(after: .seconds(10))
+        let alreadyMet = await long.wait { true }
+        XCTAssertTrue(alreadyMet)
+        var polls = 0
+        let laterMet = await long.wait(every: .milliseconds(5)) { polls += 1; return polls >= 3 }
+        XCTAssertTrue(laterMet)
+        XCTAssertEqual(polls, 3)
+        // An expired deadline fails even a condition that holds: one deadline ends every stage.
+        let expired = FrameGateDeadline(after: .zero)
+        XCTAssertTrue(expired.isExpired())
+        let metLate = await expired.wait { true }
+        XCTAssertFalse(metLate)
+    }
+
+    func test_phase_gate_cancel_stops_the_run_without_writing_a_capture() async throws {
+        let t = TestSnapshot(.dir("/gate", (1...5).map { .dir("d\($0)", [.file("f\($0)", UInt64(10 * $0))]) }))
+        let app = AppModel()
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 800, height: 600))
+        session.setZoomRunning(true, generation: session.layoutGeneration)  // each transition would take 3 s
+        let output = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gate-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: output) }
+        let runner = PhaseGateRunner(timer: FrameTimer(enabled: true), pause: .milliseconds(100))
+        let done = expectation(description: "gate stopped")
+        var outcome: PhaseGateRunner.Outcome?
+        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output) {
+            outcome = $0
+            done.fulfill()
+        }
+        XCTAssertTrue(runner.isRunning, "precondition")
+        try await Task.sleep(for: .milliseconds(50))
+        runner.cancel()
+        await fulfillment(of: [done], timeout: 2)
+        XCTAssertEqual(outcome, .failed("The frame gate was cancelled."))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path), "a cancelled run writes nothing")
+    }
+
     func test_phase_gate_runs_the_protocol_on_the_requested_root_and_writes_the_capture() async throws {
         let dirs = ["d1", "d2", "d3", "d4", "d5", "d6"]
         let t = TestSnapshot(.dir("/gate", dirs.enumerated().map { i, d in .dir(d, [.file("\(d).bin", UInt64(100 - i))]) }))
@@ -438,6 +517,36 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(texts.contains { $0.hasPrefix("top") }, "only the current layout's labels: \(texts)")
         XCTAssertGreaterThan(probe.calls, 0)
         XCTAssertEqual(probe.mainThreadCalls, 0, "label text is measured off the main thread")
+    }
+
+    func test_labels_ready_only_once_the_current_layouts_labels_are_applied() async throws {
+        let t = TestSnapshot(.dir("/R", [.dir("sub", [.file("large", 80), .file("small", 20)]), .file("top", 60)]))
+        let app = AppModel()
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        let probe = MeasureProbe()
+        session.labelMeasure = { text in probe.measure(text) }
+        XCTAssertFalse(session.labelsReady, "nothing placed yet")
+        session.resize(to: CGSize(width: 800, height: 600))
+        XCTAssertTrue(probe.waitUntilBlocked(), "precondition: placement started")
+        XCTAssertFalse(session.labelsReady, "not ready while placement runs")
+        probe.release()
+        await session.waitForLabels()
+        XCTAssertFalse(session.labels.isEmpty, "precondition")
+        XCTAssertTrue(session.labelsReady)
+        // A resize hides the stale labels at once, before the new ones are placed.
+        session.resize(to: CGSize(width: 700, height: 500))
+        XCTAssertFalse(session.labelsReady, "stale labels are hidden at the start of a resize relayout")
+        await session.waitForLabels()
+        XCTAssertTrue(session.labelsReady)
+        // A navigation: not ready through the zoom and until the settle's placement is applied.
+        session.navigator.descend(into: t["sub"])
+        XCTAssertFalse(session.labelsReady)
+        session.setZoomRunning(true, generation: session.layoutGeneration)
+        session.setZoomRunning(false, generation: session.layoutGeneration)
+        XCTAssertFalse(session.labelsReady, "the zoom ending is not the labels arriving")
+        await session.waitForLabels()
+        XCTAssertTrue(session.labelsReady)
     }
 
     func test_renderer_inputs_only_rebuild_when_their_identity_or_values_change() throws {

@@ -202,22 +202,47 @@ final class LabelTests: XCTestCase {
         XCTAssertTrue(LabelStyle.ink(dark: false) == (0x0b, 0x0b, 0x0b))
         XCTAssertTrue(LabelStyle.ink(dark: true) == (0xf0, 0xef, 0xec))
         XCTAssertEqual(LabelStyle.fadeDuration, 0.15)
-        XCTAssertEqual(LabelStyle.opacity(zoomRunning: true), 0)
-        XCTAssertEqual(LabelStyle.opacity(zoomRunning: false), 1)
+        XCTAssertEqual(LabelStyle.opacity(zoomRunning: true, labelsReady: true), 0)
+        XCTAssertEqual(LabelStyle.opacity(zoomRunning: false, labelsReady: true), 1)
 
         var zoom = ZoomAnimation(
             from: CGRect(x: 10, y: 10, width: 100, height: 100), viewport: CGRect(x: 0, y: 0, width: 400, height: 300))
         XCTAssertFalse(zoom.isFinished, "precondition: a real animation")
-        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished), 0)
+        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished, labelsReady: true), 0)
         zoom.advance(to: 0.1)
-        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished), 0)
+        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished, labelsReady: true), 0)
         zoom.advance(to: 0.25)
-        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished), 1)
+        XCTAssertEqual(LabelStyle.opacity(zoomRunning: !zoom.isFinished, labelsReady: true), 1)
 
         // The real font: wider text measures wider, and a line has a height.
         let a = LabelStyle.measure("ab"), b = LabelStyle.measure("abcdef")
         XCTAssertGreaterThan(a.height, 0)
         XCTAssertGreaterThan(b.width, a.width)
+    }
+
+    /// Labels arrive after the zoom ends (placement runs off the main actor),
+    /// so the fade is keyed on their arrival: hidden, without animation, while
+    /// motion runs or before the current layout's labels are applied; faded in
+    /// over `fadeDuration` once both hold.
+    func test_label_fade_waits_for_the_labels_to_arrive() {
+        typealias State = (zoomRunning: Bool, labelsReady: Bool)
+        func step(_ s: State) -> (Double, TimeInterval?) {
+            (LabelStyle.opacity(zoomRunning: s.zoomRunning, labelsReady: s.labelsReady),
+             LabelStyle.fadeDuration(zoomRunning: s.zoomRunning, labelsReady: s.labelsReady))
+        }
+        // A navigation: zoom starts, ends, then the labels are applied.
+        let navigation: [State] = [(false, true), (true, false), (false, false), (false, true)]
+        let seen = navigation.map(step)
+        XCTAssertEqual(seen.map(\.0), [1, 0, 0, 1])
+        XCTAssertEqual(seen.map(\.1), [0.15, nil, nil, 0.15], "hide at once; fade in only on arrival")
+        // The zoom ending alone does not show anything: the old fade ran on an empty overlay.
+        XCTAssertEqual(step((false, false)).0, 0)
+        // A resize hides the stale labels at once, then fades the new ones in.
+        XCTAssertEqual(step((false, false)).1, nil)
+        XCTAssertEqual(step((false, true)).1, LabelStyle.fadeDuration)
+        // Labels that are ready stay hidden while motion runs.
+        XCTAssertEqual(step((true, true)).0, 0)
+        XCTAssertNil(step((true, true)).1)
     }
 
     func test_label_measure_matches_appkit_and_is_safe_off_the_main_thread() {

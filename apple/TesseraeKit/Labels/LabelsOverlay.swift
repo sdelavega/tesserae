@@ -64,25 +64,38 @@ public enum LabelStyle {
     /// Seconds the labels take to fade in once motion settles.
     public static let fadeDuration: TimeInterval = 0.15
 
-    /// Opacity of the labels: hidden while a zoom runs, shown after it.
-    public static func opacity(zoomRunning: Bool) -> Double { zoomRunning ? 0 : 1 }
+    /// Opacity of the labels: shown only when no zoom runs and the current
+    /// layout's labels have arrived (`AppSession.labelsReady`; placement runs
+    /// off the main actor and finishes after motion settles).
+    public static func opacity(zoomRunning: Bool, labelsReady: Bool) -> Double {
+        !zoomRunning && labelsReady ? 1 : 0
+    }
+
+    /// How a change to this state animates: a fade-in over `fadeDuration`
+    /// when the labels become visible, nothing (at once) when they hide.
+    public static func fadeDuration(zoomRunning: Bool, labelsReady: Bool) -> TimeInterval? {
+        opacity(zoomRunning: zoomRunning, labelsReady: labelsReady) == 1 ? fadeDuration : nil
+    }
 }
 
 /// Positioned `Text` views over the treemap, one per `PlacedLabel`.
 ///
 /// Hidden while a zoom animates (`zoomRunning`, i.e. a `ZoomAnimation` that is
 /// not `isFinished`) so SwiftUI never diffs hundreds of views per frame, and
-/// faded in over `LabelStyle.fadeDuration` when it ends. Hit testing is off:
-/// the labels never take the pointer from the treemap underneath.
+/// until the current layout's labels arrive (`labelsReady`), then faded in
+/// over `LabelStyle.fadeDuration`. Hit testing is off: the labels never take
+/// the pointer from the treemap underneath.
 public struct LabelsOverlay: View {
     public var labels: [PlacedLabel]
     public var dark: Bool
     public var zoomRunning: Bool
+    public var labelsReady: Bool
 
-    public init(labels: [PlacedLabel], dark: Bool, zoomRunning: Bool) {
+    public init(labels: [PlacedLabel], dark: Bool, zoomRunning: Bool, labelsReady: Bool) {
         self.labels = labels
         self.dark = dark
         self.zoomRunning = zoomRunning
+        self.labelsReady = labelsReady
     }
 
     public var body: some View {
@@ -97,8 +110,10 @@ public struct LabelsOverlay: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .opacity(LabelStyle.opacity(zoomRunning: zoomRunning))
-        .animation(zoomRunning ? nil : .easeIn(duration: LabelStyle.fadeDuration), value: zoomRunning)
+        .opacity(LabelStyle.opacity(zoomRunning: zoomRunning, labelsReady: labelsReady))
+        .animation(
+            LabelStyle.fadeDuration(zoomRunning: zoomRunning, labelsReady: labelsReady).map { .easeIn(duration: $0) },
+            value: LabelStyle.opacity(zoomRunning: zoomRunning, labelsReady: labelsReady))
         .allowsHitTesting(false)
     }
 }

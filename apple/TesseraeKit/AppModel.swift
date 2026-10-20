@@ -47,6 +47,10 @@ public final class AppSession: ObservableObject, Identifiable {
         }
     }
     private var decorationsPending = false
+    /// Whether `labels` belong to the current layout: false from the start of
+    /// every relayout (a resize hides the stale set at once) until placement
+    /// for the current layout is applied. The overlay fades in on this.
+    @Published public private(set) var labelsReady = false
     public private(set) var layoutGeneration: UInt64 = 0
     @Published public var droppedTileCount = 0
     @Published public private(set) var root: UInt32
@@ -103,6 +107,7 @@ public final class AppSession: ObservableObject, Identifiable {
     private func relayout() {
         layoutGeneration &+= 1
         inspector = nil
+        labelsReady = false
         guard root != Tile.noNode, size.width.isFinite, size.height.isFinite,
             size.width >= 1, size.height >= 1 else {
             tiles = []
@@ -168,6 +173,7 @@ public final class AppSession: ObservableObject, Identifiable {
             guard let placed, let self, !Task.isCancelled, generation == self.layoutGeneration else { return }
             let apply = FrameTimer.shared.begin("labels-apply", tiles: placed.count)
             self.labels = placed
+            self.labelsReady = true
             FrameTimer.shared.end(apply)
         }
     }

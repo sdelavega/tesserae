@@ -664,5 +664,10 @@ runs the five-directory × 3 protocol, writes the capture (default:
 goes to standard error, and the exit status is 0 only for a valid capture. The
 capture records `root`, `build` and `settleTimeouts`. A run in which any zoom
 did not finish within 3 s is saved but reported as invalid (exit status 1).
+`TESSERAE_FRAME_GATE_TIMEOUT` (seconds, default 900) bounds the whole run:
+waiting for a visible window, the scan and the protocol. If it passes first,
+the app writes nothing, says which stage it was waiting for, and exits with
+status 3. A file already at the output path is not removed, so the exit status,
+not the file's presence, says whether this run succeeded.
 The `ENABLE_HARDENED_RUNTIME=NO` override is the same local-only signing
 decision as above; the project's settings are unchanged.
