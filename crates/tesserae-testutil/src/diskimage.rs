@@ -45,6 +45,38 @@ const VOLUME_NAME: &str = "TesseraeTest";
 /// failure.
 const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How many times a force detach is tried while the device reports busy, and
+/// the pause between tries (about 3 s in all before giving up).
+const FORCE_DETACH_ATTEMPTS: u32 = 10;
+const FORCE_DETACH_DELAY: Duration = Duration::from_millis(300);
+
+/// Whether `e` is `hdiutil` saying the device is busy ("Resource busy").
+fn is_busy(e: &io::Error) -> bool {
+    e.to_string().to_ascii_lowercase().contains("resource busy")
+}
+
+/// Run `op` up to `attempts` times, calling `sleep(delay)` between tries, for
+/// as long as it fails with a busy error. Any other error, or success, ends it
+/// at once; if every try is busy the last error is returned. `sleep` is a
+/// parameter so the policy can be tested without waiting or `hdiutil`.
+fn retry_while_busy(
+    attempts: u32,
+    delay: Duration,
+    mut sleep: impl FnMut(Duration),
+    mut op: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    let mut tries = 1;
+    loop {
+        match op() {
+            Err(e) if is_busy(&e) && tries < attempts => {
+                tries += 1;
+                sleep(delay);
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The filesystem a [`DiskImage`] is formatted with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Filesystem {
@@ -207,9 +239,18 @@ impl DiskImage {
         if !self.mounted {
             return Ok(());
         }
-        let result = run(Command::new("hdiutil")
-            .args(["detach", "-force"])
-            .arg(&self.mountpoint));
+        // `-force` still reports "Resource busy" while the kernel is tearing
+        // down a just-closed descriptor (seen on CI), which clears on its own.
+        let result = retry_while_busy(
+            FORCE_DETACH_ATTEMPTS,
+            FORCE_DETACH_DELAY,
+            thread::sleep,
+            || {
+                run(Command::new("hdiutil")
+                    .args(["detach", "-force"])
+                    .arg(&self.mountpoint))
+            },
+        );
         if result.is_ok() {
             self.mounted = false;
         }
@@ -482,6 +523,67 @@ mod tests {
         assert!(!is_mounted(&mnt));
         image.force_detach().unwrap();
         drop(held);
+    }
+
+    fn busy() -> io::Error {
+        io::Error::other(
+            "\"hdiutil\" failed (exit status: 16): couldn't eject \"disk7\" - Resource busy",
+        )
+    }
+
+    #[test]
+    fn a_busy_detach_is_retried_until_it_succeeds() {
+        let (mut calls, mut sleeps) = (0, Vec::new());
+        let r = retry_while_busy(
+            10,
+            Duration::from_millis(5),
+            |d| sleeps.push(d),
+            || {
+                calls += 1;
+                if calls < 4 {
+                    Err(busy())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        r.unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(sleeps, vec![Duration::from_millis(5); 3]);
+    }
+
+    #[test]
+    fn a_detach_that_stays_busy_gives_up_after_the_bound_with_the_last_error() {
+        let (mut calls, mut slept) = (0, 0);
+        let err = retry_while_busy(
+            10,
+            Duration::ZERO,
+            |_| slept += 1,
+            || {
+                calls += 1;
+                Err(io::Error::other(format!("attempt {calls}: Resource busy")))
+            },
+        )
+        .unwrap_err();
+        assert_eq!((calls, slept), (10, 9));
+        assert!(err.to_string().contains("attempt 10"), "{err}");
+    }
+
+    #[test]
+    fn a_detach_error_that_is_not_busy_is_not_retried() {
+        let mut calls = 0;
+        let err = retry_while_busy(
+            10,
+            Duration::ZERO,
+            |_| panic!("must not sleep"),
+            || {
+                calls += 1;
+                Err(io::Error::other("hdiutil: not a disk image"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(err.to_string().contains("not a disk image"));
     }
 
     #[test]

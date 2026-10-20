@@ -190,9 +190,20 @@ final class TableTests: XCTestCase {
         XCTAssertEqual(names(rows.rows, b.snapshot), ["b3", "b2", "b1"], "B's rows stand")
 
         // Same through the public async path: load another scope during a sort.
+        // The sort is held at the `onSort` seam until the reload has happened, so
+        // "begun before the reload" is a fact, not a scheduling guess.
+        let gate = DispatchSemaphore(value: 0)
+        let began = Counter()
+        let held = FileTableModel(snapshot: b.snapshot, scope: 0, onSort: { _ in
+            _ = began.next()
+            gate.wait()
+        })
+        await rows.load(held)
         let sortTask = Task { @MainActor in await rows.sort(by: .name, ascending: true) }
-        await Task.yield()
+        for _ in 0..<1000 where began.count < 1 { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(began.count, 1, "precondition: the sort has begun and is held at the gate")
         await rows.load(FileTableModel(snapshot: a.snapshot, scope: 0))
+        gate.signal()
         let applied = await sortTask.value
         XCTAssertFalse(applied, "a sort begun before the reload is dropped")
         XCTAssertEqual(names(rows.rows, a.snapshot), ["a2", "a1"], "the reload's default order, not the stale sort")
