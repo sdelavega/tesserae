@@ -18,7 +18,7 @@ import CoreGraphics
 import Foundation
 
 /// One label to draw: where (points, the tile's coordinate space) and what.
-public struct PlacedLabel: Equatable {
+public struct PlacedLabel: Equatable, Sendable {
     public var rect: CGRect
     public var text: String
 
@@ -59,6 +59,8 @@ private let minKeptCharacters = 3
 ///   never cut, and if the size and three characters do not fit there is no
 ///   label. Fitting is assumed to be monotone in the characters kept.
 /// * Numbers are written for `locale`.
+/// * Run inside a task that is cancelled, it stops early and returns what it
+///   has placed so far; the caller discards that result.
 public func placeLabels(
     _ tiles: [Tile], in s: Snapshot, measure: (String) -> CGSize, max: Int = 400,
     locale: Locale = .current
@@ -79,7 +81,7 @@ public func placeLabels(
     }
     var out: [PlacedLabel] = []
     for i in order {
-        if out.count >= max { break }
+        if out.count >= max || Task.isCancelled { break }
         let t = tiles[i]
         guard
             let parts = labelParts(
@@ -115,8 +117,17 @@ private func labelParts(
 
 /// Node `i`'s name on one line (see `placeLabels`).
 func labelName(_ i: UInt32, _ s: Snapshot) -> String {
+    let name = singleLine(String(decoding: s.nameBytes(i), as: UTF8.self)).trimmingCharacters(in: .whitespaces)
+    return name.isEmpty ? "(unnamed)" : name
+}
+
+/// `text` for one line of display (see `placeLabels`): newlines, tabs and
+/// line/paragraph separators read as spaces; other control characters, bidi
+/// overrides and isolates and invisible format characters (except the joiners
+/// U+200C/U+200D) as U+FFFD.
+func singleLine(_ text: String) -> String {
     var out = String.UnicodeScalarView()
-    for u in String(decoding: s.nameBytes(i), as: UTF8.self).unicodeScalars {
+    for u in text.unicodeScalars {
         switch u.value {
         case 0x09, 0x0a, 0x0d, 0x2028, 0x2029: out.append(" ")
         case 0..<0x20, 0x7f..<0xa0: out.append("\u{FFFD}")
@@ -124,8 +135,7 @@ func labelName(_ i: UInt32, _ s: Snapshot) -> String {
         default: out.append(u.properties.generalCategory == .format ? "\u{FFFD}" : u)
         }
     }
-    let name = String(out).trimmingCharacters(in: .whitespaces)
-    return name.isEmpty ? "(unnamed)" : name
+    return String(out)
 }
 
 /// The longest middle-truncation of `words` that, followed by `suffix`, fits

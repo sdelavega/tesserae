@@ -738,6 +738,48 @@ final class LayoutTests: XCTestCase {
         bench(snap, root: largest, label: "largest directory (\(snap.path(largest)))")
     }
 
+    /// How long the main actor is blocked when a zoom settles and labels are
+    /// due, over the phase gate's protocol (the five largest readable root
+    /// directories, in and out, three times) at the gate's viewport. With
+    /// `TEST_RUNNER_TESSERAE_FRAME_TIMING=1` it also reports the existing
+    /// `labels` interval (placement, now off the main actor) and
+    /// `labels-apply` (publishing the result on it).
+    @MainActor
+    func test_measure_label_settle_cost_on_the_main_actor() async throws {
+        let snap = try benchSnapshotOrSkip()
+        let app = AppModel()
+        app.replaceSnapshot(snap)
+        let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 1679, height: 493.5))
+        await session.waitForLabels()
+        let targets = snap.children(snap.root).filter {
+            snap.isDirectory($0) && !snap.isPermissionDenied($0) && snap.allocated($0) > 0
+        }.prefix(5)
+        FrameTimer.shared.startCapture()
+        var settle: [Double] = []
+        for _ in 1...3 {
+            for node in targets {
+                for move in [{ session.navigator.descend(into: node) }, { session.go(to: snap.root) }] {
+                    move()
+                    let t0 = DispatchTime.now().uptimeNanoseconds
+                    session.setZoomRunning(false, generation: session.layoutGeneration)
+                    settle.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
+                    await session.waitForLabels()
+                    await session.waitForTable()
+                }
+            }
+        }
+        FrameTimer.shared.stopCapture()
+        settle.sort()
+        print("BENCH label settle on the main actor: \(settle.count) settles, median \(settle[settle.count / 2]) ms, "
+            + "p99 \(FrameTimer.percentile99(settle)) ms, max \(settle.last ?? 0) ms")
+        for kind in ["labels", "labels-apply"] {
+            let ms = FrameTimer.shared.samples.filter { $0.kind == kind }.map { $0.seconds * 1000 }.sorted()
+            guard !ms.isEmpty else { print("BENCH \(kind): no samples (TESSERAE_FRAME_TIMING unset)"); continue }
+            print("BENCH \(kind): \(ms.count) samples, median \(ms[ms.count / 2]) ms, max \(ms.last ?? 0) ms")
+        }
+    }
+
     /// Every tile's `parent` is the directory whose subtree it was laid out
     /// in; the root tile's is `Tile.noNode`, even for a subtree root.
     func test_tile_parent_is_the_node_it_was_laid_out_in() {

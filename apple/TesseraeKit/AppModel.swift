@@ -35,7 +35,10 @@ public final class AppSession: ObservableObject, Identifiable {
     @Published public private(set) var tiles: [Tile] = []
     @Published public private(set) var labels: [PlacedLabel] = []
     @Published public private(set) var inspector: InspectorInfo?
-    @Published public var zoomRunning = false {
+    /// Whether the renderer is animating a zoom. Only `setZoomRunning`, the
+    /// generation-guarded report from the current treemap, and `settle` (when
+    /// no treemap remains to report) change it.
+    @Published public private(set) var zoomRunning = false {
         didSet {
             guard !zoomRunning, decorationsPending else { return }
             decorationsPending = false
@@ -50,6 +53,10 @@ public final class AppSession: ObservableObject, Identifiable {
     private var size = CGSize.zero
     private var observers: Set<AnyCancellable> = []
     private var tableTask: Task<Void, Never>?
+    private var labelTask: Task<Void, Never>?
+    /// How label text is measured; called off the main actor, so it must be
+    /// thread-safe (`LabelStyle.measure` is). Tests substitute a probe.
+    var labelMeasure: @Sendable (String) -> CGSize = LabelStyle.measure
 
     init(snapshot: Snapshot) {
         self.snapshot = snapshot
@@ -73,7 +80,10 @@ public final class AppSession: ObservableObject, Identifiable {
         requestTable()
     }
 
-    deinit { tableTask?.cancel() }
+    deinit {
+        tableTask?.cancel()
+        labelTask?.cancel()
+    }
 
     public var isEmpty: Bool {
         snapshot.root == Tile.noNode || (snapshot.allocated(root) == 0 && !snapshot.isPermissionDenied(root))
@@ -105,18 +115,61 @@ public final class AppSession: ObservableObject, Identifiable {
         var next = squarify(snapshot, root: root, in: CGRect(origin: .zero, size: size))
         FrameTimer.shared.end(layout)
         applySelection(&next, selection.nodes)
+        // An empty layout shows the empty state instead of a treemap, so
+        // nothing animated before it, and nothing will report after it: the
+        // view that shows the next layout is new, and its first update sees
+        // the tiles `makeNSView` already installed. Either way no renderer
+        // will end this navigation, so settle here.
+        let noRenderer = tiles.isEmpty || next.isEmpty
         tiles = next
-        if next.isEmpty && decorationsPending {
-            decorationsPending = false
-            requestTable()
+        if noRenderer {
+            settle()
+        } else if decorationsPending {
+            labels = []
+        } else {
+            updateLabels()
         }
-        if decorationsPending { labels = [] } else { updateLabels() }
     }
 
+    /// Ends any zoom and releases deferred decorations without a renderer report.
+    private func settle() {
+        if zoomRunning {
+            zoomRunning = false  // didSet releases pending decorations
+        } else if decorationsPending {
+            decorationsPending = false
+            updateLabels()
+            requestTable()
+        } else {
+            updateLabels()
+        }
+    }
+
+    /// Places labels for the current tiles off the main actor (text measurement
+    /// dominates, up to ~67 ms on a Data-volume layout) and applies the result
+    /// only if no relayout happened meanwhile. Until then the previous labels
+    /// stay (a resize) or are already empty (a navigation).
     private func updateLabels() {
-        let timing = FrameTimer.shared.begin("labels")
-        defer { FrameTimer.shared.end(timing) }
-        labels = placeLabels(tiles, in: snapshot, measure: LabelStyle.measure)
+        labelTask?.cancel()
+        guard !tiles.isEmpty else {
+            labels = []
+            labelTask = nil
+            return
+        }
+        let tiles = self.tiles, snapshot = self.snapshot, measure = labelMeasure
+        let generation = layoutGeneration
+        let work = Task.detached(priority: .userInitiated) { () -> [PlacedLabel]? in
+            let timing = FrameTimer.shared.begin("labels", tiles: tiles.count)
+            defer { FrameTimer.shared.end(timing) }
+            let placed = placeLabels(tiles, in: snapshot, measure: measure)
+            return Task.isCancelled ? nil : placed
+        }
+        labelTask = Task { [weak self] in
+            let placed = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard let placed, let self, !Task.isCancelled, generation == self.layoutGeneration else { return }
+            let apply = FrameTimer.shared.begin("labels-apply", tiles: placed.count)
+            self.labels = placed
+            FrameTimer.shared.end(apply)
+        }
     }
 
     public func setZoomRunning(_ running: Bool, generation: UInt64) {
@@ -130,8 +183,7 @@ public final class AppSession: ObservableObject, Identifiable {
     }
 
     public func go(to node: UInt32) {
-        guard navigator.breadcrumb.contains(node) else { return }
-        while navigator.root != node { navigator.ascend() }
+        navigator.ascend(to: node)
     }
 
     private func requestTable() {
@@ -142,6 +194,7 @@ public final class AppSession: ObservableObject, Identifiable {
     }
 
     func waitForTable() async { await tableTask?.value }
+    func waitForLabels() async { await labelTask?.value }
 
     public func loadTable() async {
         guard !Task.isCancelled else { return }

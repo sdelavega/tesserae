@@ -30,6 +30,7 @@ import TesseraeFFI
 ///   file, an aggregate (`Tile.noNode`), an unreadable directory (nothing to
 ///   show), an index outside the snapshot, and anything not beneath `root`.
 /// * `ascend()` (⌘↑) goes to the parent; at the snapshot's root it does nothing.
+///   `ascend(to:)` goes straight to any ancestor on the `breadcrumb`.
 /// * `sibling(_:)` (← / →) moves among the current root's parent's readable
 ///   directory children, in the snapshot's order (largest first), clamped at
 ///   both ends; at the snapshot's root there are no siblings.
@@ -76,6 +77,13 @@ public final class Navigator: ObservableObject {
     public func ascend() {
         guard let p = parent(root) else { return }
         root = p
+    }
+
+    /// Jumps straight to `node` (a breadcrumb click) if it is an ancestor of
+    /// `root`, in one change of `root`; anything else does nothing.
+    public func ascend(to node: UInt32) {
+        guard node != root, breadcrumb.contains(node) else { return }
+        root = node
     }
 
     public func sibling(_ step: Int) {

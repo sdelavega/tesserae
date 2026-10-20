@@ -31,8 +31,12 @@ import SwiftUI
 /// `tiles`; when they arrive after a descend, the view zooms: the old tiles,
 /// transformed so the clicked rect grows to fill the view, cross-fade to the
 /// new ones over ~250 ms (`ZoomAnimation`, `TreemapRenderer.drawZoom`), with
-/// no layout during the animation. A resize cancels it. Ascending and
-/// sibling moves redraw at once.
+/// no layout during the animation. Returning to an ancestor (⌘↑, the
+/// breadcrumb) animates too, inferred from the two layouts
+/// (`navigationZoomRect`): the old root shrinks into its tile in the parent
+/// layout. A resize cancels a recorded descend (`cancelPendingZoom`) and, since
+/// the two layouts then fill different viewports, the inferred zoom as well.
+/// Sibling moves and other tile changes redraw at once.
 ///
 /// Without a Metal device, or if the renderer cannot be built, it shows the
 /// CoreGraphics renderer's image instead (spec §11 "Rendering"), with no zoom
@@ -135,10 +139,15 @@ public struct TreemapView: NSViewRepresentable {
     }
 
     /// A virtual old-layout window that makes the existing zoom transform
-    /// shrink the old root into its tile in the returned-to parent layout.
+    /// shrink the old root into its tile in the returned-to parent layout
+    /// (or, if the new root is a tile of the old layout, that tile's rect).
+    /// Nil unless both layouts fill the same bounds: after a resize the old
+    /// rects describe a viewport that no longer exists, the case
+    /// `cancelPendingZoom` covers for a recorded descend.
     static func navigationZoomRect(old: [Tile], new: [Tile], viewport: CGRect) -> CGRect? {
-        guard let oldRoot = old.first?.node, let newRoot = new.first?.node,
-            oldRoot != newRoot, oldRoot != Tile.noNode, newRoot != Tile.noNode,
+        guard let oldFirst = old.first, let newFirst = new.first, oldFirst.rect == newFirst.rect else { return nil }
+        let oldRoot = oldFirst.node, newRoot = newFirst.node
+        guard oldRoot != newRoot, oldRoot != Tile.noNode, newRoot != Tile.noNode,
             viewport.width > 0, viewport.height > 0 else { return nil }
         if let target = old.first(where: { $0.node == newRoot }) { return target.rect }
         guard let target = new.first(where: { $0.node == oldRoot }),

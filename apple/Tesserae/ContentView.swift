@@ -20,15 +20,14 @@ import TesseraeKit
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
-    @StateObject private var phaseGate = PhaseGateRunner()
+    /// The frame-gate runner exists only when `TESSERAE_FRAME_TIMING=1`.
+    @State private var phaseGate: PhaseGateRunner? = FrameTimer.shared.isEnabled ? PhaseGateRunner() : nil
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let status = phaseGate.status {
-                Text(status).font(.caption).padding(8).frame(maxWidth: .infinity, alignment: .leading)
-            }
+            if let phaseGate { PhaseGateStatus(runner: phaseGate) }
             if model.colourChoice == 2 { focusControls }
             if let session = model.session {
                 SessionView(session: session, mode: model.colourMode, dark: dark)
@@ -39,7 +38,14 @@ struct ContentView: View {
         }
         .frame(minWidth: 960, minHeight: 580)
         .onReceive(NotificationCenter.default.publisher(for: .init("TesseraeRunFrameGate"))) { _ in
-            if let session = model.session { phaseGate.run(session: session) }
+            guard let phaseGate, let session = model.session, case .success(let gate) = FrameGateConfiguration.current
+            else { return }
+            phaseGate.run(session: session, requiredRoot: "/System/Volumes/Data", minimumNodes: 1_000_000, output: gate.output)
+        }
+        .task {
+            guard let phaseGate, case .success(let gate) = FrameGateConfiguration.current,
+                let root = gate.autorunRoot else { return }
+            await FrameGateAutorun.run(root: root, output: gate.output, model: model, runner: phaseGate)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -113,6 +119,15 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Scan"
         if panel.runModal() == .OK, let url = panel.url { model.scan(url) }
+    }
+}
+
+private struct PhaseGateStatus: View {
+    @ObservedObject var runner: PhaseGateRunner
+    var body: some View {
+        if let status = runner.status {
+            Text(status).font(.caption).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -203,7 +218,8 @@ private struct SessionView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Inspector").font(.headline)
             if let info = session.inspector {
-                Text(info.title).font(.callout).textSelection(.enabled)
+                Text(info.displayTitle).font(.callout).lineLimit(1).truncationMode(.middle)
+                    .help(info.displayTitle).textSelection(.enabled)
                 Divider()
                 detail("Kind", info.kind.displayName)
                 detail("Allocated", sizeText(info.allocated))

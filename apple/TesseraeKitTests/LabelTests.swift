@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import CoreGraphics
 import Foundation
 import XCTest
@@ -217,6 +218,42 @@ final class LabelTests: XCTestCase {
         let a = LabelStyle.measure("ab"), b = LabelStyle.measure("abcdef")
         XCTAssertGreaterThan(a.height, 0)
         XCTAssertGreaterThan(b.width, a.width)
+    }
+
+    func test_label_measure_matches_appkit_and_is_safe_off_the_main_thread() {
+        func appKit(_ text: String) -> CGSize {
+            let z = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: LabelStyle.fontSize)])
+            return CGSize(width: z.width.rounded(.up), height: z.height.rounded(.up))
+        }
+        let samples = [
+            "a", "movie.mov  4.2 GB", "WWWWWWWWWW", "12,345 smaller items — 4.2 GB", "na\u{EF}ve caf\u{E9}",
+            "\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{30D5}\u{30A1}\u{30A4}\u{30EB}", "\u{05E9}\u{05DC}\u{05D5}\u{05DD}  1 MB",
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} family", "abc…xyz  12 KB",
+            // Fallback fonts with taller or shorter metrics than the label font.
+            "\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22}", "\u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064A}\u{0629}  3 KB",
+            "\u{0939}\u{093F}\u{0928}\u{094D}\u{0926}\u{0940}", "\u{0F40}\u{0F41}\u{0F42}", "\u{D55C}\u{AD6D}\u{C5B4}",
+            "\u{1D518}\u{1D52B}\u{1D526}", "\u{A997}\u{A9AE}", "A\u{0301}\u{0327}\u{0316} zalgo", "", " ",
+        ]
+        for text in samples {
+            XCTAssertEqual(LabelStyle.measure(text), appKit(text), text)
+        }
+        let expected = samples.map(LabelStyle.measure)
+        final class Results: @unchecked Sendable {
+            let lock = NSLock()
+            var sizes: [Int: CGSize] = [:]
+            var offMain = 0
+        }
+        let results = Results()
+        let count = samples.count * 8
+        DispatchQueue.concurrentPerform(iterations: count) { i in
+            let size = LabelStyle.measure(samples[i % samples.count])
+            results.lock.lock()
+            results.sizes[i] = size
+            if !Thread.isMainThread { results.offMain += 1 }
+            results.lock.unlock()
+        }
+        XCTAssertGreaterThan(results.offMain, 0, "precondition: some measurements ran on worker threads")
+        for i in 0..<count { XCTAssertEqual(results.sizes[i], expected[i % samples.count]) }
     }
 
     // MARK: fix round 1

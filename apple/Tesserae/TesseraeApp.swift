@@ -16,9 +16,18 @@
 
 import AppKit
 import SwiftUI
+import TesseraeKit
 
 @main
 struct TesseraeApp: App {
+    init() {
+        // A mistyped frame-gate variable must not silently launch an ordinary session.
+        if case .failure(let problem) = FrameGateConfiguration.current {
+            FileHandle.standardError.write(Data("tesserae frame gate: \(problem)\n".utf8))
+            exit(2)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -26,9 +35,10 @@ struct TesseraeApp: App {
         #if DEBUG
         .commands {
             CommandMenu("Diagnostics") {
+                // Needs TESSERAE_FRAME_TIMING=1 (the runner exists only then).
                 Button("Run Phase 2 Frame Gate") {
                     NotificationCenter.default.post(name: .init("TesseraeRunFrameGate"), object: nil)
-                }
+                }.disabled(!FrameTimer.shared.isEnabled)
                 Divider()
                 Button("Use Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Use Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }

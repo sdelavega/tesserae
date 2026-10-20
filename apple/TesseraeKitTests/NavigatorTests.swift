@@ -71,6 +71,21 @@ final class NavigatorTests: XCTestCase {
         XCTAssertEqual(published, [t["big"], t["deep"], t["big"], t["/r"], t["deep"]], "every move published once")
     }
 
+    func test_ascend_to_an_ancestor_moves_once() {
+        let t = TestSnapshot(.dir("/R", [.dir("a", [.dir("b", [.file("f", 10)])]), .dir("x", [.file("g", 5)])]))
+        let nav = Navigator(snapshot: t.snapshot)
+        nav.descend(into: t["b"])
+        var roots: [UInt32] = []
+        let observation = nav.$root.dropFirst().sink { roots.append($0) }
+        nav.ascend(to: t["x"])
+        nav.ascend(to: t["f"])
+        nav.ascend(to: t["b"])
+        XCTAssertEqual(roots, [], "not an ancestor, or the current root: nothing")
+        nav.ascend(to: t.snapshot.root)
+        XCTAssertEqual(roots, [t.snapshot.root], "one move, straight to the ancestor")
+        withExtendedLifetime(observation) {}
+    }
+
     func test_descend_into_file_or_aggregate_is_a_no_op() {
         let t = Self.tree()
         let nav = Navigator(snapshot: t.snapshot)

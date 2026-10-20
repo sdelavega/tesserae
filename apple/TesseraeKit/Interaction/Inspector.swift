@@ -73,6 +73,10 @@ public struct InspectorInfo: Equatable {
     /// numbers written for the current locale.
     public var title: String { title(locale: .current) }
 
+    /// `title` on one line, sanitised as tile labels are (`singleLine`), for
+    /// the inspector heading. `path`, not this, is what actions use.
+    public var displayTitle: String { singleLine(title) }
+
     /// `title` with numbers written for `locale`.
     public func title(locale: Locale) -> String {
         switch subject {

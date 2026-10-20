@@ -106,4 +106,16 @@ final class InspectorTests: XCTestCase {
         let fileTile = tiles.firstIndex { $0.node == t["big.bin"] }!
         XCTAssertEqual(inspect(tileAt: fileTile, in: tiles, snapshot: s), inspect(t["big.bin"], in: s))
     }
+
+    func test_display_title_is_one_line_and_sanitised_like_labels() {
+        let name = "a\u{2028}b\u{202E}c\u{85}d\u{200D}e"
+        let t = TestSnapshot(.dir("/R", [.file(name, 10)]))
+        let info = inspect(t[name], in: t.snapshot)
+        XCTAssertTrue(info.title.contains("\u{2028}"), "precondition: the raw path keeps the separator")
+        XCTAssertEqual(info.path, info.title, "precondition: the path itself is untouched")
+        XCTAssertEqual(info.displayTitle, "/R/a b\u{FFFD}c\u{FFFD}d\u{200D}e")
+        XCTAssertFalse(info.displayTitle.contains { $0.isNewline })
+        let aggregate = InspectorInfo(subject: .unreadable(count: 3), allocated: 0, logical: 0, kind: .unreadable, modified: nil)
+        XCTAssertEqual(aggregate.displayTitle, aggregate.title)
+    }
 }
