@@ -18,6 +18,13 @@ import Combine
 import Foundation
 import TesseraeFFI
 
+/// One folder in the breadcrumb bar: the node a click goes to, and its
+/// sanitised name.
+public struct BreadcrumbItem: Equatable, Hashable, Sendable {
+    public let node: UInt32
+    public let title: String
+}
+
 /// Which directory the treemap shows (spec §8 "Zoom and navigation").
 ///
 /// `root` is always a directory of `snapshot` that can be laid out: the
@@ -54,6 +61,12 @@ public final class Navigator: ObservableObject {
             cur = p
         }
         return chain.reversed()
+    }
+
+    /// The `breadcrumb` with each folder's name as the user reads it
+    /// (`Snapshot.displayName`), for the breadcrumb bar.
+    public var breadcrumbItems: [BreadcrumbItem] {
+        breadcrumb.map { BreadcrumbItem(node: $0, title: snapshot.displayName($0)) }
     }
 
     /// Whether `descend(into: node)` would change `root`.

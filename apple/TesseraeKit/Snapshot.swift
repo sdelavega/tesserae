@@ -158,7 +158,9 @@ public final class Snapshot {
         return Data(all[Int(n.name_off)..<Int(n.name_off) + Int(n.name_len)])
     }
 
-    /// Lossy UTF-8 name with C0 control characters replaced by U+FFFD; never empty.
+    /// Lossy UTF-8 name with C0 control characters replaced by U+FFFD; never
+    /// empty. Not for display: it leaves bidi overrides, DEL, C1 and format
+    /// characters alone. What the user reads is `displayName(_:)`.
     public func name(_ i: UInt32) -> String {
         Snapshot.decodeName(nameBytes(i))
     }
@@ -183,25 +185,57 @@ public final class Snapshot {
         return n.child_start..<(n.child_start + n.child_count)
     }
 
-    /// The path of node `i`: the root's name (the scan root as given) joined
-    /// with each name down to `i`.
-    public func path(_ i: UInt32) -> String {
-        if root == UInt32.max { return "" }
-        var parts: [String] = []
+    /// Node `i`, its parent, and so on up to the root, which comes last.
+    ///
+    /// Bounded by the node count: a parent chain longer than that has a
+    /// cycle, which only a malformed snapshot can have (the freeze gives
+    /// every parent a smaller index than its children). That traps, in
+    /// every build, like the other accessors' checks: a path assembled from a
+    /// broken chain would name the wrong file, and spinning forever would
+    /// hang the main actor on a hover.
+    private func ancestry(_ i: UInt32) -> [UInt32] {
+        let count = nodes.count
+        var chain: [UInt32] = []
         var cur = i
         while true {
-            let n = node(cur)
-            if n.parent == UInt32.max {
-                parts.append(name(cur))
-                break
-            }
-            parts.append(name(cur))
-            cur = n.parent
+            precondition(chain.count < count, "Snapshot parent chain has a cycle")
+            chain.append(cur)
+            let p = node(cur).parent
+            if p == UInt32.max { return chain }
+            cur = p
         }
+    }
+
+    /// The path of node `i` for display: the root's name (the scan root as
+    /// given) joined with each name down to `i`, each decoded by `name(_:)`.
+    ///
+    /// Display text only: it is lossy (invalid UTF-8 and C0 controls become
+    /// U+FFFD), so it may name no file, or a different one. Anything that acts
+    /// on a file (reveal, copy, stage, delete) uses `rawPath(_:)` and the node
+    /// index, never this.
+    public func displayPath(_ i: UInt32) -> String {
+        if root == UInt32.max { return "" }
+        var parts = ancestry(i).map { name($0) }
         var result = parts.removeLast()
         for p in parts.reversed() {
             if !result.hasSuffix("/") { result += "/" }
             result += p
+        }
+        return result
+    }
+
+    /// The path of node `i` as the filesystem knows it: the root's name bytes
+    /// joined with each name's raw bytes (`nameBytes(_:)`) by `/`, exactly,
+    /// with no decoding. This, with the node index, is a node's actionable
+    /// identity (final review I1). Empty for an empty snapshot.
+    public func rawPath(_ i: UInt32) -> Data {
+        if root == UInt32.max { return Data() }
+        let slash = UInt8(ascii: "/")
+        var parts = ancestry(i).map { nameBytes($0) }
+        var result = parts.removeLast()
+        for p in parts.reversed() {
+            if result.last != slash { result.append(slash) }
+            result.append(p)
         }
         return result
     }

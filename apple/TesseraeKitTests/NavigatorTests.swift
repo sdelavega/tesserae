@@ -71,6 +71,18 @@ final class NavigatorTests: XCTestCase {
         XCTAssertEqual(published, [t["big"], t["deep"], t["big"], t["/r"], t["deep"]], "every move published once")
     }
 
+    /// Final review I2: the breadcrumb shows each folder's name as the labels
+    /// do (`Snapshot.displayName`), so a crafted name cannot reorder it.
+    func test_breadcrumb_titles_neutralise_crafted_names() {
+        let bidi = "gpj.\u{202E}photos", multi = "a\tb\u{2067}c"
+        let t = TestSnapshot(.dir("/r", [.dir(bidi, [.dir(multi, [.file("x", 10)])])]))
+        let nav = Navigator(snapshot: t.snapshot)
+        nav.descend(into: t[multi])
+        XCTAssertEqual(nav.breadcrumb, [t["/r"], t[bidi], t[multi]], "precondition: two levels down")
+        XCTAssertEqual(nav.breadcrumbItems.map(\.node), nav.breadcrumb)
+        XCTAssertEqual(nav.breadcrumbItems.map(\.title), ["/r", "gpj.\u{FFFD}photos", "a b\u{FFFD}c"])
+    }
+
     func test_ascend_to_an_ancestor_moves_once() {
         let t = TestSnapshot(.dir("/R", [.dir("a", [.dir("b", [.file("f", 10)])]), .dir("x", [.file("g", 5)])]))
         let nav = Navigator(snapshot: t.snapshot)

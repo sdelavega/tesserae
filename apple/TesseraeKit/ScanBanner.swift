@@ -18,6 +18,7 @@ import Foundation
 import TesseraeFFI
 
 public enum ScanBanner {
+    /// `stalledAt` is shown as names are (`singleLine`): it is made of them.
     public static func text(for stats: TessScanStats, stalledAt: String?) -> String? {
         var parts: [String] = []
         switch stats.incomplete {
@@ -26,7 +27,7 @@ public enum ScanBanner {
         case UInt32(TESS_INCOMPLETE_NODE_BUDGET): parts.append("Scan reached its node limit")
         case UInt32(TESS_INCOMPLETE_OUT_OF_MEMORY): parts.append("Scan ran out of memory")
         case UInt32(TESS_INCOMPLETE_STALLED):
-            parts.append("Scan stalled" + (stalledAt.map { " at " + $0 } ?? ""))
+            parts.append("Scan stalled" + (stalledAt.map { " at " + singleLine($0) } ?? ""))
         case UInt32(TESS_INCOMPLETE_FD_EXHAUSTED): parts.append("Scan exhausted file descriptors")
         case UInt32(TESS_INCOMPLETE_MALFORMED_BATCH): parts.append("Scan stopped at a malformed filesystem batch")
         case UInt32(TESS_INCOMPLETE_VOLUME_LOST): parts.append("Scan volume became unavailable")

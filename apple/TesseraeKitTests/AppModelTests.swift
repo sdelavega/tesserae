@@ -50,6 +50,17 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(ScanBanner.text(for: unknown, stalledAt: nil))
     }
 
+    /// Final review I2: the stalled path is made of names, so it is shown as
+    /// they are (one line, bidi and format characters neutralised).
+    func test_banner_neutralises_a_crafted_stalled_path() throws {
+        var stats = TessScanStats()
+        stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED)
+        let text = try XCTUnwrap(ScanBanner.text(for: stats, stalledAt: "/a\u{202E}b\nc"))
+        XCTAssertTrue(text.contains("stalled at /a\u{FFFD}b c"), text)
+        XCTAssertFalse(text.contains("\u{202E}"), text)
+        XCTAssertFalse(text.contains { $0.isNewline }, text)
+    }
+
     func test_banner_mentions_unreadable_and_errors_when_complete() throws {
         var stats = TessScanStats()
         stats.errors = 17

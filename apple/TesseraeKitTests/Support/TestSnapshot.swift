@@ -32,6 +32,9 @@ final class TestSnapshot {
         var modified: Int64
         var children: [Spec]?
         var denied = false
+        /// The name's bytes when they are not `name`'s UTF-8 (`name` is then
+        /// only the lookup key).
+        var rawName: [UInt8]? = nil
 
         static func file(_ name: String, _ allocated: UInt64, logical: UInt64? = nil, modified: Int64 = 0) -> Spec {
             Spec(name: name, allocated: allocated, logical: logical ?? allocated, modified: modified, children: nil)
@@ -41,6 +44,13 @@ final class TestSnapshot {
             Spec(
                 name: name, allocated: children.reduce(0) { $0 + $1.allocated },
                 logical: children.reduce(0) { $0 + $1.logical }, modified: modified, children: children)
+        }
+
+        /// A file whose name is exactly `bytes` (not necessarily UTF-8),
+        /// looked up by `key`.
+        static func rawFile(_ bytes: [UInt8], key: String, _ allocated: UInt64) -> Spec {
+            Spec(
+                name: key, allocated: allocated, logical: allocated, modified: 0, children: nil, rawName: bytes)
         }
 
         static func denied(_ name: String) -> Spec {
@@ -60,9 +70,10 @@ final class TestSnapshot {
         var byName: [String: UInt32] = [:]
         func node(_ s: Spec, parent: UInt32) -> TessNode {
             var n = TessNode()
+            let raw = s.rawName ?? Array(s.name.utf8)
             n.name_off = UInt32(bytes.count)
-            n.name_len = UInt16(s.name.utf8.count)
-            bytes.append(contentsOf: Array(s.name.utf8))
+            n.name_len = UInt16(raw.count)
+            bytes.append(contentsOf: raw)
             n.parent = parent
             n.allocated = s.allocated
             n.logical = s.logical

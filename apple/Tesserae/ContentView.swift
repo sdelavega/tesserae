@@ -150,10 +150,10 @@ private struct SessionView: View {
                     .disabled(session.root == session.snapshot.root)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(session.navigator.breadcrumb, id: \.self) { node in
-                            Button(session.snapshot.name(node)) { session.go(to: node) }
+                        ForEach(session.navigator.breadcrumbItems, id: \.node) { item in
+                            Button(item.title) { session.go(to: item.node) }
                                 .buttonStyle(.plain).lineLimit(1)
-                            if node != session.root { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary) }
+                            if item.node != session.root { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary) }
                         }
                     }
                 }

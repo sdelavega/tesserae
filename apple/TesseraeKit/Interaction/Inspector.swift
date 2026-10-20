@@ -19,14 +19,18 @@ import Foundation
 
 /// What the hover inspector shows (spec §8: "full path, both sizes, type, dates").
 ///
-/// `subject` says what the tile stands for. Only a `.node` has a path, and
-/// `path` is nil for everything else, so an action that needs a real file
-/// (copy path, reveal in Finder, staging for deletion) can never act on
-/// display text: gate it on `path`. `title` is what to show as the heading.
+/// `subject` says what the tile stands for. Only a `.node` stands for a file,
+/// and its actionable identity is its index (`node`) plus its raw path bytes
+/// (`rawPath`, exactly as the filesystem names it). An action that needs a
+/// real file (copy path, reveal in Finder, staging for deletion) gates on
+/// `node` and uses `rawPath`; it never uses `displayPath` or `title`, which are
+/// lossy display text that may name no file, or a different one (final review
+/// I1). All three are nil for a tile that is not one node.
 public struct InspectorInfo: Equatable {
     public enum Subject: Equatable {
-        /// One node, by its full path.
-        case node(path: String)
+        /// One node: its index, its exact path bytes (`Snapshot.rawPath`) and
+        /// its path for display (`Snapshot.displayPath`).
+        case node(UInt32, rawPath: Data, displayPath: String)
         /// An aggregate tile: `count` collapsed siblings of `bytes` in all.
         case aggregate(count: UInt32, bytes: UInt64)
         /// The collapsed placeholder of `count` unreadable folders.
@@ -63,24 +67,39 @@ public struct InspectorInfo: Equatable {
         self.modified = modified
     }
 
-    /// The node's full path; nil for a tile that is not one node.
-    public var path: String? {
-        if case .node(let p) = subject { return p }
+    /// The node this tile stands for; nil for a tile that is not one node.
+    public var node: UInt32? {
+        if case .node(let n, _, _) = subject { return n }
         return nil
     }
 
-    /// The heading: the path, "N smaller items — X" or "N unreadable folders",
+    /// The node's path exactly as the filesystem names it, byte for byte
+    /// (not necessarily UTF-8): what reveal, copy, stage and delete must use.
+    /// Nil for a tile that is not one node.
+    public var rawPath: Data? {
+        if case .node(_, let raw, _) = subject { return raw }
+        return nil
+    }
+
+    /// The node's path for display: lossy, so never acted on. Nil for a tile
+    /// that is not one node.
+    public var displayPath: String? {
+        if case .node(_, _, let p) = subject { return p }
+        return nil
+    }
+
+    /// The heading: the display path, "N smaller items — X" or "N unreadable folders",
     /// numbers written for the current locale.
     public var title: String { title(locale: .current) }
 
     /// `title` on one line, sanitised as tile labels are (`singleLine`), for
-    /// the inspector heading. `path`, not this, is what actions use.
+    /// the inspector heading. Display text: actions use `node` and `rawPath`.
     public var displayTitle: String { singleLine(title) }
 
     /// `title` with numbers written for `locale`.
     public func title(locale: Locale) -> String {
         switch subject {
-        case .node(let p):
+        case .node(_, _, let p):
             return p
         case .aggregate(let n, let bytes):
             let (words, size) = InspectorInfo.aggregateParts(count: n, bytes: bytes, locale: locale)
@@ -155,7 +174,7 @@ public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
     let n = s.nodes[Int(node)]
     let kind = nodeKind(node, in: s)
     return InspectorInfo(
-        subject: .node(path: s.path(node)), allocated: n.allocated, logical: n.logical, kind: kind,
+        subject: .node(node, rawPath: s.rawPath(node), displayPath: s.displayPath(node)), allocated: n.allocated, logical: n.logical, kind: kind,
         modified: n.modified == 0 ? nil : Date(timeIntervalSince1970: TimeInterval(n.modified)))
 }
 
@@ -179,22 +198,18 @@ public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot) -
 }
 
 /// The logical bytes behind aggregate `tiles[index]`: its parent is the
-/// nearest earlier node tile one level up that contains it, and the tail it
+/// tile's own `parent` (the directory it was laid out in), and the tail it
 /// collapses is the last `aggregateCount` positive-size children of that
 /// parent (children are sorted by size, the zero-size ones last). This
 /// mirrors `squarify`'s collapse rule (SquarifiedLayout.swift, "the tail is a
-/// suffix"): change the two together. 0 if the parent cannot be found.
+/// suffix"): change the two together. 0 if the tile names no parent in `s`.
+///
+/// No depth arithmetic: `Tile.depth` saturates at 255, so "one level up"
+/// cannot be told from it (final review C1).
 private func aggregateLogical(_ index: Int, _ tiles: [Tile], _ s: Snapshot) -> UInt64 {
     let t = tiles[index]
-    let centre = CGPoint(x: t.rect.midX, y: t.rect.midY)
-    var i = index - 1
-    while i >= 0 {
-        let p = tiles[i]
-        if p.node != Tile.noNode, p.depth + 1 == t.depth, p.rect.contains(centre) { break }
-        i -= 1
-    }
-    guard i >= 0 else { return 0 }
-    let kids = s.children(tiles[i].node)
+    guard t.parent != Tile.noNode, Int(t.parent) < s.nodes.count else { return 0 }
+    let kids = s.children(t.parent)
     var positiveEnd = kids.upperBound
     while positiveEnd > kids.lowerBound && s.allocated(positiveEnd - 1) == 0 { positiveEnd -= 1 }
     let count = min(UInt32(t.aggregateCount), positiveEnd - kids.lowerBound)

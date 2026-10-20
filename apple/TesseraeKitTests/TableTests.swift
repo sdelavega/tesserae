@@ -376,6 +376,35 @@ final class TableTests: XCTestCase {
         XCTAssertTrue(sawCleared || samples > 0)
     }
 
+    /// Final review I2: the table is the list a user scans to decide what to
+    /// delete, so a crafted name must not reorder or hide what it shows. Cells
+    /// and VoiceOver labels use the labels' sanitiser (`Snapshot.displayName`).
+    @MainActor
+    func test_name_cells_and_voiceover_labels_neutralise_crafted_names() throws {
+        let bidi = "invoice\u{202E}fdp.app"
+        let multi = "two\nlines\u{2066}x\u{2069}\u{7F}\u{85}"
+        let t = TestSnapshot(.dir("/R", [.file(bidi, 2000), .file(multi, 1000)]))
+        let s = t.snapshot
+        let rows = topK(10, files: s, under: 0)
+        let coord = FileTableView.Coordinator(snapshot: s, rows: rows, selection: Selection(), locale: en)
+        let table = coord.makeTableView()
+        XCTAssertEqual(table.numberOfRows, 2, "precondition: both files are rows")
+        let expected = [bidi: "invoice\u{FFFD}fdp.app", multi: "two lines\u{FFFD}x\u{FFFD}\u{FFFD}\u{FFFD}"]
+        for (name, shown) in expected {
+            let row = try XCTUnwrap(rows.firstIndex(of: t[name]))
+            XCTAssertEqual(coord.text(column: "name", row: row), shown)
+            XCTAssertEqual(coord.text(column: "name", row: row), s.displayName(t[name]))
+            let size = displaySize(s.allocated(t[name]), locale: en)
+            XCTAssertEqual(coord.accessibilityLabel(column: "name", row: row), "\(shown), \(size)")
+            for id in ["allocated", "logical", "modified", "kind"] {
+                XCTAssertTrue(coord.accessibilityLabel(column: id, row: row).hasPrefix("\(shown), \(size)"), id)
+            }
+            let cell = try XCTUnwrap(table.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView)
+            XCTAssertEqual(cell.textField?.stringValue, shown)
+            XCTAssertEqual(cell.accessibilityLabel(), "\(shown), \(size)")
+        }
+    }
+
     @MainActor
     func test_cells_never_trap_on_rows_outside_the_snapshot() {
         let t = TestSnapshot(.dir("/R", [.file("a", 40)]))

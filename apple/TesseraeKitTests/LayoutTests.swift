@@ -44,6 +44,10 @@ final class LayoutTests: XCTestCase {
         }
     }
 
+    /// The depth of a child of a tile at depth `d`: one more, saturating at
+    /// 255 as the layout's does. Never `d + 1` on the `UInt8` (final review C1).
+    static func childDepth(_ d: UInt8) -> UInt8 { d == .max ? d : d + 1 }
+
     /// A tile and the tiles laid out inside it (its children and its aggregate).
     struct Group {
         var parent: Tile
@@ -52,8 +56,7 @@ final class LayoutTests: XCTestCase {
     }
 
     /// Groups tiles by parent: a node tile by the tree's parent link, an
-    /// aggregate by which tile one level up contains its centre (tiles of
-    /// one depth are disjoint, so that tile is unique).
+    /// aggregate by its `Tile.parent` (whose tile must contain its centre).
     static func groups(_ tiles: [Tile], _ t: SyntheticTree, file: StaticString = #filePath, line: UInt = #line) -> [Group] {
         var byNode: [UInt32: Int] = [:]
         for (i, tile) in tiles.enumerated() where !tile.isAggregate {
@@ -65,10 +68,11 @@ final class LayoutTests: XCTestCase {
             let parentIndex: Int?
             if tile.isAggregate {
                 let c = CGPoint(x: tile.rect.midX, y: tile.rect.midY)
-                parentIndex = tiles.indices.first {
-                    tiles[$0].depth + 1 == tile.depth && !tiles[$0].isAggregate && tiles[$0].rect.contains(c)
-                }
+                parentIndex = byNode[tile.parent]
                 XCTAssertNotNil(parentIndex, "aggregate with no parent tile", file: file, line: line)
+                if let pi = parentIndex {
+                    XCTAssertTrue(tiles[pi].rect.contains(c), "aggregate outside its parent", file: file, line: line)
+                }
             } else if tile.node == t.rootIndex {
                 parentIndex = nil
             } else {
@@ -77,7 +81,7 @@ final class LayoutTests: XCTestCase {
             }
             guard let pi = parentIndex else { continue }
             XCTAssertLessThan(pi, i, "child painted before its parent", file: file, line: line)
-            XCTAssertEqual(tiles[pi].depth + 1, tile.depth, "depth is not parent's + 1", file: file, line: line)
+            XCTAssertEqual(Self.childDepth(tiles[pi].depth), tile.depth, "depth is not parent's + 1", file: file, line: line)
             groups[pi, default: Group(parent: tiles[pi], parentIndex: pi, children: [])].children.append((tile, i))
         }
         return groups.values.sorted { $0.parentIndex < $1.parentIndex }
@@ -735,7 +739,7 @@ final class LayoutTests: XCTestCase {
             most = n.child_count
             largest = UInt32(i)
         }
-        bench(snap, root: largest, label: "largest directory (\(snap.path(largest)))")
+        bench(snap, root: largest, label: "largest directory (\(snap.displayPath(largest)))")
     }
 
     /// How long the main actor is blocked when a zoom settles and labels are
@@ -809,7 +813,7 @@ final class LayoutTests: XCTestCase {
                     guard let up = tiles[..<i].last(where: { $0.node == tile.parent }) else {
                         XCTFail("tree \(n) tile \(i): parent \(tile.parent) has no earlier tile"); continue
                     }
-                    XCTAssertEqual(up.depth + 1, tile.depth)
+                    XCTAssertEqual(Self.childDepth(up.depth), tile.depth)
                     XCTAssertTrue(up.rect.insetBy(dx: -1e-6, dy: -1e-6).contains(tile.rect), "tree \(n) tile \(i)")
                 }
                 if n == 0 && root == 0 {

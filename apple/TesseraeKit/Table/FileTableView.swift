@@ -151,7 +151,7 @@ public struct FileTableView: NSViewRepresentable {
             guard Int(node) < snapshot.nodes.count else { return "" }
             let n = snapshot.nodes[Int(node)]
             switch id {
-            case "name": return snapshot.name(node)
+            case "name": return snapshot.displayName(node)
             case "allocated": return displaySize(n.allocated, locale: locale)
             case "logical": return displaySize(n.logical, locale: locale)
             case "modified":
@@ -167,7 +167,7 @@ public struct FileTableView: NSViewRepresentable {
         func accessibilityLabel(column id: String, row: Int) -> String {
             let node = rows[row]
             guard Int(node) < snapshot.nodes.count else { return "" }
-            let base = "\(snapshot.name(node)), \(displaySize(snapshot.allocated(node), locale: locale))"
+            let base = "\(snapshot.displayName(node)), \(displaySize(snapshot.allocated(node), locale: locale))"
             switch id {
             case "name": return base
             case "allocated": return base + " allocated"

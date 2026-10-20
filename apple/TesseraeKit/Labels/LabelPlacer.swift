@@ -112,13 +112,20 @@ private func labelParts(
     if t.isPermissionDenied { return nil }
     precondition(Int(t.node) < s.nodes.count, "placeLabels: tile node \(t.node) outside the snapshot")
     if subdivided.contains(t.node) { return nil }
-    return (labelName(t.node, s), "  " + displaySize(s.allocated(t.node), locale: locale))
+    return (s.displayName(t.node), "  " + displaySize(s.allocated(t.node), locale: locale))
 }
 
-/// Node `i`'s name on one line (see `placeLabels`).
-func labelName(_ i: UInt32, _ s: Snapshot) -> String {
-    let name = singleLine(String(decoding: s.nameBytes(i), as: UTF8.self)).trimmingCharacters(in: .whitespaces)
-    return name.isEmpty ? "(unnamed)" : name
+extension Snapshot {
+    /// Node `i`'s name as the user reads it, on one line (`singleLine`):
+    /// tile labels, the table's cells and VoiceOver labels and the breadcrumb
+    /// all show this, so a crafted name (a bidi override, a newline, an
+    /// invisible format character) cannot reorder or hide what any of them
+    /// says (spec §8; final review I2). Display text only: actions use the
+    /// node index and `rawPath(_:)`.
+    public func displayName(_ i: UInt32) -> String {
+        let name = singleLine(String(decoding: nameBytes(i), as: UTF8.self)).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "(unnamed)" : name
+    }
 }
 
 /// `text` for one line of display (see `placeLabels`): newlines, tabs and

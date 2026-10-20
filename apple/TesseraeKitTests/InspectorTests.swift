@@ -47,9 +47,14 @@ final class InspectorTests: XCTestCase {
         XCTAssertEqual(
             clip,
             InspectorInfo(
-                subject: .node(path: "/Volumes/X/media/clip.MOV"), allocated: 8_192_000, logical: 8_000_123,
+                subject: .node(
+                    t["clip.MOV"], rawPath: Data("/Volumes/X/media/clip.MOV".utf8),
+                    displayPath: "/Volumes/X/media/clip.MOV"),
+                allocated: 8_192_000, logical: 8_000_123,
                 kind: .fileKind(.video), modified: Date(timeIntervalSince1970: 1_700_000_900)))
-        XCTAssertEqual(clip.path, "/Volumes/X/media/clip.MOV")
+        XCTAssertEqual(clip.node, t["clip.MOV"])
+        XCTAssertEqual(clip.rawPath, Data("/Volumes/X/media/clip.MOV".utf8))
+        XCTAssertEqual(clip.displayPath, "/Volumes/X/media/clip.MOV")
         XCTAssertEqual(clip.title, "/Volumes/X/media/clip.MOV")
         XCTAssertEqual(clip.kind.displayName, "Video")
         XCTAssertNotEqual(clip.allocated, clip.logical, "precondition: the two sizes differ")
@@ -65,7 +70,8 @@ final class InspectorTests: XCTestCase {
         let media = inspect(t["media"], in: s)
         XCTAssertEqual(media.kind, .folder)
         XCTAssertEqual(media.kind.displayName, "Folder")
-        XCTAssertEqual(media.path, "/Volumes/X/media")
+        XCTAssertEqual(media.displayPath, "/Volumes/X/media")
+        XCTAssertEqual(media.rawPath, Data("/Volumes/X/media".utf8))
         XCTAssertEqual(media.allocated, 8_192_000 + 4096 + 8192 + 4096, "rolled up")
         XCTAssertEqual(media.logical, 8_000_123 + 12 + 5000 + 100, "rolled up")
         XCTAssertEqual(media.modified, Date(timeIntervalSince1970: 1_700_000_900), "the rolled-up time")
@@ -75,8 +81,8 @@ final class InspectorTests: XCTestCase {
         XCTAssertEqual(
             FileKind.allCases.map(\.displayName), ["Video", "Image", "Audio", "Archive", "Document"])
 
-        // Tiles that stand for several nodes: no path (so no action can take
-        // the display text for one), a title, no date.
+        // Tiles that stand for several nodes: no node and no path (so no
+        // action can take the display text for one), a title, no date.
         let tiles = squarify(s, root: s.root, in: CGRect(x: 0, y: 0, width: 400, height: 300))
         let agg = tiles.indices.first { tiles[$0].isAggregate && !tiles[$0].isPermissionDenied }
         let locked = tiles.indices.first { tiles[$0].isAggregate && tiles[$0].isPermissionDenied }
@@ -93,18 +99,79 @@ final class InspectorTests: XCTestCase {
             InspectorInfo(
                 subject: .aggregate(count: n, bytes: UInt64(n) * 1024), allocated: UInt64(n) * 1024,
                 logical: tailLogical, kind: .aggregate, modified: nil))
-        XCTAssertNil(info.path)
+        XCTAssertNil(info.node)
+        XCTAssertNil(info.rawPath)
+        XCTAssertNil(info.displayPath)
         XCTAssertEqual(info.title(locale: en), "\(n) smaller items — \(bytes)")
         XCTAssertEqual(info.kind.displayName, "Smaller items")
         let lockedInfo = inspect(tileAt: locked, in: tiles, snapshot: s)
         XCTAssertEqual(
             lockedInfo,
             InspectorInfo(subject: .unreadable(count: 17), allocated: 0, logical: 0, kind: .unreadable, modified: nil))
-        XCTAssertNil(lockedInfo.path)
+        XCTAssertNil(lockedInfo.node)
+        XCTAssertNil(lockedInfo.rawPath)
+        XCTAssertNil(lockedInfo.displayPath)
         XCTAssertEqual(lockedInfo.title(locale: en), "17 unreadable folders")
         XCTAssertEqual(lockedInfo.kind.displayName, "Unreadable folders")
         let fileTile = tiles.firstIndex { $0.node == t["big.bin"] }!
         XCTAssertEqual(inspect(tileAt: fileTile, in: tiles, snapshot: s), inspect(t["big.bin"], in: s))
+    }
+
+    /// Final review C1: a single-child chain keeps the whole view rect at
+    /// every level, so the layout's depth saturates at 255. Hovering the
+    /// aggregate at the bottom used to trap (`p.depth + 1` on a `UInt8`) and,
+    /// at a saturated depth, could not find the parent anyway.
+    @MainActor
+    func test_hovering_tiles_below_a_saturated_depth_neither_traps_nor_loses_the_parent() throws {
+        let tiny = (0..<2000).map { TestSnapshot.Spec.file("tiny\($0)", 1, logical: 3) }
+        var level = TestSnapshot.Spec.dir("d256", [.file("big", 100_000_000, logical: 99)] + tiny)
+        for d in stride(from: 255, through: 0, by: -1) { level = .dir("d\(d)", [level]) }
+        let t = TestSnapshot(.dir("/R", [level]))
+        let session = AppSession(snapshot: t.snapshot)
+        session.resize(to: CGSize(width: 400, height: 300))
+        let tiles = session.tiles
+        XCTAssertEqual(tiles.map(\.depth).max(), 255, "precondition: the layout's depth saturates")
+        let agg = try XCTUnwrap(tiles.firstIndex { $0.isAggregate }, "precondition: the tiny files collapse")
+        XCTAssertEqual(tiles[agg].parent, t["d256"], "precondition: the aggregate is the bottom folder's")
+        let parentTile = try XCTUnwrap(tiles.first { $0.node == t["d256"] })
+        XCTAssertEqual(parentTile.depth, 255, "precondition: the parent's depth is saturated too")
+        XCTAssertEqual(tiles[agg].depth, 255, "precondition: so is the aggregate's")
+        let n = tiles[agg].aggregateCount
+        XCTAssertGreaterThan(n, 1, "precondition: several tiny files collapsed")
+
+        session.hover(tile: agg)
+        XCTAssertEqual(
+            session.inspector,
+            InspectorInfo(
+                subject: .aggregate(count: n, bytes: UInt64(n)), allocated: UInt64(n), logical: 3 * UInt64(n),
+                kind: .aggregate, modified: nil))
+
+        let big = try XCTUnwrap(tiles.firstIndex { $0.node == t["big"] })
+        XCTAssertEqual(tiles[big].depth, 255, "precondition: a node tile below the saturation")
+        session.hover(tile: big)
+        let chain = (0...256).map { "d\($0)" }.joined(separator: "/")
+        XCTAssertEqual(session.inspector?.node, t["big"])
+        XCTAssertEqual(session.inspector?.displayPath, "/R/\(chain)/big")
+        XCTAssertEqual(session.inspector?.rawPath, Data("/R/\(chain)/big".utf8))
+        XCTAssertEqual(session.inspector?.logical, 99)
+    }
+
+    /// Final review I1: what an action may use is the node and its raw path,
+    /// byte for byte; the display path is lossy and is for reading only.
+    func test_a_node_carries_its_index_and_its_exact_raw_path() {
+        let invalid: [UInt8] = [0x62, 0x61, 0x64, 0xFF, 0x6E]  // "bad", 0xFF, "n"
+        let controls: [UInt8] = [0x63, 0x01, 0x0A, 0x09, 0x7F, 0xE2, 0x80, 0xAE, 0x7A]  // c SOH LF TAB DEL U+202E z
+        let t = TestSnapshot(
+            .dir("/R", [.rawFile(invalid, key: "invalid", 20), .rawFile(controls, key: "controls", 10)]))
+        for (key, bytes) in [("invalid", invalid), ("controls", controls)] {
+            let info = inspect(t[key], in: t.snapshot)
+            XCTAssertEqual(info.node, t[key], key)
+            XCTAssertEqual(info.rawPath, Data(Array("/R/".utf8) + bytes), key)
+            XCTAssertEqual(info.rawPath, t.snapshot.rawPath(t[key]), key)
+            XCTAssertNotNil(info.displayPath, key)
+            XCTAssertNotEqual(
+                info.displayPath.map { Data($0.utf8) }, info.rawPath, "precondition: \(key) displays lossily")
+        }
     }
 
     func test_display_title_is_one_line_and_sanitised_like_labels() {
@@ -112,7 +179,7 @@ final class InspectorTests: XCTestCase {
         let t = TestSnapshot(.dir("/R", [.file(name, 10)]))
         let info = inspect(t[name], in: t.snapshot)
         XCTAssertTrue(info.title.contains("\u{2028}"), "precondition: the raw path keeps the separator")
-        XCTAssertEqual(info.path, info.title, "precondition: the path itself is untouched")
+        XCTAssertEqual(info.displayPath, info.title, "precondition: the path itself is untouched")
         XCTAssertEqual(info.displayTitle, "/R/a b\u{FFFD}c\u{FFFD}d\u{200D}e")
         XCTAssertFalse(info.displayTitle.contains { $0.isNewline })
         let aggregate = InspectorInfo(subject: .unreadable(count: 3), allocated: 0, logical: 0, kind: .unreadable, modified: nil)

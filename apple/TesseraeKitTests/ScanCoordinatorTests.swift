@@ -77,7 +77,7 @@ final class ScanCoordinatorTests: XCTestCase {
         XCTAssertEqual(snap.stats.files, 12)
         XCTAssertEqual(snap.stats.dirs, 4)  // root + 3
         XCTAssertEqual(snap.stats.incomplete, UInt32(TESS_INCOMPLETE_NONE))
-        XCTAssertEqual(snap.path(snap.root), root.path)
+        XCTAssertEqual(snap.displayPath(snap.root), root.path)
     }
 
     func test_progress_is_published_while_scanning() async throws {

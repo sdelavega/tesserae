@@ -195,19 +195,22 @@ final class SnapshotTests: XCTestCase {
 
     func test_path_joins_from_the_root_as_given() throws {
         let (snap, root) = try makeSnapshot()
-        XCTAssertEqual(snap.path(snap.root), root)
+        XCTAssertEqual(snap.displayPath(snap.root), root)
         let sub = snap.children(snap.root).first { snap.name($0) == "sub" }!
-        XCTAssertEqual(snap.path(sub), root + "/sub")
+        XCTAssertEqual(snap.displayPath(sub), root + "/sub")
         let inner = snap.children(sub).first!
         XCTAssertEqual(snap.name(inner), "inner")
-        XCTAssertEqual(snap.path(inner), root + "/sub/inner")
+        XCTAssertEqual(snap.displayPath(inner), root + "/sub/inner")
+        XCTAssertEqual(snap.rawPath(inner), Data((root + "/sub/inner").utf8))
+        XCTAssertEqual(snap.rawPath(snap.root), Data(root.utf8))
     }
 
     func test_path_does_not_double_a_trailing_slash_on_the_root() throws {
         let (root, _) = try makeTree()
         let snap = Snapshot(handle: scan(root + "/"))
         let big = snap.children(snap.root).first { snap.name($0) == "big" }!
-        XCTAssertEqual(snap.path(big), root + "/big")
+        XCTAssertEqual(snap.displayPath(big), root + "/big")
+        XCTAssertEqual(snap.rawPath(big), Data((root + "/big").utf8))
     }
 
     func test_buffers_survive_while_snapshot_is_retained() throws {
@@ -266,6 +269,27 @@ final class SnapshotTests: XCTestCase {
             if trap { snap.debugReleaseEarly() }
             _ = snap.generation
             _ = snap.name(snap.root)
+        } else if kind.hasPrefix("cycle") {
+            // Two nodes, "r" and its child "c"; the trap makes each the
+            // other's parent, so neither reaches a root.
+            let nodes = UnsafeMutablePointer<TessNode>.allocate(capacity: 2)
+            var r = TessNode(), c = TessNode()
+            r.name_len = 1; r.parent = trap ? 1 : UInt32.max
+            r.child_start = 1; r.child_count = 1; r.flags = UInt16(TESS_FLAG_DIR)
+            c.name_off = 1; c.name_len = 1; c.parent = 0
+            nodes.initialize(to: r)
+            (nodes + 1).initialize(to: c)
+            let names = UnsafeMutablePointer<UInt8>.allocate(capacity: 2)
+            names.initialize(to: 0x72)
+            (names + 1).initialize(to: 0x63)
+            let snap = Snapshot(
+                testingNodes: UnsafeBufferPointer(start: nodes, count: 2),
+                names: UnsafeRawBufferPointer(start: names, count: 2), root: 0)
+            if kind == "cycle-raw" {
+                XCTAssertEqual(snap.rawPath(1), Data("r/c".utf8))
+            } else {
+                XCTAssertEqual(snap.displayPath(1), "r/c")
+            }
         } else {
             // Hand-built nodes (leaked on purpose; the child is short-lived).
             let nodes = UnsafeMutablePointer<TessNode>.allocate(capacity: 1)
@@ -387,7 +411,8 @@ final class SnapshotTests: XCTestCase {
         let snap = Snapshot(
             testingNodes: UnsafeBufferPointer(start: nil, count: 0),
             names: UnsafeRawBufferPointer(start: nil, count: 0), root: UInt32.max)
-        XCTAssertEqual(snap.path(0), "")
+        XCTAssertEqual(snap.displayPath(0), "")
+        XCTAssertEqual(snap.rawPath(0), Data())
     }
 
     func test_path_under_a_slash_root_has_a_single_slash() {
@@ -400,10 +425,48 @@ final class SnapshotTests: XCTestCase {
         nodes.withUnsafeBufferPointer { nb in
             names.withUnsafeBytes { rb in
                 let snap = Snapshot(testingNodes: nb, names: rb, root: 0)
-                XCTAssertEqual(snap.path(0), "/")
-                XCTAssertEqual(snap.path(1), "/usr")
+                XCTAssertEqual(snap.displayPath(0), "/")
+                XCTAssertEqual(snap.displayPath(1), "/usr")
+                XCTAssertEqual(snap.rawPath(0), Data("/".utf8))
+                XCTAssertEqual(snap.rawPath(1), Data("/usr".utf8))
             }
         }
+    }
+
+    /// Final review I1: the raw path is the actionable identity, so it keeps
+    /// every byte of every name: invalid UTF-8, C0 controls (a newline, a
+    /// tab, ESC), DEL and a bidi override, none of which the display path
+    /// can carry.
+    func test_raw_path_keeps_every_byte_of_every_name() {
+        let weird: [UInt8] = [0x66, 0xFF, 0xFE, 0x0A, 0x09, 0x1B, 0xE2, 0x80, 0xAE, 0x7F, 0xC3]
+        let leaf = Array("x\r".utf8)
+        let names = Array("/R".utf8) + weird + leaf
+        var nodes = [TessNode](repeating: TessNode(), count: 3)
+        nodes[0].name_off = 0; nodes[0].name_len = 2; nodes[0].parent = UInt32.max
+        nodes[0].child_start = 1; nodes[0].child_count = 1; nodes[0].flags = UInt16(TESS_FLAG_DIR)
+        nodes[1].name_off = 2; nodes[1].name_len = UInt16(weird.count); nodes[1].parent = 0
+        nodes[1].child_start = 2; nodes[1].child_count = 1; nodes[1].flags = UInt16(TESS_FLAG_DIR)
+        nodes[2].name_off = UInt32(2 + weird.count); nodes[2].name_len = UInt16(leaf.count); nodes[2].parent = 1
+        nodes.withUnsafeBufferPointer { nb in
+            names.withUnsafeBytes { rb in
+                let snap = Snapshot(testingNodes: nb, names: rb, root: 0)
+                let expected = Data(Array("/R/".utf8) + weird + [0x2F] + leaf)
+                XCTAssertEqual(snap.rawPath(2), expected)
+                XCTAssertEqual(snap.rawPath(1), Data(Array("/R/".utf8) + weird))
+                XCTAssertNotEqual(
+                    Data(snap.displayPath(2).utf8), expected, "precondition: the display path is lossy")
+            }
+        }
+    }
+
+    /// A parent chain that loops (only a malformed snapshot can have one)
+    /// traps instead of spinning forever, for both path builders.
+    func test_raw_path_traps_on_a_parent_cycle() throws {
+        try assertTraps(kind: "cycle-raw", message: "Snapshot parent chain has a cycle")
+    }
+
+    func test_display_path_traps_on_a_parent_cycle() throws {
+        try assertTraps(kind: "cycle-display", message: "Snapshot parent chain has a cycle")
     }
 }
 
