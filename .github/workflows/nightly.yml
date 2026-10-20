@@ -24,7 +24,7 @@ env:
 # bindings, and the golden fixtures are macOS kernel output.
 jobs:
   miri:
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
         run: scripts/parser-sanitizers.sh miri
 
   asan:
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
         run: scripts/parser-sanitizers.sh asan
 
   fuzz:
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

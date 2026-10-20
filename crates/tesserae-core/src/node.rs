@@ -43,10 +43,11 @@ pub const FLAG_SYMLINK: u16 = 1 << 1;
 // Bit 2 is `arena::FLAG_HARDLINK_DUP` and bit 3 is `arena::FLAG_PERM_DENIED`;
 // both are set by the walker and carried through freeze unchanged.
 
-/// [`TessNode::flags`] bit 4: the node stands for several siblings merged by
-/// the treemap's tail aggregation. Phase 2 sets it on its own layout output;
-/// freeze never does. It is defined here only so that no other flag can claim
-/// the bit.
+/// [`TessNode::flags`] bit 4: reserved for a node standing for several
+/// siblings merged by the treemap's tail aggregation. Nothing sets it: freeze
+/// never does (a test asserts it), and the snapshot is immutable, so the app's
+/// layout marks aggregate tiles on its own `Tile` flags (a separate set of
+/// bits). It is defined here only so that no other flag can claim the bit.
 pub const FLAG_AGGREGATED: u16 = 1 << 4;
 
 // The five bits are fixed by the spec and read by Phase 2; two flags sharing a
@@ -70,7 +71,7 @@ const _: () = {
     assert!(seen == 0b1_1111);
 };
 
-/// One entry of the frozen tree. 40 bytes, C layout.
+/// One entry of the frozen tree. 48 bytes, C layout.
 ///
 /// A directory's children are the entries `child_start` up to
 /// `child_start + child_count` of the node array, sorted descending by
@@ -103,6 +104,17 @@ pub struct TessNode {
     /// everything beneath it: a directory carries no size of its own, so this
     /// figure exists only because the freeze rolled it up.
     pub allocated: u64,
+    /// Last modification, in seconds since the Unix epoch (UTC); negative
+    /// before 1970. For a file or symlink, its own `ATTR_CMN_MODTIME`, as
+    /// read, even if it is in the future. For a directory, the latest of its
+    /// own and every descendant's time **that is not later than the scan's
+    /// start** (`WalkStats::started_at`), rolled up at freeze like the sizes,
+    /// so a directory is as recent as the most recently touched thing inside
+    /// it and a future-dated file cannot make its ancestors look newest. A
+    /// directory with no such time in its subtree keeps its own time as read.
+    /// Last in the struct: appended in Phase 2 without moving any earlier
+    /// field.
+    pub modified: i64,
 }
 
 /// The result of a scan: an immutable tree plus what the walk saw.

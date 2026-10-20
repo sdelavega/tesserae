@@ -45,6 +45,74 @@ const VOLUME_NAME: &str = "TesseraeTest";
 /// failure.
 const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How many times a force detach is tried while the device reports busy, and
+/// the pause between tries (about 3 s in all before giving up).
+const FORCE_DETACH_ATTEMPTS: u32 = 10;
+const FORCE_DETACH_DELAY: Duration = Duration::from_millis(300);
+
+/// Whether `e` is `hdiutil` saying the device is busy ("Resource busy").
+fn is_busy(e: &io::Error) -> bool {
+    e.to_string().to_ascii_lowercase().contains("resource busy")
+}
+
+/// Run `op` up to `attempts` times, calling `sleep(delay)` between tries, for
+/// as long as it fails with a busy error. Any other error, or success, ends it
+/// at once; if every try is busy the last error is returned. `sleep` is a
+/// parameter so the policy can be tested without waiting or `hdiutil`.
+fn retry_while_busy(
+    attempts: u32,
+    delay: Duration,
+    mut sleep: impl FnMut(Duration),
+    mut op: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    let mut tries = 1;
+    loop {
+        match op() {
+            Err(e) if is_busy(&e) && tries < attempts => {
+                tries += 1;
+                sleep(delay);
+            }
+            other => return other,
+        }
+    }
+}
+
+/// The filesystem a [`DiskImage`] is formatted with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filesystem {
+    Apfs,
+    /// Mac OS Extended (journaled is not requested; plain HFS+).
+    HfsPlus,
+    ExFat,
+    /// FAT32. `hdiutil` needs an image of at least about 33 MiB for it.
+    Fat32,
+    /// FAT16: at 64 MiB, 2 KiB clusters where FAT32 has 512-byte ones.
+    Fat16,
+}
+
+impl Filesystem {
+    /// The name `hdiutil create -fs` takes.
+    fn hdiutil_name(self) -> &'static str {
+        match self {
+            Filesystem::Apfs => "APFS",
+            Filesystem::HfsPlus => "HFS+",
+            Filesystem::ExFat => "ExFAT",
+            Filesystem::Fat32 => "MS-DOS FAT32",
+            Filesystem::Fat16 => "MS-DOS FAT16",
+        }
+    }
+
+    /// The volume label. FAT labels hold at most 11 characters, and
+    /// `hdiutil` refuses a longer one with "Operation not permitted" (measured
+    /// for exFAT with `VOLUME_NAME`), so those get a short one.
+    fn volume_name(self) -> &'static str {
+        match self {
+            Filesystem::Apfs | Filesystem::HfsPlus => VOLUME_NAME,
+            Filesystem::ExFat | Filesystem::Fat32 | Filesystem::Fat16 => "TESSTEST",
+        }
+    }
+}
+
 /// A disk image attached at a chosen mountpoint, detached when dropped.
 ///
 /// Declare it *after* the [`crate::Fixture`] whose directory holds the
@@ -67,7 +135,14 @@ impl DiskImage {
     /// mountpoint is verified to be on a different device from its parent, so
     /// a call that returns `Ok` really did mount a separate filesystem.
     pub fn attach(mountpoint: &Path, size_mib: u32) -> io::Result<Self> {
-        Self::attach_using(mountpoint, size_mib, |dmg| hdiutil_attach(mountpoint, dmg))
+        Self::attach_fs(mountpoint, size_mib, Filesystem::Apfs)
+    }
+
+    /// [`DiskImage::attach`], formatted with `fs` instead of APFS.
+    pub fn attach_fs(mountpoint: &Path, size_mib: u32, fs: Filesystem) -> io::Result<Self> {
+        Self::attach_using(mountpoint, size_mib, fs, |dmg| {
+            hdiutil_attach(mountpoint, dmg)
+        })
     }
 
     /// [`DiskImage::attach`] with the attach step supplied, so a test can make
@@ -75,6 +150,7 @@ impl DiskImage {
     fn attach_using(
         mountpoint: &Path,
         size_mib: u32,
+        fs: Filesystem,
         attach: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<Self> {
         if !mountpoint.is_absolute() {
@@ -92,7 +168,7 @@ impl DiskImage {
 
         run(Command::new("hdiutil")
             .args(["create", "-size", &format!("{size_mib}m")])
-            .args(["-fs", "APFS", "-volname", VOLUME_NAME])
+            .args(["-fs", fs.hdiutil_name(), "-volname", fs.volume_name()])
             .arg(&dmg))?;
         // `mounted` stays false until `hdiutil attach` succeeds, so a failed
         // attach is not followed by a detach of something that is not there.
@@ -163,9 +239,18 @@ impl DiskImage {
         if !self.mounted {
             return Ok(());
         }
-        let result = run(Command::new("hdiutil")
-            .args(["detach", "-force"])
-            .arg(&self.mountpoint));
+        // `-force` still reports "Resource busy" while the kernel is tearing
+        // down a just-closed descriptor (seen on CI), which clears on its own.
+        let result = retry_while_busy(
+            FORCE_DETACH_ATTEMPTS,
+            FORCE_DETACH_DELAY,
+            thread::sleep,
+            || {
+                run(Command::new("hdiutil")
+                    .args(["detach", "-force"])
+                    .arg(&self.mountpoint))
+            },
+        );
         if result.is_ok() {
             self.mounted = false;
         }
@@ -356,7 +441,7 @@ mod tests {
         let mnt = fx.path().join("mnt");
         let mut attached = false;
 
-        let err = DiskImage::attach_using(&mnt, 16, |dmg| {
+        let err = DiskImage::attach_using(&mnt, 16, Filesystem::Apfs, |dmg| {
             hdiutil_attach(&mnt, dmg)?;
             attached = is_mounted(&mnt);
             Err(io::Error::new(io::ErrorKind::TimedOut, "simulated kill"))
@@ -438,6 +523,67 @@ mod tests {
         assert!(!is_mounted(&mnt));
         image.force_detach().unwrap();
         drop(held);
+    }
+
+    fn busy() -> io::Error {
+        io::Error::other(
+            "\"hdiutil\" failed (exit status: 16): couldn't eject \"disk7\" - Resource busy",
+        )
+    }
+
+    #[test]
+    fn a_busy_detach_is_retried_until_it_succeeds() {
+        let (mut calls, mut sleeps) = (0, Vec::new());
+        let r = retry_while_busy(
+            10,
+            Duration::from_millis(5),
+            |d| sleeps.push(d),
+            || {
+                calls += 1;
+                if calls < 4 {
+                    Err(busy())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        r.unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(sleeps, vec![Duration::from_millis(5); 3]);
+    }
+
+    #[test]
+    fn a_detach_that_stays_busy_gives_up_after_the_bound_with_the_last_error() {
+        let (mut calls, mut slept) = (0, 0);
+        let err = retry_while_busy(
+            10,
+            Duration::ZERO,
+            |_| slept += 1,
+            || {
+                calls += 1;
+                Err(io::Error::other(format!("attempt {calls}: Resource busy")))
+            },
+        )
+        .unwrap_err();
+        assert_eq!((calls, slept), (10, 9));
+        assert!(err.to_string().contains("attempt 10"), "{err}");
+    }
+
+    #[test]
+    fn a_detach_error_that_is_not_busy_is_not_retried() {
+        let mut calls = 0;
+        let err = retry_while_busy(
+            10,
+            Duration::ZERO,
+            |_| panic!("must not sleep"),
+            || {
+                calls += 1;
+                Err(io::Error::other("hdiutil: not a disk image"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(err.to_string().contains("not a disk image"));
     }
 
     #[test]

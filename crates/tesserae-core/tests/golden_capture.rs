@@ -37,7 +37,10 @@
 //!
 //! Note on `d_alloc`: a directory's `getattrlistbulk` entry carries no
 //! `fileattr` group at all (see `parse.rs`), so the expectation records `0` for
-//! directories rather than `lstat`'s `st_blocks`.
+//! directories rather than `lstat`'s `st_blocks`. The `mtime` column is
+//! `st_mtime` for every kind, directories included: `ATTR_CMN_MODTIME` is a
+//! common attribute, present in every entry. The `flags` column is
+//! `st_flags`, likewise for every kind (`ATTR_CMN_FLAGS`).
 
 use std::ffi::CString;
 use std::fs;
@@ -135,7 +138,50 @@ fn fixtures_dir() -> PathBuf {
         .join("fixtures")
 }
 
+/// Give every entry of `dir` its own modification time, without following
+/// symlinks, so that a parser reading one entry's time from another's slot
+/// cannot match the sidecar. A fixture built in one go otherwise has the same
+/// second everywhere. The last entry in name order gets a time before 1970,
+/// which `time_t` represents as negative.
+fn stamp_distinct_mtimes(dir: &Path) {
+    let mut names: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    names.sort();
+    let last = names.len() - 1;
+    for (i, name) in names.iter().enumerate() {
+        let sec: i64 = if i == last {
+            -86_400 * 365
+        } else {
+            1_600_000_000 + 1_000_003 * i as i64
+        };
+        let c = CString::new(dir.join(name).as_os_str().as_bytes()).unwrap();
+        let times = [
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: libc::UTIME_OMIT,
+            },
+            libc::timespec {
+                tv_sec: sec,
+                tv_nsec: 0,
+            },
+        ];
+        // SAFETY: `c` is NUL-terminated; `times` holds the two timespecs read.
+        let rc = unsafe {
+            libc::utimensat(
+                libc::AT_FDCWD,
+                c.as_ptr(),
+                times.as_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        assert_eq!(rc, 0, "utimensat {name:?}: {}", last_error());
+    }
+}
+
 fn write_corpus(name: &str, dir: &Path) {
+    stamp_distinct_mtimes(dir);
     let cap = capture(dir);
     let out = fixtures_dir();
     fs::create_dir_all(&out).unwrap();
@@ -173,7 +219,7 @@ fn write_corpus(name: &str, dir: &Path) {
                 )
             };
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 hex(entry.file_name().as_bytes()),
                 kind,
                 st.st_ino,
@@ -181,14 +227,24 @@ fn write_corpus(name: &str, dir: &Path) {
                 nlink,
                 logical,
                 allocated,
+                st.st_mtime,
+                st.st_flags,
             )
         })
         .collect();
     rows.sort();
 
     let mut f = fs::File::create(out.join(format!("golden_{name}.expect"))).unwrap();
-    writeln!(f, "# name_hex\tkind\tino\tdev\tnlink\tlogical\tallocated").unwrap();
-    writeln!(f, "# from lstat(2); nlink/logical/allocated are 0 for dirs").unwrap();
+    writeln!(
+        f,
+        "# name_hex\tkind\tino\tdev\tnlink\tlogical\tallocated\tmtime\tflags"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "# from lstat(2); nlink/logical/allocated are 0 for dirs; mtime is st_mtime; flags is st_flags"
+    )
+    .unwrap();
     for row in rows {
         writeln!(f, "{row}").unwrap();
     }
@@ -210,6 +266,22 @@ fn lstat(path: &Path) -> libc::stat {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `UF_NODUMP | UF_HIDDEN`, `0x1` and `0x8000` in `sys/stat.h`: two
+/// owner-settable bits, far apart, so that `ATTR_CMN_FLAGS` read from any
+/// other offset cannot match `st_flags` by accident.
+const DENSE_FLAGS: u32 = 0x0000_8001;
+
+/// `chflags(2)` `path` to exactly `flags`.
+fn set_flags(path: &Path, flags: u32) {
+    assert_eq!(libc::UF_NODUMP, 0x1);
+    assert_eq!(libc::UF_HIDDEN, 0x8000);
+    let c = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `c` is a live NUL-terminated string.
+    let rc = unsafe { libc::chflags(c.as_ptr(), flags) };
+    assert_eq!(rc, 0, "chflags {}: {}", path.display(), last_error());
+    assert_eq!(lstat(path).st_flags, flags, "the flags took");
 }
 
 /// `golden_simple.bin`: the brief's two-entry tree.
@@ -238,5 +310,6 @@ fn capture_golden_mixed() {
     fx.dir("subdir").unwrap();
     fx.raw_name(".", b"caf\xc3\xa9 \xe2\x82\xac.bin", 1024)
         .unwrap();
+    set_flags(&fx.path().join("dense.bin"), DENSE_FLAGS);
     write_corpus("mixed", fx.path());
 }

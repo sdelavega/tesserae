@@ -713,34 +713,54 @@ mod tests {
                 }
             }
         }
-        let opener = Arc::new(BlockCrossArenaReopen {
-            sleep: Duration::from_secs(3),
-            p_owner: Mutex::new(None),
-            reopened_by: Mutex::new(HashMap::new()),
-            fired: AtomicU32::new(0),
-            blocked: Mutex::new(None),
-            woke: AtomicBool::new(false),
-        });
-        let mut o = opts(fx.path());
-        o.workers = 8;
-        o.stall_timeout = Duration::from_secs(1);
-        let p = Progress::default();
+        // Whether a qualifying reopen happens at all is up to the scheduler:
+        // `p/slowK` has to be taken by a worker other than the one that
+        // opened `p`, and then one of its children by another worker still,
+        // and on a loaded machine the walk sometimes runs without such a
+        // chain. A walk without one blocks nothing, so it is cheap to run
+        // again; retry a bounded number of times and fail loudly if the
+        // precondition never holds. (Every assertion below is on a walk that
+        // did qualify, and none is relaxed.)
+        const MAX_ATTEMPTS: usize = 100;
+        let mut attempt = 0;
+        let (opener, arenas, stats, woke_by_return, p) = loop {
+            attempt += 1;
+            let opener = Arc::new(BlockCrossArenaReopen {
+                sleep: Duration::from_secs(3),
+                p_owner: Mutex::new(None),
+                reopened_by: Mutex::new(HashMap::new()),
+                fired: AtomicU32::new(0),
+                blocked: Mutex::new(None),
+                woke: AtomicBool::new(false),
+            });
+            let mut o = opts(fx.path());
+            o.workers = 8;
+            o.stall_timeout = Duration::from_secs(1);
+            let p = Progress::default();
 
-        let start = Instant::now();
-        let (arenas, stats) = walk_with(&o, Arc::clone(&opener), &[], &p).unwrap();
-        let elapsed = start.elapsed();
+            let (arenas, stats) = walk_with(&o, Arc::clone(&opener), &[], &p).unwrap();
+            // Read first thing after the walk returns: the hook sets `woke`
+            // only once its sleep has ended, so `false` here means the walk
+            // came back while the reopen was still blocked.
+            let woke_by_return = opener.woke.load(Ordering::SeqCst);
+            if opener.blocked.lock().unwrap().is_some() {
+                break (opener, arenas, stats, woke_by_return, p);
+            }
+            assert!(
+                attempt < MAX_ATTEMPTS,
+                "no cross-arena reopen in {attempt} walks, so nothing was tested"
+            );
+        };
 
+        // The property, as an ordering rather than a wall-clock bound (which
+        // failed once at 2.58 s on a loaded machine): the walk returned
+        // before the blocked reopen's sleep ended, i.e. it abandoned the
+        // stuck worker instead of waiting for it.
         assert!(
-            elapsed < Duration::from_millis(2500),
-            "took {elapsed:?}: waited for the blocked reopen (3 s)"
+            !woke_by_return,
+            "the walk returned only after the blocked reopen woke: it waited instead of abandoning it"
         );
-        let blocked = opener
-            .blocked
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("no reopen qualified, so nothing was tested");
-        assert!(!opener.woke.load(Ordering::SeqCst));
+        let blocked = opener.blocked.lock().unwrap().clone().unwrap();
 
         // Precondition: the blocked directory's node and its parent's really
         // are in different arenas.

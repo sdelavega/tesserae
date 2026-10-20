@@ -16,7 +16,7 @@ default:
     @just --list
 
 # Every check CI runs, in CI's order.
-gate: lint test header ship-lib deny
+gate: lint test header ship-lib deny ffi app-test
 
 # The disk-image integration tests attach and detach real images with hdiutil.
 # `setrlimit` is process-wide, so the descriptor-limit test is `#[ignore]`d in
@@ -47,6 +47,24 @@ header:
 # Build the static library the app links and check it carries no test hooks.
 ship-lib:
     scripts/check-shipped-lib.sh
+
+# Xcode never runs cargo; its Run Script phase only checks the library is
+# newer than the Rust sources, and fails the build telling you to run this.
+#
+# Build apple/build/libtesserae.a (universal) for the Xcode project to link.
+ffi:
+    scripts/build-ffi.sh
+
+# TesseraeKit's XCTest suite (Debug, this machine's architecture). The result
+# bundle (xcodebuild refuses to overwrite one) is what CI uploads on failure.
+app-test:
+    rm -rf apple/build/TesseraeKit-test.xcresult
+    xcodebuild test -project apple/Tesserae.xcodeproj -scheme TesseraeKit -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/TesseraeKit-test.xcresult
+
+# Unsigned universal Release build of the app, as CI builds it.
+app-build:
+    rm -rf apple/build/Tesserae-build.xcresult
+    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO
 
 # Criterion benchmarks (parse and freeze). Reported, not asserted.
 bench:

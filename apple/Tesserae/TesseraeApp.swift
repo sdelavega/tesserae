@@ -1,0 +1,50 @@
+// Tesserae: a disk-space visualizer.
+// Copyright (C) 2026 Stephen de la Vega
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import AppKit
+import SwiftUI
+import TesseraeKit
+
+@main
+struct TesseraeApp: App {
+    init() {
+        // A mistyped frame-gate variable must not silently launch an ordinary session.
+        if case .failure(let problem) = FrameGateConfiguration.current {
+            FileHandle.standardError.write(Data("tesserae frame gate: \(problem)\n".utf8))
+            exit(2)
+        }
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+        #if DEBUG
+        .commands {
+            CommandMenu("Diagnostics") {
+                // Needs TESSERAE_FRAME_TIMING=1 (the runner exists only then).
+                Button("Run Phase 2 Frame Gate") {
+                    NotificationCenter.default.post(name: .init("TesseraeRunFrameGate"), object: nil)
+                }.disabled(!FrameTimer.shared.isEnabled)
+                Divider()
+                Button("Use Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
+                Button("Use Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+                Button("Follow System Appearance") { NSApp.appearance = nil }
+            }
+        }
+        #endif
+    }
+}

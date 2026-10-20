@@ -38,7 +38,9 @@
 //! # JSON
 //!
 //! `--json` prints one object with exactly these keys: `path`, `complete`,
-//! `dirs`, `files`, `logical_bytes`, `allocated_bytes`, `elapsed`
+//! `dirs`, `files`, `logical_bytes`, `allocated_bytes`, `modified` (the
+//! root's modification time in seconds since the Unix epoch, which is the
+//! newest anywhere beneath it, or `null` for an empty snapshot), `elapsed`
 //! (`walk_secs`, `freeze_secs`, `total_secs`), `incomplete` (the variant name
 //! or `null`), `stalled_at`, `unreadable`, `skipped_mounts` (`path`,
 //! `reason`), `lost_entries`, `hardlink_dups`, `depth_capped`, `errors`.
@@ -66,7 +68,8 @@ usage: tesserae-cli scan <path> [--json] [--workers N] [--max-depth N] [--node-b
        tesserae-cli --help
 
 Prints the directory and file counts, the logical and allocated byte totals,
-the elapsed time and every field that says the result may be short:
+the root's modification time (the newest anywhere beneath it, in UTC), the
+elapsed time and every field that says the result may be short:
 incomplete, stalled_at, unreadable, skipped_mounts, lost_entries,
 hardlink_dups, depth_capped and errors.
 
@@ -172,6 +175,31 @@ fn human(bytes: u64) -> String {
     format!("{value:.1} {unit}")
 }
 
+/// `sec` seconds since the Unix epoch as a UTC date and time,
+/// `2033-05-18 03:33:20 UTC`, in the proleptic Gregorian calendar. Total over
+/// every `i64`: the day count and the calendar arithmetic stay far inside
+/// `i64` even at its extremes.
+fn utc(sec: i64) -> String {
+    let (days, secs) = (sec.div_euclid(86_400), sec.rem_euclid(86_400));
+    // Howard Hinnant's `civil_from_days`: shift the epoch to 0000-03-01 so a
+    // leap day falls at the end of the year, then split into 400-year eras.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // day of era, 0..=146_096
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // 0..=399
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year from March 1
+    let mp = (5 * doy + 2) / 153; // month from March, 0..=11
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        secs / 3_600,
+        secs % 3_600 / 60,
+        secs % 60
+    )
+}
+
 /// What a finished scan reports.
 struct Report {
     path: PathBuf,
@@ -192,6 +220,16 @@ impl Report {
         }
     }
 
+    /// The root's `modified`: seconds since the epoch of the newest
+    /// modification anywhere in the tree, the root's own included. `None`
+    /// for an empty snapshot.
+    fn modified(&self) -> Option<i64> {
+        match self.snapshot.root {
+            NODE_NONE => None,
+            root => Some(self.snapshot.nodes[root as usize].modified),
+        }
+    }
+
     fn complete(&self) -> bool {
         self.snapshot.stats.incomplete.is_none()
     }
@@ -206,6 +244,7 @@ impl Report {
             "files": stats.files,
             "logical_bytes": logical,
             "allocated_bytes": allocated,
+            "modified": self.modified(),
             "elapsed": {
                 "walk_secs": self.walk.as_secs_f64(),
                 "freeze_secs": self.freeze.as_secs_f64(),
@@ -239,6 +278,11 @@ impl Report {
         line(
             "allocated",
             format!("{allocated} bytes ({})", human(allocated)),
+        );
+        line(
+            "modified",
+            self.modified()
+                .map_or("-".into(), |m| format!("{} ({m})", utc(m))),
         );
         line(
             "elapsed",
@@ -446,6 +490,7 @@ mod tests {
             hardlink_dups: 5,
             stalled_at: Some("/v/hung".into()),
             incomplete: Some(Incomplete::Stalled),
+            started_at: 1_700_000_000,
         };
         Report {
             path: "/v".into(),
@@ -472,6 +517,7 @@ mod tests {
                 "files": 17,
                 "logical_bytes": 0,
                 "allocated_bytes": 0,
+                "modified": null,
                 "elapsed": { "walk_secs": 1.5, "freeze_secs": 0.5, "total_secs": 2.0 },
                 "incomplete": "Stalled",
                 "stalled_at": "/v/hung",
@@ -499,10 +545,33 @@ mod tests {
             "hardlink_dups:  5",
             "depth_capped:   7",
             "errors:         11",
+            "modified:       -",
             "  /v/locked",
             "  /v/mnt (NonLocalMount)",
         ] {
             assert!(text.lines().any(|l| l == line), "no {line:?} in:\n{text}");
+        }
+    }
+
+    /// Seconds since the epoch as a proleptic Gregorian UTC date, checked
+    /// against values computed independently (Python's `calendar.timegm`),
+    /// across the epoch, leap days and the century rules.
+    #[test]
+    fn modification_times_are_printed_as_utc_dates() {
+        for (sec, want) in [
+            (0, "1970-01-01 00:00:00 UTC"),
+            (-1, "1969-12-31 23:59:59 UTC"),
+            (951_782_400, "2000-02-29 00:00:00 UTC"),
+            (2_000_000_000, "2033-05-18 03:33:20 UTC"),
+            (4_107_542_400, "2100-03-01 00:00:00 UTC"),
+            (-2_203_891_200, "1900-03-01 00:00:00 UTC"),
+            (-11_670_912_001, "1600-02-29 23:59:59 UTC"),
+        ] {
+            assert_eq!(utc(sec), want, "{sec}");
+        }
+        // No `time_t` panics, however absurd.
+        for sec in [i64::MIN, i64::MAX] {
+            assert!(utc(sec).ends_with(" UTC"));
         }
     }
 

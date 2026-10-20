@@ -41,7 +41,7 @@ use tesserae_core::node::{Snapshot, FLAG_DIR};
 use tesserae_core::progress::{walk_with_progress, Progress};
 use tesserae_core::walk::{os_errno, Incomplete, WalkOptions};
 use tesserae_testutil::{
-    allocation_lock, copy_by_read_write, write_dense_file, DiskImage, Fixture,
+    allocation_lock, copy_by_read_write, write_dense_file, DiskImage, Filesystem, Fixture,
 };
 
 /// APFS allocates in units of this many bytes. Asserted against the
@@ -163,6 +163,145 @@ fn scans_a_known_disk_image_to_exact_totals() {
     let root = &snapshot.nodes[snapshot.root as usize];
     assert_eq!(root.logical, expected_logical);
     assert_eq!(root.allocated, expected_allocated);
+}
+
+/// The parser accepts exactly two fixed-region sizes, measured on APFS (68
+/// bytes for a directory, 88 for everything else), and refuses any other as a
+/// malformed batch. The packing is the VFS's, so the same two sizes were
+/// measured on HFS+, exFAT and FAT32 too; this scans a real volume of each,
+/// with APFS as the control, so a filesystem that packed the ten attributes
+/// any other way would fail here as `MalformedBatch` rather than on a user's
+/// external drive.
+///
+/// Totals are held to `lstat(2)`, an independent reading of the same
+/// metadata, exactly, on every filesystem. On FAT (FAT32 and FAT16 here)
+/// that is the walker's computed allocation: `getattrlistbulk` reports
+/// `ATTR_FILE_ALLOCSIZE` as 0 there, so the scanner rounds each file's data
+/// length up to the volume's cluster (see `boundary::Sizing`), and this is
+/// what holds that rounding to the filesystem's own figure.
+#[test]
+fn every_filesystem_scans_with_only_the_two_measured_layouts() {
+    let hdiutil = std::process::Command::new("hdiutil")
+        .arg("help")
+        .output()
+        .unwrap_or_else(|e| panic!("this test needs hdiutil(1) to make disk images: {e}"));
+    assert!(hdiutil.status.success(), "hdiutil help failed: {hdiutil:?}");
+
+    // Sizes cover a sub-block file, an exact multiple of 4 KiB, and one byte
+    // past a block; every filesystem here supports symlinks.
+    const FILES: [(&str, u64); 3] = [
+        ("a.bin", 5),
+        ("dir/b.bin", 100 * 1024),
+        ("dir/deeper/c.bin", BLOCK + 1),
+    ];
+    for fs in [
+        Filesystem::Apfs,
+        Filesystem::HfsPlus,
+        Filesystem::ExFat,
+        Filesystem::Fat32,
+        Filesystem::Fat16,
+    ] {
+        let fx = Fixture::new().unwrap();
+        fx.dir("mnt").unwrap();
+        let mnt = fx.path().join("mnt");
+        let image = DiskImage::attach_fs(&mnt, 64, fs)
+            .unwrap_or_else(|e| panic!("{fs:?}: making the image: {e}"));
+        assert_ne!(
+            fs::metadata(&mnt).unwrap().dev(),
+            fs::metadata(fx.path()).unwrap().dev(),
+            "{fs:?}: the image is a separate volume"
+        );
+        for (rel, len) in FILES {
+            fx.file(&format!("mnt/{rel}"), len).unwrap();
+        }
+        fx.symlink("a.bin", "mnt/lnk").unwrap();
+
+        // Precondition: the volume holds what was written, plus at most the
+        // AppleDouble `._` companions exFAT and FAT32 keep extended
+        // attributes in. Those are real entries, which the scanner counts.
+        let mut top: Vec<_> = fs::read_dir(&mnt)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| !n.starts_with("._"))
+            .collect();
+        top.sort();
+        assert_eq!(top, ["a.bin", "dir", "lnk"], "{fs:?}: the fresh volume");
+
+        // The reference, from `lstat` over a walk by `std::fs`: independent
+        // of `getattrlistbulk` and of the scanner.
+        let (dirs, files, logical, allocated) = lstat_totals(&mnt);
+        assert!(files >= 4, "{fs:?}: three files and a symlink at least");
+        // Different numbers, so one reported as the other is caught.
+        assert_ne!(logical, allocated, "{fs:?}");
+
+        let opts = WalkOptions {
+            root: mnt.clone(),
+            ..WalkOptions::default()
+        };
+        let (arenas, stats) = walk_with_progress(&opts, &Progress::default()).unwrap();
+        assert_eq!(
+            stats.incomplete, None,
+            "{fs:?}: no MalformedBatch, nothing short"
+        );
+        assert_eq!((stats.lost_entries, stats.errors), (0, 0), "{fs:?}");
+        let snapshot = try_freeze(arenas, stats).unwrap();
+        assert_eq!(dirs, 3, "{fs:?}: the root, dir and dir/deeper");
+        assert_eq!(
+            (snapshot.stats.dirs, snapshot.stats.files),
+            (dirs, files),
+            "{fs:?}"
+        );
+        assert_eq!(counted(&snapshot), (dirs, files), "{fs:?}");
+        let root = &snapshot.nodes[snapshot.root as usize];
+        assert_eq!(root.logical, logical, "{fs:?}: logical");
+        if matches!(fs, Filesystem::Fat32 | Filesystem::Fat16) {
+            // Preconditions: a file whose size is not a whole number of
+            // clusters, so rounding is exercised and not a no-op, and a
+            // nonzero reference, so a scan reporting 0 cannot match.
+            let cluster = statfs_bsize(&mnt);
+            assert!(
+                FILES.iter().any(|(_, len)| len % cluster != 0),
+                "{fs:?}: no file is short of a {cluster}-byte cluster"
+            );
+            assert_ne!(allocated, 0, "{fs:?}");
+        }
+        assert_eq!(root.allocated, allocated, "{fs:?}: allocated");
+        drop(image);
+    }
+}
+
+/// `statfs(2)`'s `f_bsize` for the volume at `path`: on FAT, the cluster size
+/// (measured equal to the "Allocation Block Size" `diskutil` reports).
+fn statfs_bsize(path: &Path) -> u64 {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `statfs` is plain data for which all-zero is valid; `c` is a
+    // live NUL-terminated path and `st` a writable out-pointer.
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::statfs(c.as_ptr(), &mut st) }, 0);
+    u64::from(st.f_bsize)
+}
+
+/// `(dirs, files, logical, allocated)` under `root`, the root included, read
+/// with `lstat` while walking by `std::fs`. Symlinks are not followed.
+fn lstat_totals(root: &Path) -> (u64, u64, u64, u64) {
+    let (mut dirs, mut files, mut logical, mut allocated) = (1, 0, 0, 0);
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in fs::read_dir(&dir).unwrap() {
+            let path = e.unwrap().path();
+            let md = fs::symlink_metadata(&path).unwrap();
+            if md.is_dir() {
+                dirs += 1;
+                stack.push(path);
+            } else {
+                files += 1;
+                logical += md.len();
+                allocated += md.blocks() * 512;
+            }
+        }
+    }
+    (dirs, files, logical, allocated)
 }
 
 /// What copying one 8 MiB file four times did to a fresh image, seen two ways.

@@ -120,6 +120,7 @@ fn json_carries_every_incompleteness_field_even_when_clean() {
             "incomplete",
             "logical_bytes",
             "lost_entries",
+            "modified",
             "path",
             "skipped_mounts",
             "stalled_at",
@@ -211,6 +212,66 @@ fn a_mount_inside_the_tree_is_reported_with_its_reason() {
     );
     // The mount point is still a directory node: the root and `mnt`.
     assert_eq!(json["dirs"], 2);
+}
+
+/// The root's `modified`, as the app's inspector would show it: the newest
+/// modification time beneath it that is not after the scan started, as
+/// seconds in JSON and as a UTC date in text. A file dated in the future
+/// (real volumes have them) must not become the root's time.
+#[test]
+fn the_roots_modified_time_is_the_newest_beneath_it_that_is_not_in_the_future() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let fx = small_tree();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let at = |secs: u64| UNIX_EPOCH + Duration::from_secs(secs);
+    let stamp = |rel: &str, secs: u64| {
+        // A directory opens read-only; its owner may still set its times.
+        let f = if rel.is_empty() || !rel.contains('.') {
+            std::fs::File::open(fx.path().join(rel))
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(fx.path().join(rel))
+        };
+        f.unwrap().set_modified(at(secs)).unwrap();
+    };
+    let old = now - 100 * 86_400;
+    let newest_past = now - 1_000;
+    let future = now + 10 * 365 * 86_400;
+    stamp("a/one.bin", newest_past);
+    stamp("a/b/two.bin", old);
+    stamp("empty.bin", old);
+    stamp("top.bin", future);
+    // Directories last, deepest first: nothing above writes to them again.
+    for dir in ["a/b", "a", ""] {
+        stamp(dir, old);
+    }
+    // Preconditions: the stamps took, so the tree is exactly as described.
+    let mtime = |rel: &str| fx.path().join(rel).metadata().unwrap().mtime() as u64;
+    assert_eq!(mtime("top.bin"), future);
+    assert_eq!(mtime("a/one.bin"), newest_past);
+    assert_eq!(mtime(""), old);
+
+    let (code, json) = scan_json(fx.path(), &[]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["modified"], newest_past, "{json}");
+
+    let out = cli(&["scan", fx.path().to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("modified:"))
+        .unwrap_or_else(|| panic!("no modified line in:\n{text}"));
+    // The date itself is `utc`'s, unit-tested in the binary; here it must
+    // carry the same instant.
+    assert!(
+        line.ends_with(&format!(" UTC ({newest_past})")),
+        "{line:?} is not the newest past time {newest_past}"
+    );
 }
 
 #[test]

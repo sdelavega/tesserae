@@ -134,10 +134,12 @@ use crate::boundary::VolumeId;
 use crate::dedup::InodeSet;
 use crate::progress::Progress;
 use crate::walk::{
-    check_options, join_root, open_root, root_volume_of, with_context, DirOpener, Halt, Incomplete,
-    Lane, NodeBudget, OpenAt, Share, WalkOptions, WalkStats, Walker, WalkerCtx,
+    assemble_path, check_options, join_root, now_epoch_secs, open_root, root_volume_of,
+    with_context, DirOpener, Halt, Incomplete, Lane, NodeBudget, OpenAt, Share, WalkOptions,
+    WalkStats, Walker, WalkerCtx,
 };
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 
 /// Soft `RLIMIT_NOFILE` the walk asks for.
 const NOFILE_TARGET: u64 = 4096;
@@ -375,6 +377,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     progress: &Progress,
 ) -> io::Result<(Vec<Arena>, WalkStats)> {
     check_options(opts)?;
+    let started_at = now_epoch_secs();
     let workers = worker_count(opts.workers, opts.max_depth, raise_nofile(NOFILE_TARGET));
 
     // Before anything is spawned: if the root cannot be opened or its volume
@@ -516,6 +519,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
         stats.stalled_at = stalled_at;
     }
     progress.set(shared.counters.snapshot());
+    stats.started_at = started_at;
     Ok((arenas, stats))
 }
 
@@ -611,16 +615,8 @@ fn stalled_path<O>(shared: &Shared<O>, id: ScanId) -> Option<PathBuf> {
         if parent == ScanId::NONE {
             // `name` is the root's, which is the scan root's path as the
             // caller gave it: `join_root` supplies that.
-            let len = names.iter().map(|n| n.len() + 1).sum();
-            let mut rel: Vec<u8> = Vec::new();
-            rel.try_reserve_exact(len).ok()?;
-            for name in names.iter().rev() {
-                if !rel.is_empty() {
-                    rel.push(b'/');
-                }
-                rel.extend_from_slice(name);
-            }
-            return join_root(&shared.opts.root, &rel).ok();
+            let rel = assemble_path(b"", &names).ok()?;
+            return join_root(&shared.opts.root, rel.as_os_str().as_bytes()).ok();
         }
         names.try_reserve(1).ok()?;
         names.push(name);
@@ -725,7 +721,11 @@ fn merge(into: &mut WalkStats, from: WalkStats) -> io::Result<()> {
         hardlink_dups,
         stalled_at,
         incomplete,
+        started_at,
     } = from;
+    // The earliest start any part of the walk recorded. Workers' own stats
+    // carry the default (no cutoff), so this keeps the walk's.
+    into.started_at = into.started_at.min(started_at);
     into.dirs += dirs;
     into.files += files;
     into.errors += errors;
@@ -1550,6 +1550,7 @@ mod tests {
             hardlink_dups: 6,
             stalled_at: None,
             incomplete: None,
+            started_at: 500,
         };
         merge(
             &mut into,
@@ -1567,9 +1568,15 @@ mod tests {
                 hardlink_dups: 60,
                 stalled_at: Some(Path::new("/s").to_path_buf()),
                 incomplete: Some(Incomplete::FdExhausted),
+                started_at: 300,
             },
         )
         .unwrap();
+        assert_eq!(into.started_at, 300, "the earliest start");
+        // A worker's own stats carry the default, which is no cutoff and
+        // must not displace the walk's start.
+        merge(&mut into, WalkStats::default()).unwrap();
+        assert_eq!(into.started_at, 300);
 
         assert_eq!((into.dirs, into.files, into.errors), (11, 22, 33));
         assert_eq!(

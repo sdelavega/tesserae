@@ -108,7 +108,7 @@ macro_rules! abi {
 }
 
 abi! {
-    TessNode: 40, 8 {
+    TessNode: 48, 8 {
         name_off = 0, "u32", "uint32_t",
         name_len = 4, "u16", "uint16_t",
         flags = 6, "u16", "uint16_t",
@@ -117,6 +117,7 @@ abi! {
         child_count = 16, "u32", "uint32_t",
         logical = 24, "u64", "uint64_t",
         allocated = 32, "u64", "uint64_t",
+        modified = 40, "i64", "int64_t",
     }
     TessView: 40, 8 {
         nodes = 0, "*const tesserae_core::node::TessNode", "const TessNode *",
@@ -288,7 +289,7 @@ fn the_header_has_the_layout_constants_and_signatures_in_the_abi_table() {
         "all ten functions are checked"
     );
     assert!(
-        source.contains("offsetof(TessNode, allocated) == 32"),
+        source.contains("offsetof(TessNode, modified) == 40"),
         "the generated C does not check what it should"
     );
 

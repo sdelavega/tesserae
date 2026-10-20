@@ -56,8 +56,12 @@
 // permission, so it holds no children and no bytes.
 #define TESS_FLAG_PERM_DENIED (1 << 3)
 
-// `TessNode.flags` bit: a node standing for several siblings merged by the
-// treemap's tail aggregation. Set by the app's layout, never by a scan.
+// `TessNode.flags` bit: reserved for a node standing for several siblings
+// merged by the treemap's tail aggregation. Nothing sets it: no scan does (a
+// freeze test asserts it), and the snapshot is immutable, so the app's layout
+// marks aggregate tiles on its own `Tile` flags instead (a separate set of
+// bits, where `aggregated` is `1 << 3`). Defined so no other flag can claim
+// the bit.
 #define TESS_FLAG_AGGREGATED (1 << 4)
 
 // `TessNode.parent` of the root, and `TessView.root` of a snapshot that holds
@@ -145,7 +149,7 @@ typedef struct {
   uint64_t errors;
 } TessProgress;
 
-// One entry of the frozen tree. 40 bytes, C layout.
+// One entry of the frozen tree. 48 bytes, C layout.
 //
 // A directory's children are the entries `child_start` up to
 // `child_start + child_count` of the node array, sorted descending by
@@ -176,6 +180,17 @@ typedef struct {
   // everything beneath it: a directory carries no size of its own, so this
   // figure exists only because the freeze rolled it up.
   uint64_t allocated;
+  // Last modification, in seconds since the Unix epoch (UTC); negative
+  // before 1970. For a file or symlink, its own `ATTR_CMN_MODTIME`, as
+  // read, even if it is in the future. For a directory, the latest of its
+  // own and every descendant's time **that is not later than the scan's
+  // start** (`WalkStats::started_at`), rolled up at freeze like the sizes,
+  // so a directory is as recent as the most recently touched thing inside
+  // it and a future-dated file cannot make its ancestors look newest. A
+  // directory with no such time in its subtree keeps its own time as read.
+  // Last in the struct: appended in Phase 2 without moving any earlier
+  // field.
+  int64_t modified;
 } TessNode;
 
 // A borrowed view of a snapshot's arrays. The pointers stay valid until

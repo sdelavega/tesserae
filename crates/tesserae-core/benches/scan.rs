@@ -126,6 +126,7 @@ fn synthetic_arenas() -> Vec<Arena> {
             flags: 0,
             logical: size,
             allocated: size.next_multiple_of(4096),
+            modified: 0,
         })
         .unwrap()
     };

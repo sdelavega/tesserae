@@ -23,3 +23,25 @@
 # repository pins. In CI ~/.cargo/bin is already first, so this changes
 # nothing there.
 export PATH="$HOME/.cargo/bin:$PATH"
+
+# The inputs of apple/build/libtesserae.a, one "sha256  path" line each,
+# paths relative to the repository root, sorted bytewise: every .rs file and
+# Cargo.toml under crates/, the root Cargo.toml, Cargo.lock,
+# rust-toolchain.toml and the C header the Swift side compiles against.
+# scripts/build-ffi.sh writes this next to the library (libtesserae.inputs)
+# and scripts/verify-ffi-fresh.sh recomputes it, so a deleted, renamed or
+# edited input, or a toolchain change, shows as a difference; an mtime
+# comparison alone sees none of the first two.
+#
+# Usage: ffi_inputs <repository root>. Fails (under pipefail) if any listed
+# file cannot be read.
+ffi_inputs() {
+    (
+        cd "$1"
+        {
+            find crates \( -name '*.rs' -o -name Cargo.toml \) -print0
+            printf '%s\0' Cargo.toml Cargo.lock rust-toolchain.toml \
+                crates/tesserae-ffi/include/tesserae.h
+        } | LC_ALL=C sort -z -u | xargs -0 shasum -a 256
+    )
+}

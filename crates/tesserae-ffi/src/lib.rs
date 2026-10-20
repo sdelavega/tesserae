@@ -76,8 +76,12 @@ pub const TESS_FLAG_HARDLINK_DUP: u16 = 1 << 2;
 /// `TessNode.flags` bit: a directory that could not be read for lack of
 /// permission, so it holds no children and no bytes.
 pub const TESS_FLAG_PERM_DENIED: u16 = 1 << 3;
-/// `TessNode.flags` bit: a node standing for several siblings merged by the
-/// treemap's tail aggregation. Set by the app's layout, never by a scan.
+/// `TessNode.flags` bit: reserved for a node standing for several siblings
+/// merged by the treemap's tail aggregation. Nothing sets it: no scan does (a
+/// freeze test asserts it), and the snapshot is immutable, so the app's layout
+/// marks aggregate tiles on its own `Tile` flags instead (a separate set of
+/// bits, where `aggregated` is `1 << 3`). Defined so no other flag can claim
+/// the bit.
 pub const TESS_FLAG_AGGREGATED: u16 = 1 << 4;
 
 /// `TessNode.parent` of the root, and `TessView.root` of a snapshot that holds
@@ -837,6 +841,26 @@ mod tests {
         assert!(root.allocated > 0, "an empty root proves nothing below");
         // The root is named by the path it was scanned under.
         assert_eq!(name_of(&v, root), fx.path().as_os_str().as_bytes());
+        // Every node carries a real modification time across the ABI: the
+        // fixture was built moments ago, so each is within the last hour,
+        // and the scan's start is after all of them.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            (now - 3600..=now).contains(&frozen.stats.started_at),
+            "started_at {}",
+            frozen.stats.started_at
+        );
+        for n in all {
+            assert!(
+                (now - 3600..=now + 60).contains(&n.modified),
+                "{:?}: modified {} is not about now ({now})",
+                String::from_utf8_lossy(name_of(&v, n)),
+                n.modified
+            );
+        }
 
         // Every directory's children are the contiguous slice it names, they
         // point back at it, and their sizes add up to its own.
@@ -849,6 +873,26 @@ mod tests {
             assert!(!kids.is_empty(), "every directory here has an entry");
             assert!(kids.iter().all(|k| k.parent as usize == i));
             assert_eq!(kids.iter().map(|k| k.allocated).sum::<u64>(), dir.allocated);
+            // A directory's time is the newest in its subtree that is not
+            // after the scan's start (its own raw time only if nothing there
+            // is). Its own raw time is not in the view, so what is checked
+            // is: at least the newest dated descendant, and itself dated.
+            let started_at = frozen.stats.started_at;
+            let mut stack: Vec<&TessNode> = kids.iter().collect();
+            let mut newest_dated = None::<i64>;
+            while let Some(n) = stack.pop() {
+                if n.modified <= started_at {
+                    newest_dated = Some(newest_dated.map_or(n.modified, |m| m.max(n.modified)));
+                }
+                let (s, c) = (n.child_start as usize, n.child_count as usize);
+                stack.extend(&all[s..s + c]);
+            }
+            let newest_dated = newest_dated.expect("this fixture's entries all predate the scan");
+            assert!(dir.modified >= newest_dated, "node {i}");
+            assert!(
+                dir.modified <= started_at,
+                "node {i}: a dated subtree gives a dated time"
+            );
         }
 
         let s = stats(snapshot);
@@ -1178,6 +1222,9 @@ mod tests {
             hardlink_dups: 8,
             stalled_at: None,
             incomplete: Some(Incomplete::Stalled),
+            // Not part of `TessScanStats`: it is freeze's cutoff, and reaches
+            // the app through every directory's `modified`.
+            started_at: 9,
         };
         assert_eq!(
             scan_stats(&walk),

@@ -20,7 +20,7 @@
 # Usage: scripts/check-shipped-lib.sh
 #
 # The shipped library must be built with exactly
-#     cargo build -p tesserae-ffi --release
+#     cargo build -p tesserae-ffi --release --locked
 # The tests enable tesserae-core's `test-hooks` feature through a
 # dev-dependency, and cargo only keeps that out of a build that builds no test
 # targets: --all-targets, --tests or `cargo test --release` would unify the
