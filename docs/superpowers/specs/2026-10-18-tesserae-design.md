@@ -190,8 +190,10 @@ Tesserae.app
 ├── TesseraeKit (framework)
 │   ├── ScanCoordinator       drives the engine, owns snapshot lifetime
 │   ├── Snapshot              ARC wrapper over borrowed Rust memory
-│   ├── TreemapLayout         squarified + level-of-detail
-│   ├── TreemapView           MTKView via NSViewRepresentable
+│   ├── AppModel · AppSession scan state; one session per snapshot owns every index into it
+│   ├── TreemapLayout         squarified + level-of-detail (squarify)
+│   ├── TreemapView           MTKView via NSViewRepresentable; CoreGraphics fallback
+│   ├── Labels · Inspector    label placement, hover inspector
 │   ├── FileTable             NSTableView via NSViewRepresentable
 │   ├── SpaceReconciler       volume facts, snapshots, signed residual
 │   ├── Jetsam                staging set + trash execution
@@ -210,6 +212,14 @@ Tesserae.app
 The Swift side is a **framework, not app-target code**, so layout,
 reconciliation, guard lists and Jetsam are unit-testable without launching
 a window. The engine stays replaceable behind the FFI surface.
+
+As built in Phase 2, everything that holds an index into a snapshot (the
+navigation root, the selection, the hovered tile, the table's rows, the laid
+out tiles and the placed labels) lives in one `AppSession` that owns that
+snapshot, and a rescan replaces the whole session rather than updating it. A
+view or callback left over from the old session keeps its own snapshot and
+cannot write into the new one, so no index from a released snapshot is ever
+used (§6, "How the borrow is made safe").
 
 ### Alternatives considered
 
@@ -268,8 +278,11 @@ APFS clones cannot be detected (§7), so nothing could ever set it. What it
 marks is a hardlink counted as zero bytes because an earlier link to the same
 inode carried them. `DIR` and `SYMLINK` are derived from the object type at
 freeze, `HARDLINK_DUP` and `PERM_DENIED` are set by the walker, and
-`AGGREGATED` is set by the app's treemap layout and never by a scan. A
-compile-time check keeps the five bits distinct.
+`AGGREGATED` is reserved: no scan sets it (a freeze test asserts that no node
+of a snapshot carries it), and as built nothing else does either. The
+treemap layout marks aggregate tiles on its own `Tile` flags (a separate set
+of bits, §8), because the snapshot is immutable. A compile-time check keeps
+the five bits distinct.
 
 **Children are contiguous and pre-sorted descending by `allocated`.**
 Squarified layout wants exactly that, so the freeze step pays once and
@@ -397,8 +410,13 @@ Rust memory. It is closed structurally, not by discipline:
 
    **Code rule:** `UnsafeBufferPointer` must never outlive the `Snapshot`
    instance. Never capture the raw pointers in an escaping closure without
-   capturing the class. Debug builds carry a generation counter asserted on
-   access.
+   capturing the class. As built, `nodes` and `names` are computed
+   properties, and Debug builds assert on every access that the snapshot has
+   not been released (a lock-guarded flag; the generation number a snapshot
+   also carries is only a birth tag). The index and offset checks in `name`,
+   `children`, `path` and the rest are `precondition`s that **stay in
+   Release**: indices come from hit-testing and UI state, so a bad one is a
+   bug, and trapping is memory-safe where a silent fallback would not be.
 3. **Deletion does not mutate the snapshot.** Swift keeps an overlay — a
    `[UInt32: Int64]` size-delta map plus a deleted-node set — consulted
    during layout. Past ~10k entries or a 10% root delta, prompt a rescan.
@@ -707,7 +725,11 @@ visible children with no sorting at layout time.
   too small is a *contiguous suffix*. Emit `children[0..k]` individually,
   collapse `children[k..]` into one "N smaller items — X MB" tile. A prefix
   cut, no scanning.
-- **Hard instance budget** (~50k tiles), whichever binds first.
+- **Hard instance budget** (~50k tiles), whichever binds first. Directories
+  are subdivided breadth-first, so the budget cuts the deepest levels first
+  and a parent is never left half covered; tiles are emitted in paint order,
+  breadth-first, so every parent precedes its children but **a subtree is not
+  contiguous** in the array.
 - **The aggregate covers its share even when small.** The tail tile is
   emitted even if its own area is below the 16px² cull, so siblings plus
   aggregate always cover the parent exactly; it is the one tile that may be
@@ -732,7 +754,20 @@ visible children with no sorting at layout time.
   cells; placeholders count toward disjointness and the budget. An
   unreadable layout root is one placeholder filling the view. Finding them
   reads the zero-size suffix of each laid-out sibling set (flags only); the
-  sized tail is still never visited.
+  sized tail is still never visited. A zero-size sibling that is not an
+  unreadable directory gets no tile and is not counted in an aggregate; an
+  unreadable folder nested under a zero-size directory still gets no tile
+  (deferred to the Phase 3 scan report, which lists unreadable paths).
+- **Aspect ratio is not bounded in general.** No rectangular layout can bound
+  it for arbitrary sizes (siblings of 97.7% and 2.3% in a square force a
+  strip of ratio ~44), so the guarantee is the squarified algorithm's own
+  greedy rule, not a number: each row is laid along the free rect's shorter
+  side, is no worse than its first item alone, and would be worse if the next
+  item joined it. Where sibling sizes differ by at most 10x, every tile of
+  area at least 24px² is within a ratio of 20. §12 says how both are tested.
+- **Tiles carry their parent.** A tile records the directory it was laid out
+  in (`parent`), so a caller can find which directories were subdivided in one
+  pass (labels do not draw over a subdivided directory's children).
 
 Typical render sets are a few thousand rects; the worst case at a 16px²
 cutoff is tens of thousands, which is nothing to a GPU. The genuinely
@@ -757,6 +792,18 @@ rect edge, so nesting cues cost no second draw call. Instance buffers are
 triple-buffered round-robin with a counting semaphore,
 `MTLResourceStorageModeShared`.
 
+As built: an instance is 20 bytes of payload at a 32-byte stride (`float4`
+alignment), matched field for field by a test that reads it back through a
+compute kernel. The border is one *device* pixel wide and is the fill's RGB
+times 0.7. Palette values are sRGB-encoded and written **unconverted** into a
+`bgra8Unorm` target (so a stored byte is the palette's hex value), and the
+view's colour space tells the compositor how to read them. The shader does not
+read `flags`: the selection outline and the lock badges are drawn by the app
+as overlays (below). If an instance buffer cannot be allocated, the budget is
+halved and the tiles past it, the deepest, are not drawn; the renderer counts
+them (`droppedTileCount`) and the window shows a banner, so a clamped render is
+never silent.
+
 ### Colour
 
 A treemap is an **all-pairs form** — any two tiles can end up adjacent.
@@ -779,9 +826,22 @@ Validated: monotone L, adjacent ΔL ≥ 0.06, light-end contrast 2.06:1 light
 modified, dark = stale, flipped in dark mode. Old-and-large is the reclaim
 signal, so this is prominent.
 
+```
+light  #cde2fb  #9ec5f4  #6da7ec  #3987e5  #256abf  #184f95  #0d366b   recent → stale
+dark   the same list reversed
+```
+
+Seven buckets by `now − modified`: up to 7 days, 30 days, 90 days, 1 year
+(taken as 365 days), 2 years, 5 years, and older. A time in the future counts
+as the most recent bucket; a stored time of 0 (the scan got none) as the
+oldest. A directory is coloured by its rolled-up time (§6), so the cutoff at
+the scan's start matters here.
+
 **Mode 3 — Type focus.** Up to **three** file-type categories take slots
 1–3; everything else goes neutral. "Show me where my video files are"
-beats a twelve-colour mosaic.
+beats a twelve-colour mosaic. The categories are video, images, audio,
+archives and documents, matched on the lowercased file extension (a dotfile
+such as `.mp4` has none); directories are neutral in this mode.
 
 ```
 light  #2a78d6  #eb6834  #1baf7a   worst all-pairs CVD ΔE 9.2 · normal 24.0
@@ -791,28 +851,66 @@ dark   #3987e5  #d95926  #199e70   worst all-pairs CVD ΔE 9.4 · normal 20.9
 **Explicitly not colour-by-size.** Area already encodes size; colouring by
 it spends the identity channel re-encoding what the rectangle says.
 
+**The palette buffer** has one layout in every mode, so the shader and the
+CoreGraphics renderer index it alike: `[0]` neutral (light `#d6d5cf`, dark
+`#3a3a37`), `[1]` status (`#fab219`), `[2…]` the mode's ramp. A
+permission-denied tile is the status colour in every mode, including the
+collapsed "N unreadable folders" square. Any other aggregate tile has no single
+age or kind, so it takes its depth colour in Depth mode and the neutral colour
+in the other two.
+
 Two binding obligations:
 
 - Light-mode aqua is **2.74:1** against the surface — a contrast WARN,
   discharged by tile labels plus the file table. This is why the table is
   not merely a convenience.
-- Identity is never colour-alone: the focus legend is always present, and
-  the 45°/135° line texture is wired for the accessibility setting, print,
-  and `forced-colors`.
+- Identity is never colour-alone: the focus legend is always present (with
+  VoiceOver labels). The 45°/135° line texture is **not built in Phase 2**:
+  nothing draws it, since the shader does not read `flags` yet. It remains the
+  specified answer for the accessibility setting, print and `forced-colors`,
+  and Phase 2 relies on the legend, the labels and the file table.
 
 **Status colours stay reserved.** `permDenied` tiles get `#fab219` *plus a
 lock badge and a label*. Non-deletable regions likewise. These steps sit
 close to categorical hues in CVD terms, so the icon pairing is load-bearing.
+As built, the badge is a SwiftUI overlay sized to its 4px placeholder, with a
+VoiceOver label "Unreadable folder"; the collapsed "N unreadable folders"
+square also carries a visible label, and hovering any placeholder names the
+folder in the inspector.
 
 ### Labels
 
 A SwiftUI overlay of positioned `Text` views, not a glyph atlas. At 50–400
 visible labels SwiftUI copes. **Labels are suppressed during zoom
 animation**; placement for a new navigation root is deferred until motion settles,
-then labels fade in — this avoids SwiftUI diffing
+then labels fade in over 0.15s, keyed on the labels *arriving* rather than on
+the zoom ending — this avoids SwiftUI diffing
 hundreds of views per frame and reads as intentional. Name plus size,
-middle-truncated, only where it fits. Text wears ink tokens
+middle-truncated, only where it fits (inside the tile with 4pt padding, largest
+tiles first, at most 400). Text wears ink tokens
 (`#0b0b0b` / `#f0efec`), never a tile's series colour.
+
+As built:
+
+- **Placement runs off the main actor.** Text is measured with Core Text,
+  which is thread-safe, and the result is applied on the main actor only if no
+  relayout happened meanwhile (a generation guard). Measured on the Data volume
+  it had cost ~67ms on the main actor after every settle, long enough to
+  overlap the next transition.
+- **A subdivided directory gets no label** (its children are labelled, and the
+  breadcrumb names the root). Permission-denied placeholders get none either,
+  but the collapsed unreadable-folders square and the "N smaller items — X"
+  aggregates do.
+- **The size is never truncated:** only the words are cut, in the middle, by
+  whole grapheme clusters, keeping at least three characters; if the size and
+  three characters do not fit, there is no label.
+- **Numbers follow the locale** (injectable, so tests pin one). Names are
+  decoded from their bytes and neutralised for display: newlines and tabs read
+  as spaces; other control characters, bidi overrides and isolates, and
+  invisible format characters (except the joiners U+200C and U+200D, which
+  emoji and some scripts need) become U+FFFD. These are filenames in a tool
+  that will delete them; a crafted name must not reorder or hide what the user
+  reads.
 
 ### Zoom and navigation
 
@@ -823,15 +921,32 @@ and an alpha uniform, no per-frame relayout. The static destination texture is
 cached during the transition; the moving old geometry is rendered each frame to
 keep borders one device pixel wide.
 
+The cross-fade is of **whole layers**: each frame the old layout (through the
+animation's scale and translation, applied to the rects so borders stay one
+pixel wide) and the new layout are each drawn opaque into an offscreen
+texture, and a final pass writes their mix by the alpha uniform. Fading
+per tile would blend twice wherever a child paints over its parent. The
+CoreGraphics fallback does not animate.
+
 Returning to an ancestor shrinks the old root into its tile in the ancestor's
 new layout and cross-fades; if that root has no emitted tile, it redraws at
-once. Breadcrumb for ancestry. Arrows between siblings, ⌘↑ to ascend, Return to
-descend. Hover drives the inspector: full path, both sizes, type, dates.
+once. Sibling moves and other tile changes redraw at once. A resize cancels a
+running or pending zoom. Breadcrumb for ancestry. Arrows between siblings, ⌘↑ to ascend, Return to
+descend (into the first descendable of the hovered or the selected tile). A
+click counts only if the button goes down and up on the same tile. Only
+readable directories can be entered. Hover drives the inspector: full path,
+both sizes, type, modification date. The inspector's subject is a node, an
+aggregate or the collapsed unreadable-folders placeholder; only a node has a
+path, so an action that needs a real file (copy path, reveal, staging for
+deletion) can never act on display text.
 
 ### Hit testing
 
 Linear scan over the emitted tile list with a last-hit cache. At
-mouse-event frequency even 50k rects is well under a millisecond.
+mouse-event frequency even 50k rects is well under a millisecond (0.08ms
+measured). Because tiles are emitted breadth-first and only ancestors overlap,
+the tiles containing a point form one chain in array order, so the scan runs
+from the end and the first hit is the deepest; only a leaf hit is cached.
 
 ### File table
 
@@ -840,6 +955,34 @@ through a sorted index array. Column sorts reorder `[UInt32]` indices,
 never nodes, off the main thread. Top-K largest files comes from a bounded
 heap in Swift rather than extra FFI surface. Selection is a shared
 `Set<UInt32>`, so table and treemap highlight each other both ways.
+
+As built, the table lists the **top 1,000 largest files** under the current
+navigation root, and a column sort reorders those 1,000 candidates, not every
+file in the subtree; the window says so above the table. The rows and the
+snapshot they index are published as one value, cleared when a load starts and
+swapped only when the new rows are ready, and every load and sort carries a
+generation so a slow result for an old snapshot, root or column click is
+dropped (and cancelled). A selection that arrives from the treemap scrolls its
+row into view; a node outside the top 1,000 has no row. The default order is
+largest first, ties by node index, and sorts are stable on ties either way.
+On a navigation, the table's work (like the labels') starts once motion has
+settled.
+
+### Window and session
+
+The window is a toolbar (Scan Data Volume, Scan Folder…, Cancel, the colour
+picker), a scan progress view (counts and entries per second, never a
+percentage) while scanning, then the breadcrumb above a split of treemap over
+table with a trailing inspector column. A partial result is never shown as
+complete: a banner reads "Partial result —" followed by the stop reason
+(cancelled, node limit, out of memory, stalled at a named path, descriptors
+exhausted, malformed batch, volume lost, or an unknown future code), the error
+count and the unreadable-folder count. A second warning appears if the
+renderer dropped tiles past its budget. A scan with no allocated bytes shows
+an empty-state message instead of a blank canvas. **The selection outline is
+an overlay** of the tiles carrying the `selected` flag (a 2pt stroke), hidden
+while motion runs, like the labels. The window replaces its whole session on a
+rescan (§5).
 
 ---
 
@@ -1232,8 +1375,12 @@ parser earns disproportionate paranoia.
 ### Rendering
 
 Metal unavailable falls back to a CoreGraphics renderer with zoom animation
-disabled — a degraded treemap beats a dialog saying the app won't run.
-`MTLBuffer` allocation failure clamps the instance budget and retries.
+disabled — a degraded treemap beats a dialog saying the app won't run. The
+fallback draws the same pixels as the shader (same fill, same one-device-pixel
+border, same rounding of the stored byte), and re-renders only when what it
+would draw changes. `MTLBuffer` allocation failure clamps the instance budget
+and retries; the tiles that no longer fit are counted and reported in the
+window (§8), never dropped silently.
 
 ### Degraded-mode matrix
 
@@ -1341,7 +1488,12 @@ startup.
 - **Layout — property tests:** rects disjoint; rects plus aggregate cover
   the parent within epsilon; area proportional to size within tolerance;
   aspect ratios bounded; tail aggregate is a contiguous suffix; budget
-  respected.
+  respected. As built, over 500 seeded random trees each: coverage counts the
+  empty cells of a placeholder strip, proportionality excludes placeholders,
+  and the aspect property is the narrowed one of §8 — a strict bound of 20 on
+  balanced trees plus an exact oracle on the row-building step (no
+  exemptions) for heavy-tailed ones, whose worst ratio is reported rather than
+  asserted.
 - **Overlay arithmetic** — removing a leaf reduces every ancestor by
   exactly its size and no one else.
 
@@ -1355,11 +1507,19 @@ must not execute the consequences.
 
 ### Lifetime, visual, accessibility
 
-- Debug generation counter: release a snapshot, assert access traps. A test
-  holding buffers in a background task while dropping the local reference
-  must *not* crash, proving ARC ownership holds.
+- Debug liveness check (§6): release a snapshot, assert access traps (run in a
+  child process, with a control run that must not crash). A test holding
+  buffers in a background task while dropping the local reference must *not*
+  crash, proving ARC ownership holds. Out-of-range indices trap in every build.
 - **Snapshot-test the treemap through the CoreGraphics fallback**, not
-  Metal — it exists anyway and is deterministic across machines.
+  Metal — it exists anyway and is deterministic across machines. The
+  references are PNGs compared byte for byte, recorded with
+  `TESSERAE_RECORD_SNAPSHOTS=1`. Metal is covered separately by an **exact
+  Metal/CoreGraphics cross-check**: the same tiles through both renderers, for
+  every palette (depth, age, type focus, both modes, the neutral and status
+  colours) at 1x and 2x, byte for byte. This is not a formality: it found that
+  CoreGraphics rounded halves away from zero where the GPU's store rounds to
+  nearest even, which differed on several shipped colours.
 - **Wire the palette validator into CI**, both modes, `--pairs all`. If
   anyone nudges a colour, CI fails. That makes §8's guarantees durable
   rather than a one-time check.
@@ -1375,6 +1535,15 @@ must not execute the consequences.
 `criterion` micro-benchmarks on parser and freeze; a harness against a
 generated 500k-file volume on a known machine, with the number committed to
 a tracked file (`docs/benchmarks.md`) so regressions appear in diffs.
+
+The Phase 2 frame gate is a real-window measurement and is defined on a
+**Release build**: the Debug configuration keeps the snapshot's liveness lock
+on every access, so its numbers describe a build that does not ship. It runs
+from environment variables (`TESSERAE_FRAME_TIMING=1`,
+`TESSERAE_FRAME_GATE_AUTORUN`, `TESSERAE_FRAME_GATE_OUT`,
+`TESSERAE_FRAME_GATE_TIMEOUT`), as a warm-up run and then a measured run, and
+a run in which any zoom does not finish, or the screen never draws, is
+rejected rather than counted.
 
 ### Two deliberate non-goals
 
@@ -1393,14 +1562,20 @@ those tests take.
 
 ## 13. Spike results
 
-**Phase 2 update (2026-10-19):** The app shell, navigation, labels and file table
-are implemented. Targeted UI deferral and renderer caching improved measured
-presentation p99 to 16.67 ms, but the real-window gate remains **failed**: on a
-6.15M-node Data scan with no incomplete stop code and 1,006 unreadable folders,
-two presentation gaps reached 33.33 ms against the unchanged 16.67 ms budget.
-Raw relayout peaked at 4.65 ms. Toolchain, build and workload caveats plus raw
-captures are recorded in [`docs/benchmarks.md`](../../benchmarks.md).
-Phase 2 is not declared complete; final branch review and PR readiness are pending.
+**Phase 2 result (2026-10-19):** the fluid-zoom gate (§17) **passes on a Release
+build.** On an Apple M5 at 60 Hz, with a 6.15M-node scan of `/System/Volumes/Data`
+(no incomplete stop code, 1,006 unreadable folders), zooming in and out of the
+five largest directories three times each, none of 414 presentation intervals
+spanned more than one refresh (maximum 16.668 ms), GPU time peaked at 9.3 ms
+and relayout at 1.2 ms against a 100 ms limit. The earlier captures, taken on
+an optimised Debug build with the snapshot's debug lock on, **failed** (gaps of
+33 to 50 ms) and are kept, labelled as such. The gate was not relaxed to pass:
+the fix was measuring the build that ships, after deferring label and table
+work until motion settles, caching the renderer's inputs and static layer, and
+moving label measurement off the main actor. Measured on a 60 Hz display, one
+Apple Silicon machine; 120 Hz and Intel are not measured. Toolchain, build and
+workload caveats and the raw capture are in
+[`docs/benchmarks.md`](../../benchmarks.md).
 
 Everything downstream assumes scan speed. A throwaway Rust spike ran before
 implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread
@@ -1589,8 +1764,10 @@ Xcode not knowing cargo's inputs and outputs.
 
 **Build Rust out-of-band; link a prebuilt `.a`.** A `justfile` runs cargo
 then `xcodebuild`. A Run Script phase that *only verifies* — comparing the
-`.a`'s mtime against Rust sources, failing with a readable message —
-closes the stale-library footgun. Checking is cheap and sandbox-safe;
+`.a`'s mtime against Rust sources, and a content stamp of the build's inputs
+(`build-ffi.sh` writes a listing of every Rust source, manifest, lockfile and
+toolchain file with its SHA-256, so a deleted or renamed source is caught as
+well), failing with a readable message — closes the stale-library footgun. Checking is cheap and sandbox-safe;
 building is not.
 
 ```
@@ -1605,9 +1782,9 @@ The library must be built with exactly `cargo build -p tesserae-ffi
 --release`: building test targets (`--all-targets`, `cargo test --release`)
 would link tesserae-core's fault-injection hooks into it, and
 `scripts/check-shipped-lib.sh` fails if it did. A real Xcode link of the
-archive has not been done yet (its embedded bitcode is newer than Apple's
-`nm` reads, though a `clang` link and run succeeded); it is the first step of
-Phase 2.
+archive was done in Phase 2: Xcode 27.2's linker, and Xcode 26.6's in CI,
+accept it first time. Its embedded LLVM bitcode is newer than Apple's `nm`
+reads, which is harmless to the link.
 
 Exporting `MACOSX_DEPLOYMENT_TARGET` to match Xcode's setting avoids link
 warnings that are easy to ignore until they aren't.
@@ -1690,8 +1867,12 @@ Apple Developer account that lets this ship notarized" is a concrete ask.
 parse_entries -max_total_time=60` · the C header regenerated with no diff
 (`scripts/gen-header.sh`) · the static library carries no test hooks
 (`scripts/check-shipped-lib.sh`) · `xcodebuild test` on the framework
-scheme · palette validator · unsigned universal build. `fuzz/` is a
-separate crate, so `fmt`, `clippy` and `deny` run for it explicitly.
+scheme · the palette pins in `ColourTests` (the validator itself is not in
+the repository, §12) · unsigned universal build. `fuzz/` is a
+separate crate, so `fmt`, `clippy` and `deny` run for it explicitly. The Apple
+job runs on `macos-26` with Xcode 26.6 selected explicitly (and fails readably
+if the image drops it), downloads the Metal toolchain when a trivial shader
+will not compile, and uploads the `.xcresult` on failure.
 
 **Nightly** (pinned nightly toolchain): Miri and ASAN on the parser tests,
 a 15-minute fuzz run.
@@ -1722,7 +1903,7 @@ tesserae/
 │   ├── Tesserae.xcodeproj
 │   ├── Tesserae/                 app target — SwiftUI chrome
 │   └── TesseraeKit/              framework — all testable logic
-├── scripts/                      gen-header · check-shipped-lib · fuzz-parser · bench-volume · … (later: make-dmg · validate-palette)
+├── scripts/                      gen-header · check-shipped-lib · build-ffi · verify-ffi-fresh · fuzz-parser · bench-volume · frame-gate-summary · … (later: make-dmg · validate-palette)
 ├── justfile                      thin index over scripts/
 ├── docs/benchmarks.md
 ├── LICENSE                       GPL-3.0
@@ -1762,11 +1943,12 @@ machines that need a disk visualizer.
 | Cold-cache scan is too slow for the stateless design | The spike (§13) has run and retired the warm risk: 3.3 to 4.3 s per 1M entries over 6.39M. The residual risk is the **cold path**: one cold-ish run at 14 s per 1M (n=1, confounded, no root `purge`). Mitigation: stream progress so a long scan is usable; characterise cold throughput before Phase 3 (§13 item 6); §3 stays provisional until then. |
 | Unchecked offset in the bulk parser | Bounds-check against entry and buffer length; fuzz, ASAN, Miri. Accepted residual: a segfault takes the app down. |
 | Deletion bug destroys user data | Trash-only; two guard layers; identity re-verification; audit log; independent test containment; no cleanup presets in 1.0. |
-| Snapshot use-after-release | Immutability plus ARC ownership plus a debug generation counter. One stated code rule. |
+| Snapshot use-after-release | Immutability plus ARC ownership plus a Debug liveness assertion on every access, and index checks that trap in every build. One stated code rule. Phase 2 also replaces the whole UI session on a rescan, so no stale index survives. |
+| Zoom is not fluid on a million-node tree | **Retired for Phase 2** (§13): the gate passes on a Release build on one machine at 60 Hz. Residual: 120 Hz ProMotion and Intel are not measured, and the gate's workload (a real, changing Data volume) drifts between runs, which `docs/benchmarks.md` states. |
 | `diskutil` plist schema drifts across macOS releases | Parse defensively; missing key means unknown, never error; degrades one UI line. |
 | FDA onboarding confusion loses users at first run | Design for the relaunch explicitly; Limited scan is labelled, not silent. |
 | Donations don't cover the $99/yr | Stated plainly in §1's funding assumption; the project should not depend on donations funding sustained labour. |
-| Dataless (iCloud "Optimize Mac Storage") directories | **Open, a Phase 2 decision.** Enumerating a dataless directory may make the system fetch its listing: downloads, slowness, and on a slow link a stall that trips the 15 s watchdog. Nothing sets the `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy or reads `SF_DATALESS` yet (`ATTR_CMN_FLAGS` is requested for it). Not measured: a full census of this machine's Data volume found 664,076 dataless regular files and no dataless directory, so enumerating one has never been observed. Probe with an evicted iCloud Drive folder first. |
+| Dataless (iCloud "Optimize Mac Storage") directories | **Still open after Phase 2** (not taken up there: the probe evicts a folder in iCloud Drive, which syncs through the user's account; it is in `docs/phase-2-backlog.md`). Enumerating a dataless directory may make the system fetch its listing: downloads, slowness, and on a slow link a stall that trips the 15 s watchdog. Nothing sets the `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy or reads `SF_DATALESS` yet (`ATTR_CMN_FLAGS` is requested for it). Not measured: a full census of this machine's Data volume found 664,076 dataless regular files and no dataless directory, so enumerating one has never been observed. Probe with an evicted iCloud Drive folder first. |
 | Name crowding hurts discoverability | "Tesserae" is rarer than "Tessera". Trademark not verified — **check USPTO Class 9 before shipping.** |
 
 ---

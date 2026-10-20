@@ -1,5 +1,16 @@
 # Handoff: Tesserae Phase 2, after Task 12 (2026-10-19)
 
+> **Superseded — Phase 2 complete.** Tasks 13 and 14 were done after this
+> handoff was written, and the frame gate passed on a Release build (the
+> earlier Debug `-O` captures failed and are labelled as such); see
+> `docs/benchmarks.md` for the result. The plan and the spec were then
+> reconciled with what was built, so read them, not this note, for the current
+> design: `docs/superpowers/plans/2026-10-19-tesserae-phase-2-treemap.md` and
+> `docs/superpowers/specs/2026-10-18-tesserae-design.md`. What follows is the
+> state at Task 12 (head `d28c3b5`), kept as written: its "Tasks 13 and 14
+> remain", branch head and CI status are no longer current. What remains of
+> Phase 2 is the final whole-branch review and finishing the branch.
+
 You are picking up Phase 2 of Tesserae, a GPL-3 macOS disk-space visualiser: a
 Rust scan engine behind a C ABI, with a SwiftUI/Metal app on top. Tasks 0–12 of
 the Phase 2 plan are done and reviewed. **Tasks 13 and 14 remain**, then a final
