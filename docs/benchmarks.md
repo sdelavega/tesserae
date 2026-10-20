@@ -370,11 +370,11 @@ millisecond in an optimized build (spec §8 "Hit testing"); only the
 unoptimized test build approaches one.
 
 
-## Phase 2: real-window frame gate — FAILED (2026-10-19)
+## Phase 2: real-window frame gate — FAILED, Debug build with -O (Snapshot debug locks on) (2026-10-19)
 
 Task 13 is implemented at `f33dd4a`. This measurement adds `FrameTimer`,
 return-to-parent animation and a bounded Diagnostics menu command that drives
-the actual window's navigation. **The phase gate did not pass.** At 60 Hz,
+the actual window's navigation. **The phase gate did not pass (Debug build with -O (Snapshot debug locks on)).** At 60 Hz,
 the frame budget is 16.667 ms; the largest presentation gap was 50.000 ms
 (p99 49.999 ms), and the largest interval between draw callbacks was
 42.945 ms (p99 40.839 ms). No threshold was changed and no performance tuning
@@ -409,9 +409,10 @@ xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae \
 ```
 
 Launch that local build, scan the Data volume, maximize the window, then
-choose **Diagnostics → Run Phase 2 Frame Gate**. It writes
-`apple/build/phase14-frames.json`; the retained raw measurements are in
-[`benchmarks/2026-10-19-phase2-frame-gate.json`](benchmarks/2026-10-19-phase2-frame-gate.json).
+choose **Diagnostics → Run Phase 2 Frame Gate**. It wrote
+`apple/build/phase14-frames.json`. (The runner now also works in Release; see
+"Running the gate on a Release build" below. This capture's raw JSON is no
+longer in the repository; the tables here are its summary.)
 The Debug build is optimized but retains Snapshot's Debug liveness locks.
 The local-only hardened-runtime override was required because dyld rejected
 the ad-hoc framework under library validation; the project's hardened-runtime
@@ -455,7 +456,7 @@ its maximum where fewer than 100 samples were collected.
 | opt | out | 42 | 6451 | 7.180 | 73.680 | 0.330 / 0.330 | 9.431 / 9.431 | 33.333 / 33.333 |
 
 
-### Rerun after macOS prompt approvals — FAILED (2026-10-19)
+### Rerun after macOS prompt approvals — FAILED, Debug build with -O (Snapshot debug locks on) (2026-10-19)
 
 After the user approved the macOS prompts, the same running measurement app
 rescanned the Data volume. It now saw **6,139,547 nodes and 717.47 GB**, with
@@ -469,7 +470,7 @@ the prompt approvals alone.
 The code, optimized Debug build, window viewport (1679 × 493.5 pt), 60 Hz
 display, thresholds and three-repetition protocol were unchanged. The five
 largest readable immediate Data-root directories were now Users, Applications,
-System, Library and opt. **The gate still failed:** presentation intervals
+System, Library and opt. **The gate still failed (Debug build with -O (Snapshot debug locks on)):** presentation intervals
 reached 50.000 ms (p99 50.000 ms), above the unchanged 16.667 ms budget.
 Raw relayout remained under 100 ms (maximum 5.991 ms).
 
@@ -491,10 +492,8 @@ capture limitation, not evidence of a pass. The already-recorded 50 ms gaps
 are sufficient to fail the gate. Presentation cadence excludes boundaries
 between separate transitions, as in the first run.
 
-Raw capture:
-[`benchmarks/2026-10-19-phase2-frame-gate-approved-access.json`](benchmarks/2026-10-19-phase2-frame-gate-approved-access.json).
-The earlier capture is preserved. Per-directory figures combine all three
-repetitions:
+The raw capture is no longer in the repository; the tables here are its
+summary. Per-directory figures combine all three repetitions:
 
 | directory | direction | submitted frames | tiles | layout max ms | presentation gap max / p99 ms |
 |---|---|---:|---:|---:|---:|
@@ -515,7 +514,7 @@ All three CI jobs passed for implementation commit `0df73ef` before this
 documentation-only update.
 
 
-### Targeted UI and renderer improvements — gate still FAILED (2026-10-19)
+### Targeted UI and renderer improvements — gate still FAILED, Debug build with -O (Snapshot debug locks on) (2026-10-19)
 
 Following the user's authorization to improve performance, a local Instruments
 Game Performance capture was sampled before editing. In its limited sampled
@@ -578,14 +577,16 @@ optimization captures. Intervals spanning multiple refreshes fell from 11/413
 to **2/411**; the final capture's two 33.333 ms gaps occurred at `2 in Library`
 and `3 in opt`. Counting intervals above 1.5 refresh periods is a diagnostic of
 multi-refresh gaps, not a replacement pass criterion. The strict original gate
-**still fails**: its unchanged budget is 16.667 ms, and the maximum presentation
+**still fails** (Debug build with -O (Snapshot debug locks on)): its unchanged budget is 16.667 ms, and the maximum presentation
 gap remains 33.333 ms. Relayout remains well below 100 ms. Final branch review
 and PR readiness remain pending. No frame-budget threshold was relaxed.
 
-Raw captures:
-
-- [Deferred UI](benchmarks/2026-10-19-phase2-deferred-ui.json)
-- [Deferred UI plus renderer caches](benchmarks/2026-10-19-phase2-renderer-caches.json)
+Raw capture: [deferred UI plus renderer caches](benchmarks/2026-10-19-phase2-renderer-caches.json)
+(minified). `scripts/frame-gate-summary.py` recomputes the maxima, p99s,
+medians and multi-refresh gaps above from it (standard-library Python:
+`scripts/frame-gate-summary.py docs/benchmarks/2026-10-19-phase2-renderer-caches.json`,
+add `--by-label` for each transition). The deferred-UI capture's JSON is no
+longer in the repository; its column above is its summary.
 
 Verification includes the navigation/empty-folder/stale-callback test, input
 invalidation tests, byte-exact cached-versus-fresh Metal renders, and the existing
@@ -596,3 +597,72 @@ reuse, and removing destination invalidation were each caught and restored.
 Final local verification for these changes: `just gate` passed (114 Swift tests,
 with only the two opt-in benchmarks skipped), and the unsigned universal Release
 `just app-build` passed. Test-created disk images were detached.
+
+
+### Label placement off the main actor (2026-10-19)
+
+The renderer-caches capture above showed label placement as the largest
+remaining main-actor cost: up to 67.467 ms right after each zoom settled, in
+the window, while the app also rendered. Placement now runs off the main
+actor: `LabelStyle.measure` uses Core Text (immutable `CTFont`/`CTLine`,
+thread-safe) instead of the AppKit string-drawing additions. A test checks it
+matches `NSString.size(withAttributes:)` exactly for Latin, CJK, Hebrew,
+Arabic, Thai, Devanagari, Tibetan, Javanese, Hangul, emoji and combining
+marks. The result is applied on the main actor only if no relayout happened
+meanwhile (the layout-generation guard).
+
+Measured with the opt-in `LayoutTests.test_measure_label_settle_cost_on_the_main_actor`.
+It scans `/System/Volumes/Data` read-only (5.34M nodes this time), then runs
+the gate's protocol at the gate's viewport (1679 × 493.5 pt): the five largest
+readable root directories, in and out, three times, 30 settles. It times the
+synchronous `setZoomRunning(false)` call that releases the deferred labels and
+table. It is headless (no window or renderer), so it isolates label work from
+drawing. **Before** is the same harness with `updateLabels` reverted to
+5fedbb4's synchronous AppKit-measured placement.
+
+```sh
+TEST_RUNNER_TESSERAE_BENCH_ROOT=/System/Volumes/Data TEST_RUNNER_TESSERAE_FRAME_TIMING=1 \
+xcodebuild test -project apple/Tesserae.xcodeproj -scheme TesseraeKit \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath apple/build/DerivedData-bench \
+  SWIFT_OPTIMIZATION_LEVEL=-O \
+  -only-testing:TesseraeKitTests/LayoutTests/test_measure_label_settle_cost_on_the_main_actor
+```
+
+| Debug build with -O (Snapshot debug locks on) | main actor per settle: median / max ms | `labels` interval: median / max ms | `labels-apply` (main actor): max ms |
+|---|---:|---:|---:|
+| before (5fedbb4, on the main actor) | 26.257 / 35.578 | 26.253 / 35.572 (on the main actor) | — |
+| after (off the main actor) | 0.007 / 0.012 | 22.818 / 29.651 (off the main actor) | 0.008 |
+
+The headless `labels` figures are lower than the in-window 67.467 ms because
+nothing else competes for the main thread here. Labels now appear when
+placement finishes, up to ~30 ms after a zoom settles, instead of blocking it.
+The window's SwiftUI update for the new labels still runs on the main actor
+and is not part of these figures.
+
+### Running the gate on a Release build
+
+The frame gate now runs in any build configuration when
+`TESSERAE_FRAME_TIMING=1` (previously Debug always recorded and only Debug
+had the gate's menu command). The runner exists only when timing is enabled,
+and its capture no longer embeds a source path. To measure the configuration
+that ships, unlock the screen (a locked screen never draws: every transition
+then times out and the run is rejected) and run:
+
+```sh
+xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath apple/build/DerivedData-gate \
+  ENABLE_HARDENED_RUNTIME=NO
+TESSERAE_FRAME_TIMING=1 TESSERAE_FRAME_GATE_AUTORUN=/System/Volumes/Data \
+TESSERAE_FRAME_GATE_OUT="$PWD/apple/build/frame-gate-release.json" \
+  apple/build/DerivedData-gate/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
+scripts/frame-gate-summary.py apple/build/frame-gate-release.json
+```
+
+The app scans the root, sizes its window to the main screen's visible frame,
+runs the five-directory × 3 protocol, writes the capture (default:
+`tesserae-frame-gate.json` in `NSTemporaryDirectory()`) and quits. Progress
+goes to standard error, and the exit status is 0 only for a valid capture. The
+capture records `root`, `build` and `settleTimeouts`. A run in which any zoom
+did not finish within 3 s is saved but reported as invalid (exit status 1).
+The `ENABLE_HARDENED_RUNTIME=NO` override is the same local-only signing
+decision as above; the project's settings are unchanged.
