@@ -22,3 +22,6 @@ import TesseraeFFI
 public var abiVersion: UInt32 {
     tess_abi_version()
 }
+
+/// The linked Rust engine's package version, rather than a UI-side constant.
+public var engineVersion: String { String(cString: tess_engine_version()) }

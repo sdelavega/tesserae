@@ -137,6 +137,7 @@ pub(crate) trait Share {
 
 /// What every worker of one walk has in common.
 pub(crate) struct WalkerCtx<'a, O> {
+    pub(crate) skips: &'a super::SkipSet,
     pub opener: &'a O,
     /// Inodes already seen with more than one link. One instance for the whole
     /// walk, however many workers.

@@ -47,11 +47,11 @@ recommendable to anyone.
    count of runs over the line is claimed. The
    original wording ("single-digit seconds for 1–2M files") assumed a
    smaller volume than the 6.39M entries this machine holds, where a full
-   warm scan takes about 27 s. **The cold path has not been characterised:**
-   the one cold-ish observation was 14 s per 1M (89 s total, n=1,
-   confounded, no root `purge` available), which does **not** meet the
-   criterion. No cold criterion can be set until cold data exists (§13
-   item 6). Do not read this criterion as satisfied for cold scans.
+   warm scan takes about 27 s. **Phase 3 cold measurement (2026-10-20):** five post-purge runs
+   measured median **3.49 s** and worst **3.98 s per 1M entries**, within
+   the ≈5 s rate (Ruling T12-1; §13 item 6). The older 14 s per 1M
+   cold-ish observation was n=1 and confounded. Purge flushes the unified
+   buffer cache; complete APFS metadata-cache eviction is not established.
 2. The treemap stays fluid — smooth zoom, no stutter — on a tree of a
    million nodes.
 3. The app can account for the whole volume, including the space it cannot
@@ -134,7 +134,7 @@ These are the author's inferences, recorded so they can be challenged:
 | Rust core + SwiftUI | Rust is the best available language for an arena-allocated flat tree with work-stealing parallelism. SwiftUI/AppKit is the only way to ship Mac-native polish. Neither alone does both. |
 | FDA, no root | **Root does not bypass TCC on macOS.** It buys only POSIX wins (other users' homes, restrictive modes). A privileged helper would still need its own FDA grant, so root costs an XPC attack surface and an authorization prompt while skipping nothing. Staying non-root is also a safety property for a tool that deletes. |
 | GPL-3.0 | Prevents closed-source resale. Its App Store incompatibility costs nothing here. GPLv3's System Libraries exception covers linking AppKit/Metal. |
-| Stateless scan (**provisional**) | If the scan is genuinely fast, an index buys nothing and costs a database, cache invalidation, and FSEvents reconciliation gaps across reboots. "Fast enough not to need a cache" is also the better product story. **Downgraded from settled to provisional by the §13 spike:** warm scans held up (234K entries/s median, 6.39M entries, n=14), but the one cold-ish run was 72K entries/s (n=1, unreproducible without root `purge`, machine under load 3 to 12). That is too thin to abandon the architecture and enough to unsettle the decision. **Condition: Phase 3 may not commit to shipping without an index until proper cold-cache data exists.** This does not disturb Phase 1: an index would persist the snapshot this engine produces rather than replace it, so no Phase 1 task changes either way. |
+| Stateless scan (**settled**) | If the scan is fast enough, an index buys nothing and costs a database, cache invalidation, and FSEvents reconciliation gaps across reboots. Phase 3 Task 12 (2026-10-20, Ruling T12-1) settles the provisional decision: five post-purge cold runs on the Apple M5 measured median **3.49 s** and worst **3.98 s per 1M entries**, within §1's ≈5 s rate; paired warm median/worst were 3.72/4.24 s. Purge flushes the unified buffer cache; full APFS metadata-cache eviction is not established. See §13 item 6 and [benchmarks](../../benchmarks.md#cold-cache-scan-speed) for per-run counts, derivation and session drift. |
 | Trash-only deletion | Free undo; correct `.Trashes` and Put Back semantics; and trashing a directory is an O(1) rename regardless of how many files it holds. |
 | No sidecar process | Crash isolation obtained more cheaply via `catch_unwind`, depth caps, and refusing non-local mounts. Accepted cost: a genuine segfault in the parser takes the app down. |
 
@@ -269,11 +269,12 @@ cutoff made the volume's root, and every directory above them, report 2076).
 A file's or symlink's own time is reported as read, future or not; a
 directory with nothing at or before the cutoff in its subtree keeps its own
 time as read. The scan root, which no `getattrlistbulk` entry
-describes, takes its own time from `fstat` on its open descriptor.
+describes, takes its own time from `fstat` on its open descriptor. A dataless
+root instead uses metadata-only `fstatat` admission and is never opened.
 
 **Flag bits**, as `node.rs` and `arena.rs` define them and `tesserae.h`
 exports them: `DIR = 1 << 0`, `SYMLINK = 1 << 1`, `HARDLINK_DUP = 1 << 2`,
-`PERM_DENIED = 1 << 3`, `AGGREGATED = 1 << 4`. Bit 2 was drafted as `clone`;
+`PERM_DENIED = 1 << 3`, `AGGREGATED = 1 << 4`, `SKIPPED_REQUEST = 1 << 5`, `DATALESS = 1 << 6`. Bit 2 was drafted as `clone`;
 APFS clones cannot be detected (§7), so nothing could ever set it. What it
 marks is a hardlink counted as zero bytes because an earlier link to the same
 inode carried them. `DIR` and `SYMLINK` are derived from the object type at
@@ -282,7 +283,10 @@ freeze, `HARDLINK_DUP` and `PERM_DENIED` are set by the walker, and
 of a snapshot carries it), and as built nothing else does either. The
 treemap layout marks aggregate tiles on its own `Tile` flags (a separate set
 of bits, §8), because the snapshot is immutable. A compile-time check keeps
-the five bits distinct.
+the seven bits distinct. `SKIPPED_REQUEST` also carries `PERM_DENIED` to reuse
+the unknown-size path, while its own bit distinguishes an exclusion from a
+permission failure. `DATALESS` identifies cloud-only items; dataless directories
+also carry `PERM_DENIED` for unknown-size rendering, without counting as permission errors.
 
 **Children are contiguous and pre-sorted descending by `allocated`.**
 Squarified layout wants exactly that, so the freeze step pays once and
@@ -330,7 +334,7 @@ void tess_snapshot_view(const TessSnapshot*, TessView* out);
 void tess_snapshot_release(TessSnapshot*);
 ```
 
-Three functions beyond those seven were needed, because the seven give Swift
+Nine functions beyond those seven are built, because the seven give Swift
 no way to learn *why* a scan failed, to poll without blocking, or to read the
 walk's statistics, all of which §7 and §11 require the UI to show:
 
@@ -338,6 +342,14 @@ walk's statistics, all of which §7 and §11 require the UI to show:
 int32_t        tess_scan_status(const TessScan*);
 void           tess_snapshot_stats(const TessSnapshot*, TessScanStats* out);
 const uint8_t* tess_snapshot_stalled_at(const TessSnapshot*, uint64_t* len_out);
+const uint8_t* tess_snapshot_skipped_by_request(const TessSnapshot*, uint64_t index,
+                                               uint64_t* len_out, uint32_t* reason_out);
+const char*    tess_engine_version(void);
+uint64_t       tess_snapshot_unreadable_count(const TessSnapshot*);
+const uint8_t* tess_snapshot_unreadable(const TessSnapshot*, uint64_t index, uint64_t* len_out);
+uint64_t       tess_snapshot_skipped_count(const TessSnapshot*);
+const uint8_t* tess_snapshot_skipped(const TessSnapshot*, uint64_t index,
+                                    uint64_t* len_out, uint32_t* reason_out);
 ```
 
 - `tess_scan_status`: 0 running, 1 finished (finish will not block), or a
@@ -348,12 +360,25 @@ const uint8_t* tess_snapshot_stalled_at(const TessSnapshot*, uint64_t* len_out);
 - `tess_snapshot_stats`: an `incomplete` code (none, cancelled, node budget,
   out of memory, stalled, fd exhausted, malformed batch, volume lost) plus the
   counts the scan report shows: files, dirs, errors, unreadable, skipped
-  mounts, lost entries, hardlink duplicates, depth-capped.
+  mounts, lost entries, hardlink duplicates, depth-capped, requested skips,
+  dataless files/directories and dataless logical bytes. `no_materialize_failed`
+  reports failure to enable download protection; `started_at` is the scan’s
+  Unix start time in signed seconds and anchors Age colouring.
+- `tess_engine_version`: the static NUL-terminated engine version string.
+- `tess_snapshot_unreadable_count` / `tess_snapshot_unreadable` and
+  `tess_snapshot_skipped_count` / `tess_snapshot_skipped`: Task 9 path-list accessors.
+  Indexed paths are borrowed raw bytes valid until snapshot release, with a length
+  and, for skips, a reason code (including dataless directories).
 - `tess_snapshot_stalled_at`: the stalled directory's path as bytes borrowed
   from the snapshot, valid until release. Not NUL-terminated and not
   necessarily UTF-8. It is the scan root exactly as given to
   `tess_scan_begin`, joined with the path below it, so it is absolute only if
   the root was; the root is not canonicalised.
+
+- `tess_snapshot_skipped_by_request`: indexes `skipped_by_request_count`,
+  returning path bytes borrowed until snapshot release, with reason 1
+  ("limited scan") or 2 ("not present"). Null snapshots, invalid indices or
+  missing output pointers return null and zero any supplied outputs.
 
 **The root node's name is the scan root path as given** (for example
 `/System/Volumes/Data`), not a single component like every other node's
@@ -371,6 +396,8 @@ typedef struct {
     uint64_t node_budget;       // 0 = 25 million
     uint64_t buffer_bytes;      // 0 = 256 KiB
     uint64_t stall_timeout_ms;  // 0 = 15000
+    uint64_t skip_count;        // 0 = no exclusions
+    const char* const* skip;   // absolute paths, copied during tess_scan_begin
 } TessScanOptions;
 ```
 
@@ -1007,8 +1034,10 @@ rescan (§5).
 
 ```
 capacity = used + free
-used     = scanned + snapshots + residual
+used     = scanned + systemVolume + residual
 ```
+
+The read-only system volume is subtracted separately: `residual = capacity − free − scanned − (systemVolume ?? 0)`. Other container volumes (Preboot, VM, Recovery) remain in the residual until the 1.x container breakdown.
 
 **The residual is signed**, and this is the crux:
 
@@ -1100,24 +1129,24 @@ into its own line.
 A pure function over value types, so every case — including the negative
 residual — is testable with synthetic input and no filesystem:
 
+The as-built binding seam is defined by
+[`Reconcile.swift`](../../../apple/TesseraeKit/Reconciliation/Reconcile.swift),
+with [`VolumeFacts.swift`](../../../apple/TesseraeKit/Reconciliation/VolumeFacts.swift)
+and [`SnapshotFacts.swift`](../../../apple/TesseraeKit/Reconciliation/SnapshotFacts.swift).
+These built value types are the authority for signatures: `SnapshotFacts.count`
+and the signed `Reconciliation.residual` are optional; `ScanFacts` carries
+`incompleteReason`, access state, Limited status, dataless counts and logical bytes,
+and `noMaterializeFailed`. `Reconciliation` carries `SnapshotFacts`, optional
+system-volume usage and caveats. The function is:
+
 ```swift
-struct VolumeFacts   { let capacity, used, free, available: UInt64 }
-struct SnapshotFacts { let count: Int; let oldest: Date?; let aggregateBytes: UInt64? }
-struct ScanFacts     { let allocatedSum: UInt64
-                       let unreadableLocations: Int
-                       let incomplete: Bool }
-
-struct Reconciliation {
-    let capacity, scanned, free: UInt64
-    let snapshots: UInt64?          // nil when unavailable, never 0
-    let residual: Int64             // signed
-    let purgeableEstimate: UInt64?
-    let caveats: [Caveat]           // .cloneDoubleCounting, .noFullDiskAccess,
-                                    // .partialScan, .containerDataUnavailable
-}
-
-func reconcile(_: VolumeFacts, _: SnapshotFacts, _: ScanFacts) -> Reconciliation
+public func reconcile(_ v: VolumeFacts, systemVolumeUsed: UInt64?,
+                      _ s: SnapshotFacts, _ scan: ScanFacts) -> Reconciliation
 ```
+
+Only a Data-volume scan receives separate system-volume usage, matched by
+`volumeIdentifierKey` (including aliases). A scan of the system volume already
+includes those bytes; it and unrelated volumes pass zero and display “Not applicable”.
 
 `nil` rather than `0` for unavailable values, so "we don't know" never
 renders as "there is none."
@@ -1277,12 +1306,12 @@ listable under FDA on 27.2; the world-readable system
 `/Library/Application Support/com.apple.TCC/TCC.db` has no measured
 without-FDA behaviour, so do not use it as a positive signal.) Rules:
 
-- **Hypothesis, awaiting a no-FDA run:** an `EPERM` on a candidate that
-  exists means **no FDA**. There are zero without-FDA observations behind
-  this rule, and the spike's own with-FDA baseline weakens it as a general
-  signal: 57 directory opens returned `EPERM` while FDA **was** held (cause
-  not investigated, so it is unknown whether any candidate path behaves
-  likewise).
+- **Measured on 2026-10-20:** an `EPERM` on an existing probe candidate
+  means **no FDA**. Mail, Messages and Safari each returned `EPERM` without
+  FDA and errno 0 with it; the user-level `TCC.db` candidate is absent on
+  this Mac. See [Full Disk Access: with and without](../../benchmarks.md#full-disk-access-with-and-without).
+  This rule applies to the probe candidates, not arbitrary scan directories,
+  which can remain unreadable with FDA.
 - Every existing candidate readable means **FDA observed** (the with-FDA
   behaviour was measured: Mail, Messages and Safari all listable).
 - Every candidate `ENOENT` is **indeterminate**. The earlier draft called
@@ -1291,20 +1320,20 @@ without-FDA behaviour, so do not use it as a positive signal.) Rules:
   as unknown and show the Limited-scan caveat until something confirms
   otherwise.
 
-**The scan's unreadable-directory count is not known to discriminate.** With
-FDA held, the data volume had 57 `EPERM` and 194 `EACCES` directory opens
-(about 250 of ~0.83M directories). A denied TCC tree fails at its root, so a
-no-FDA scan may add only a handful of unreadable directories on top of
-that, and nothing measured shows the two counts separate. Do not use the
-count as the confirming check until a no-FDA run supplies the comparison.
+**The scan's unreadable count does not discriminate access on its own.**
+The complete runs measured 1,008 without FDA versus 261 with FDA; the count
+is never zero, even with FDA. Use the candidate probe for access state,
+not the scan counter. The [benchmark comparison](../../benchmarks.md#full-disk-access-with-and-without)
+records both runs, their entry counts and timings, and the earlier stalled run.
 
-**What is still unmeasured.** The **without-FDA** case. The measuring
-process already held the grant, so the with-FDA case *was* observed
-(listable: `~/Library/Mail`, `~/Library/Messages`, `~/Library/Safari`) and
-no `EPERM` behaviour was observed. The useful consequence: the spike's
-6.39M entry count is a **full** count, not one truncated by TCC, so its
-throughput figures are honest. A no-FDA scan will see fewer entries and
-cannot be extrapolated from them.
+**Build identity matters operationally.** Full Disk Access is keyed by bundle
+identifier plus code requirement. Every build shares
+`com.sdelavega.Tesserae`, so System Settings keeps one entry; granting
+one build does not necessarily grant another. A linker-signed
+`CODE_SIGNING_ALLOWED=NO` build (Info.plist unbound, no internal requirement)
+cannot hold a grant. Test with a properly ad-hoc-signed copy: `just app-build`
+then `just fda-copy`. If testing again after replacing that copy, the user
+needs to toggle FDA off/on for its new signature.
 
 **FDA cannot be requested programmatically.** There is no prompt to
 trigger. The only move is opening the pane:
@@ -1322,7 +1351,18 @@ it and it still doesn't work."
 FDA, a scan wandering into them fires modal prompts mid-run. So onboarding
 asks for FDA *first*, and if declined the app runs an explicitly-labelled
 **Limited scan** that skips promptable categories rather than ambushing the
-user.
+user. The earlier no-FDA run that ended **STALLED** at **3,236,590** entries
+was blocked by unanswered macOS privacy consent prompts: the user confirmed
+on 2026-10-20 that the prompts appeared while they were away. Limited scan
+(Task 7) skips exactly `~/Desktop`, `~/Documents`, `~/Downloads`, and
+`~/Library/Mobile Documents` (iCloud Drive), expanded to absolute paths using
+the app's home environment. The user observed prompts for all four locations
+during the no-FDA run; this is the evidence for the list, confirmed for Task 7
+on 2026-10-20. No further prompting probe is needed. Skip identities are
+resolved with metadata calls only, never by opening or listing those folders.
+A skipped directory remains a childless, flagged node with unknown size;
+missing requests are reported as "not present". See the
+[measured stalled run](../../benchmarks.md#full-disk-access-with-and-without).
 
 ### Filesystem hazards
 
@@ -1594,6 +1634,17 @@ Apple Silicon machine; 120 Hz and Intel are not measured. Toolchain, build and
 workload caveats and the raw capture are in
 [`docs/benchmarks.md`](../../benchmarks.md).
 
+**Phase 3 frame-gate rerun (2026-10-20, Ruling T11-G1):** no Phase 3
+regression versus the same-day Phase 2 control. Both signed Release builds
+missed one-vblank presentations at 60 Hz; the absolute **0-gap bar is NOT
+met by either build today**. Draw/encode/GPU were on time at the misses,
+pointing to this machine's compositor today. The control's FDA grant did
+not take (6.19M nodes, 1,008 unreadable), so it scanned less and still missed
+frames; Phase 3 had FDA and 6.84M nodes. Relayout passed the unchanged
+100 ms bar (about 1.5 ms). Thresholds remain unchanged; revisit if Phase 3
+gaps exceed the control's. Per-pass maxima, p99s and counts are in
+[benchmarks](../../benchmarks.md#phase-3-frame-gate-rerun).
+
 Everything downstream assumes scan speed. A throwaway Rust spike ran before
 implementation: `getattrlistbulk` plus a crude fd-relative (`openat`) thread
 pool over a real volume, printing wall time and file count. No UI, no tree.
@@ -1619,7 +1670,8 @@ no-FDA scan would skip substantially more.
 a Time Machine helper seen running once), so single runs vary by roughly 30%.
 Warm figures are the median and best of repeated, interleaved runs. Only one
 cold-ish run exists (the first scan after the binary was built); a true cold
-cache needs root (`purge`) and was not attempted.
+cache needs root (`purge`) and was not attempted during the spike. Phase 3
+post-purge measurements supersede that open question (item 6).
 
 1. **Actual scan wall time: 3 to 4 s per 1M entries warm; 14 s per 1M
    cold-ish (n=1).** Warm, 8 threads, 256 KB buffer, 14 runs over 6.39M
@@ -1628,10 +1680,9 @@ cache needs root (`purge`) and was not attempted.
    the 1 to 2M-file target of §1 is met warm (about 3 to 9 s). The single
    cold-ish run took **89.0 s** (~72K entries/s, 14 s per 1M; it also hit
    one `ETIMEDOUT` from `getattrlistbulk`), which would be 14 to 28 s for 1
-   to 2M entries. **The cold figure is n=1 and confounded; re-measure it
-   before relying on it.** The persistent-index alternative is not
-   triggered by the warm numbers, but the UI must stream progress, because
-   a cold scan of a large volume can take over a minute.
+   to 2M entries. **The spike cold figure is n=1 and confounded; Phase 3 item 6
+   supersedes it for the index decision.** The UI must still stream progress
+   for large volumes.
 2. **Buffer size knee: none between 64 KB and 1 MB.** 8 threads, rsrc on,
    median wall: 64 KB **27.6 s** (best 20.1, n=7), 256 KB **27.3 s** (best
    21.1, n=14), 1 MB **27.6 s** (best 21.2, n=7). The differences are
@@ -1713,17 +1764,21 @@ cache needs root (`purge`) and was not attempted.
    was taken, so that is unconfirmed. §11 now uses a candidate-list probe
    in place of the single path. Re-run from a process with no FDA (for
    example a fresh launchd job) to settle the without-FDA behaviour.
-6. **Cold-cache throughput: unresolved, an explicit open item.** The only
-   cold-ish observation is one run (n=1) at 89.0 s, ~72K entries/s, 14 s per
-   1M entries, confounded by machine load and one `ETIMEDOUT`. It also
-   shows an anomaly: CPU time was ~87 s over 89 s wall with 8 threads, so
-   it used only about one core of parallelism (warm 8-thread runs use
-   4 to 5), which makes it less obviously a cache effect than a stall,
-   contention or load artefact. A true cold
-   cache needs root (`purge`), which the spike did not have. This is a
-   **prerequisite for Phase 3's index decision (§3), not for Phase 1.**
-   Needed: repeated cold runs after `purge` on a quiet machine, plus a
-   no-FDA run.
+6. **Cold-cache throughput: measured in Phase 3, decision settled.**
+   Task 12 (2026-10-20, Ruling T12-1) recorded five release CLI scans of
+   `/System/Volumes/Data` with default workers, each after the user ran
+   `sudo purge`, each followed by a warm run. Cold wall times were
+   **23.499/23.057/23.838/24.768/27.206 s**; warm were
+   **23.918/24.287/25.441/27.712/28.997 s**, over about 6.84M entries.
+   Using each raw output's `dirs + files`, cold median/worst were
+   **3.49/3.98 s per 1M entries**, warm **3.72/4.24**. The cold median
+   meets §1's ≈5 s rate, settling §3's stateless decision. Both series
+   drifted upward during the session (likely thermal per the ledger,
+   not established); cold was no slower than paired warm in these runs.
+   Purge flushes the unified buffer cache; full APFS metadata-cache
+   eviction is not established. This supersedes the spike's confounded
+   89.0 s cold-ish run for this decision. Per-run wall/walk/freeze times,
+   counts and derivation: [benchmarks](../../benchmarks.md#cold-cache-scan-speed).
 
 Where thread count stops helping falls out of (1): **about 4 to 8
 threads.** Over 6.39M entries, rsrc on, 256 KB: 1 thread **90.6 s and
@@ -1735,15 +1790,11 @@ CPU was ~2 s against ~100 to 150 s system CPU. Size the pool at 4 to 8, not
 at twice the logical CPU count.
 
 **Gate (>= 100K entries/s, the throughput form of "10 s per 1M files").**
-**PASS warm / FAIL cold (n=1, confounded); proceeding provisionally on the
-warm evidence, with §3 gated on cold-cache data.** Warm: median 234K
-entries/s (best 304K) over 6.39M entries. Cold-ish: 72K entries/s, one
-run. The single-thread runs (about 69K entries/s, n=2) are likewise below
-the line, though a single thread is not a configuration the engine will
-use. Privileging the warm result is a **judgement, made by the plan's
-coordinator**, who confirmed that proceeding is intended; it is not
-something the data forces. The cold result is open item 6 and makes
-§3's stateless decision provisional, not a reopening of §5.
+**Historical spike: PASS warm / FAIL cold (n=1, confounded).** Warm:
+median 234K entries/s (best 304K) over 6.39M entries; cold-ish: 72K
+entries/s, one run. Proceeding provisionally was the coordinator's judgement
+at that stage. **Phase 3 supersedes the cold conclusion:** item 6 meets
+§1's stricter ≈5 s per 1M rate and settles §3 (Ruling T12-1).
 
 **Phase 1 results.** The engine built from this spike is measured in
 `docs/benchmarks.md` (one machine, the same M5, macOS 27.2). The headline
@@ -1957,15 +2008,15 @@ machines that need a disk visualizer.
 
 | Risk | Mitigation |
 |---|---|
-| Cold-cache scan is too slow for the stateless design | The spike (§13) has run and retired the warm risk: 3.3 to 4.3 s per 1M entries over 6.39M. The residual risk is the **cold path**: one cold-ish run at 14 s per 1M (n=1, confounded, no root `purge`). Mitigation: stream progress so a long scan is usable; characterise cold throughput before Phase 3 (§13 item 6); §3 stays provisional until then. |
+| Cold-cache scan is too slow for the stateless design | **Settled on the measured machine in Phase 3** (§13 item 6, Ruling T12-1): five post-purge runs, cold median/worst 3.49/3.98 s per 1M entries against §1's ≈5 s; §3 is settled. Residual: one Apple M5, session drift, and full APFS metadata-cache eviction after purge is not established. Stream progress for large or slower volumes. |
 | Unchecked offset in the bulk parser | Bounds-check against entry and buffer length; fuzz, ASAN, Miri. Accepted residual: a segfault takes the app down. |
 | Deletion bug destroys user data | Trash-only; two guard layers; identity re-verification; audit log; independent test containment; no cleanup presets in 1.0. |
 | Snapshot use-after-release | Immutability plus ARC ownership plus a Debug liveness assertion on every access, and index checks that trap in every build. One stated code rule. Phase 2 also replaces the whole UI session on a rescan, so no stale index survives. |
-| Zoom is not fluid on a million-node tree | **Retired for Phase 2** (§13): the gate passes on a Release build on one machine at 60 Hz. Residual: 120 Hz ProMotion and Intel are not measured, and the gate's workload (a real, changing Data volume) drifts between runs, which `docs/benchmarks.md` states. |
+| Zoom is not fluid on a million-node tree | Phase 2 passed on 2026-10-19, but the Phase 3 same-day A/B rerun (Ruling T11-G1) has **no Phase 3 regression versus control; neither build meets the unchanged 0-gap bar today**. Misses are one-vblank presentation delays with draw/encode/GPU on time, attributed to this machine's compositor today; relayout passes 100 ms. Revisit if Phase 3 gaps exceed control. Residual: environmental noise could hide a regression; 120 Hz ProMotion and Intel remain unmeasured, and workloads differ/drift. See [benchmarks](../../benchmarks.md#phase-3-frame-gate-rerun). |
 | `diskutil` plist schema drifts across macOS releases | Parse defensively; missing key means unknown, never error; degrades one UI line. |
 | FDA onboarding confusion loses users at first run | Design for the relaunch explicitly; Limited scan is labelled, not silent. |
 | Donations don't cover the $99/yr | Stated plainly in §1's funding assumption; the project should not depend on donations funding sustained labour. |
-| Dataless (iCloud "Optimize Mac Storage") directories | **Still open after Phase 2** (not taken up there: the probe evicts a folder in iCloud Drive, which syncs through the user's account; it is in `docs/phase-2-backlog.md`). Enumerating a dataless directory may make the system fetch its listing: downloads, slowness, and on a slow link a stall that trips the 15 s watchdog. Nothing sets the `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy or reads `SF_DATALESS` yet (`ATTR_CMN_FLAGS` is requested for it). Not measured: a full census of this machine's Data volume found 664,076 dataless regular files and no dataless directory, so enumerating one has never been observed. Probe with an evicted iCloud Drive folder first. |
+| Dataless (iCloud "Optimize Mac Storage") directories | **Measured 2026-10-20, macOS 27.2:** `getattrlistbulk` did not materialize any of four evicted files under either default or thread-scoped no-materialize policy (both runs <1 ms, no errors); logical sizes totalled 15,729,664 B, allocated sizes were 0, and flags/blocks were unchanged afterwards. Evicting a directory evicted its contents only: dataless-directory behaviour remains unmeasured. Set `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` OFF on every scan thread before filesystem calls, report policy failures without aborting. Flag `SF_DATALESS` entries, count files/directories and files' logical bytes. Record dataless directories without entering them, with unknown subtree size. Local usage uses reported allocation (0 for these files); reconciliation explains cloud-only items separately. Residual risk: a policy failure could allow materialization in the unmeasured directory case. |
 | Name crowding hurts discoverability | "Tesserae" is rarer than "Tessera". Trademark not verified — **check USPTO Class 9 before shipping.** |
 
 ---

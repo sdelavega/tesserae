@@ -126,6 +126,12 @@ pub const FLAG_HARDLINK_DUP: u16 = 1 << 2;
 /// are not set here.
 pub const FLAG_PERM_DENIED: u16 = 1 << 3;
 
+/// Requested exclusion; combined with PERM_DENIED to reuse unknown-size rendering.
+pub const FLAG_SKIPPED_REQUEST: u16 = 1 << 5;
+
+/// Cloud-only entry. Directories also carry PERM_DENIED for unknown-size rendering.
+pub const FLAG_DATALESS: u16 = 1 << 6;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScanNode {
     pub name: NameRef,

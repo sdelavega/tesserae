@@ -41,6 +41,23 @@ final class TableTests: XCTestCase {
                 ]))
     }
 
+    func test_name_sort_uses_the_displayed_name() async {
+        let t = TestSnapshot(.dir("/R", [.file("a\n", 100), .file("a ", 200), .file("a\u{202E}", 300), .file("a", 400)]))
+        let model = FileTableModel(snapshot: t.snapshot, scope: t.snapshot.root)
+        let rows = model.defaultRows()
+        XCTAssertEqual(rows.count, 4)
+        let expected = rows.sorted {
+            let cmp = t.snapshot.displayName($0).localizedStandardCompare(t.snapshot.displayName($1))
+            return cmp == .orderedSame ? rows.firstIndex(of: $0)! < rows.firstIndex(of: $1)! : cmp == .orderedAscending
+        }
+        let legacy = rows.sorted {
+            t.snapshot.name($0).localizedStandardCompare(t.snapshot.name($1)) == .orderedAscending
+        }
+        XCTAssertNotEqual(expected, legacy, "precondition: display sanitization affects ordering")
+        let actual = await model.sorted(by: .name, ascending: true)
+        XCTAssertEqual(actual, expected)
+    }
+
     func test_sort_orders_indices_not_nodes_for_every_key() async {
         let t = fixture()
         let s = t.snapshot

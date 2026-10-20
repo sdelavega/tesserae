@@ -32,6 +32,7 @@ final class TestSnapshot {
         var modified: Int64
         var children: [Spec]?
         var denied = false
+        var dataless = false
         /// The name's bytes when they are not `name`'s UTF-8 (`name` is then
         /// only the lookup key).
         var rawName: [UInt8]? = nil
@@ -64,7 +65,7 @@ final class TestSnapshot {
     /// Node index by name (names must be unique for this to be useful).
     let index: [String: UInt32]
 
-    init(_ root: Spec) {
+    init(_ root: Spec, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [Snapshot.RequestedSkip] = [], stalledAt: Data? = nil) {
         var out: [TessNode] = []
         var bytes: [UInt8] = []
         var byName: [String: UInt32] = [:]
@@ -79,6 +80,7 @@ final class TestSnapshot {
             n.logical = s.logical
             n.modified = s.modified
             if s.children != nil { n.flags |= UInt16(TESS_FLAG_DIR) }
+            if s.dataless { n.flags |= UInt16(TESS_FLAG_DATALESS) }
             if s.denied { n.flags |= UInt16(TESS_FLAG_PERM_DENIED) }
             return n
         }
@@ -109,7 +111,7 @@ final class TestSnapshot {
         names.initialize(from: bytes, count: bytes.count)
         snapshot = Snapshot(
             testingNodes: UnsafeBufferPointer(start: nodes, count: out.count),
-            names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0)
+            names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0, stats: stats, unreadable: unreadable, skipped: skipped, stalledAt: stalledAt)
         index = byName
     }
 

@@ -83,6 +83,16 @@ pub const TESS_FLAG_PERM_DENIED: u16 = 1 << 3;
 /// bits, where `aggregated` is `1 << 3`). Defined so no other flag can claim
 /// the bit.
 pub const TESS_FLAG_AGGREGATED: u16 = 1 << 4;
+/// Requested exclusion; also carries PERM_DENIED for unknown-size rendering.
+pub const TESS_FLAG_SKIPPED_REQUEST: u16 = 1 << 5;
+/// Cloud-only entry (SF_DATALESS). Files retain logical size and reported
+/// local allocation. Directories are not entered and also carry PERM_DENIED
+/// to represent unknown subtree size; this does not count as a permission error.
+pub const TESS_FLAG_DATALESS: u16 = 1 << 6;
+/// Requested directory was not entered.
+pub const TESS_SKIP_LIMITED_SCAN: u32 = 1;
+/// Requested path did not exist at scan start.
+pub const TESS_SKIP_NOT_PRESENT: u32 = 2;
 
 /// `TessNode.parent` of the root, and `TessView.root` of a snapshot that holds
 /// no nodes.
@@ -128,6 +138,7 @@ pub const TESS_STATUS_FINISHED: i32 = 1;
 const _: () = {
     use tesserae_core::arena::{FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
     use tesserae_core::node::{FLAG_AGGREGATED, FLAG_DIR, FLAG_SYMLINK, NODE_NONE};
+    assert!(TESS_FLAG_DATALESS == tesserae_core::arena::FLAG_DATALESS);
     assert!(TESS_FLAG_DIR == FLAG_DIR);
     assert!(TESS_FLAG_SYMLINK == FLAG_SYMLINK);
     assert!(TESS_FLAG_HARDLINK_DUP == FLAG_HARDLINK_DUP);
@@ -200,6 +211,11 @@ pub struct TessScanOptions {
     /// How long a scan may go without completing a single syscall before it is
     /// declared stalled, in milliseconds. 0 means 15000.
     pub stall_timeout_ms: u64,
+    /// Number of absolute directory paths in skip. Zero means no exclusions.
+    pub skip_count: u64,
+    /// Caller-owned NUL-terminated paths, copied during tess_scan_begin.
+    /// The array and strings must remain live until that call returns.
+    pub skip: *const *const c_char,
 }
 
 /// What a finished scan saw; see `tess_snapshot_stats`.
@@ -227,6 +243,149 @@ pub struct TessScanStats {
     pub hardlink_dups: u64,
     /// Directories recorded at `max_depth` and therefore not entered.
     pub depth_capped: u64,
+    /// Number of path/reason records available from tess_snapshot_skipped_by_request.
+    pub skipped_by_request_count: u64,
+    /// Cloud-only non-directory entries, also included in files.
+    pub dataless_files: u64,
+    /// Cloud-only directories recorded without entering; subtree size unknown.
+    pub dataless_directories: u64,
+    /// Logical bytes of cloud-only files; excluded from local usage naturally.
+    pub dataless_logical_bytes: u64,
+    /// 1 if any scan thread failed to disable materialization; 0 otherwise.
+    pub no_materialize_failed: u32,
+    /// Scan start in whole seconds since the Unix epoch, used by Age mode.
+    pub started_at: i64,
+}
+
+/// Engine package version as a static NUL-terminated UTF-8 string.
+/// Never free the returned pointer.
+#[unsafe(no_mangle)]
+pub extern "C" fn tess_engine_version() -> *const std::ffi::c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
+}
+
+/// A local volume mounted beneath the scan root.
+pub const TESS_SKIP_OTHER_VOLUME: u32 = 3;
+/// A network or other non-local mount excluded by policy.
+pub const TESS_SKIP_NON_LOCAL_MOUNT: u32 = 4;
+/// A cloud-only directory; its contents were not downloaded.
+pub const TESS_SKIP_DATALESS_DIRECTORY: u32 = 5;
+
+/// Number of borrowed unreadable paths. Null snapshot returns zero.
+/// # Safety
+/// snapshot must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_unreadable_count(snapshot: *const TessSnapshot) -> u64 {
+    guarded(0, || unsafe {
+        snapshot
+            .as_ref()
+            .map_or(0, |s| s.0.stats.unreadable.len() as u64)
+    })
+}
+
+/// Number of skipped path/reason records, including requested exclusions,
+/// mounts and cloud-only directories. A path can have more than one reason.
+/// Null snapshot returns zero.
+/// # Safety
+/// snapshot must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_skipped_count(snapshot: *const TessSnapshot) -> u64 {
+    guarded(0, || unsafe {
+        snapshot.as_ref().map_or(0, |s| {
+            (s.0.stats.skipped_by_request.len()
+                + s.0.stats.skipped_mounts.len()
+                + s.0.stats.dataless_paths.len()) as u64
+        })
+    })
+}
+
+/// Borrow raw unreadable path bytes until snapshot release; not NUL terminated
+/// or necessarily UTF-8. Null snapshot, missing output or invalid index returns
+/// null and clears any supplied length. Caller must not free the bytes.
+/// # Safety
+/// snapshot must be null or live; len must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_unreadable(
+    snapshot: *const TessSnapshot,
+    index: u64,
+    len: *mut u64,
+) -> *const u8 {
+    guarded(ptr::null(), || unsafe {
+        let Some(out) = len.as_mut() else {
+            return ptr::null();
+        };
+        *out = 0;
+        let path = snapshot.as_ref().and_then(|s| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| s.0.stats.unreadable.get(i))
+        });
+        path.map_or(ptr::null(), |p| {
+            let bytes = p.as_os_str().as_bytes();
+            *out = bytes.len() as u64;
+            slice_ptr(bytes)
+        })
+    })
+}
+
+/// Borrow one skipped path and TESS_SKIP_* reason until snapshot release.
+/// Order: requested exclusions, mounts, cloud-only directories. No NUL or
+/// UTF-8 promise. Null snapshot, invalid index or missing output returns null
+/// and clears supplied outputs. Caller must not free the bytes.
+/// # Safety
+/// snapshot must be null or live; len and reason must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_skipped(
+    snapshot: *const TessSnapshot,
+    index: u64,
+    len: *mut u64,
+    reason: *mut u32,
+) -> *const u8 {
+    guarded(ptr::null(), || unsafe {
+        if let Some(out) = len.as_mut() {
+            *out = 0;
+        }
+        if let Some(out) = reason.as_mut() {
+            *out = 0;
+        }
+        if len.is_null() || reason.is_null() {
+            return ptr::null();
+        }
+        let Some(s) = snapshot.as_ref() else {
+            return ptr::null();
+        };
+        let Ok(mut i) = usize::try_from(index) else {
+            return ptr::null();
+        };
+        let stats = &s.0.stats;
+        if i < stats.skipped_by_request.len() {
+            return tess_snapshot_skipped_by_request(snapshot, index, len, reason);
+        }
+        i -= stats.skipped_by_request.len();
+        let record = if i < stats.skipped_mounts.len() {
+            let (path, why) = &stats.skipped_mounts[i];
+            use tesserae_core::boundary::SkipReason;
+            Some((
+                path,
+                match why {
+                    SkipReason::OtherVolume => TESS_SKIP_OTHER_VOLUME,
+                    SkipReason::NonLocalMount => TESS_SKIP_NON_LOCAL_MOUNT,
+                    SkipReason::DepthCap => 0,
+                },
+            ))
+        } else {
+            stats
+                .dataless_paths
+                .get(i - stats.skipped_mounts.len())
+                .map(|p| (p, TESS_SKIP_DATALESS_DIRECTORY))
+        };
+        record.map_or(ptr::null(), |(path, why)| {
+            let bytes = path.as_os_str().as_bytes();
+            *len = bytes.len() as u64;
+            *reason = why;
+            slice_ptr(bytes)
+        })
+    })
 }
 
 /// Run `f`, returning `on_panic` if it panics. The one `catch_unwind` every
@@ -263,7 +422,8 @@ pub extern "C" fn tess_abi_version() -> u32 {
 /// # Safety
 ///
 /// `root` must be null or point to a NUL-terminated string. `options` must be
-/// null or point to a `TessScanOptions`.
+/// null or point to a `TessScanOptions`. Its skip array must contain skip_count
+/// live pointers to NUL-terminated strings, all valid until this call returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tess_scan_begin(
     root: *const c_char,
@@ -280,7 +440,29 @@ pub unsafe extern "C" fn tess_scan_begin(
         }
         // SAFETY: the caller promises null or a live struct.
         let options = unsafe { options.as_ref() };
-        let opts = walk_options(OsStr::from_bytes(root), options);
+        let mut opts = walk_options(OsStr::from_bytes(root), options);
+        if let Some(o) = options {
+            if o.skip_count != 0 {
+                let Ok(count) = usize::try_from(o.skip_count) else {
+                    return ptr::null_mut();
+                };
+                if o.skip.is_null()
+                    || count > isize::MAX as usize / std::mem::size_of::<*const c_char>()
+                {
+                    return ptr::null_mut();
+                }
+                // SAFETY: the caller promises count live pointers for this call.
+                for path in unsafe { std::slice::from_raw_parts(o.skip, count) } {
+                    if path.is_null() {
+                        return ptr::null_mut();
+                    }
+                    // SAFETY: each path is promised NUL-terminated until begin returns.
+                    opts.skip.push(PathBuf::from(OsStr::from_bytes(
+                        unsafe { CStr::from_ptr(*path) }.to_bytes(),
+                    )));
+                }
+            }
+        }
         start(opts).map_or(ptr::null_mut(), |scan| Box::into_raw(Box::new(scan)))
     })
 }
@@ -496,6 +678,53 @@ pub unsafe extern "C" fn tess_snapshot_stalled_at(
     })
 }
 
+/// Borrow one requested exclusion's raw path bytes and reason code. No NUL
+/// terminator is promised. The borrow lives until tess_snapshot_release;
+/// callers must not free it. Null snapshot, bad index or missing outputs
+/// returns null and zeroes any supplied outputs.
+///
+/// # Safety
+/// snapshot must be null or live. len and reason must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_skipped_by_request(
+    snapshot: *const TessSnapshot,
+    index: u64,
+    len: *mut u64,
+    reason: *mut u32,
+) -> *const u8 {
+    guarded(ptr::null(), || {
+        // SAFETY: writable outputs and a live snapshot are the caller's contract.
+        unsafe {
+            if let Some(out) = len.as_mut() {
+                *out = 0;
+            }
+            if let Some(out) = reason.as_mut() {
+                *out = 0;
+            }
+            if len.is_null() || reason.is_null() {
+                return ptr::null();
+            }
+            let Some(TessSnapshot(s)) = snapshot.as_ref() else {
+                return ptr::null();
+            };
+            let Some((path, why)) = usize::try_from(index)
+                .ok()
+                .and_then(|i| s.stats.skipped_by_request.get(i))
+            else {
+                return ptr::null();
+            };
+            let bytes = path.as_os_str().as_bytes();
+            *len = bytes.len() as u64;
+            *reason = match *why {
+                "limited scan" => TESS_SKIP_LIMITED_SCAN,
+                "not present" => TESS_SKIP_NOT_PRESENT,
+                _ => 0,
+            };
+            slice_ptr(bytes)
+        }
+    })
+}
+
 /// Free the snapshot. Every view, and every pointer taken from it or from
 /// `tess_snapshot_stalled_at`, is invalid afterwards. A null `snapshot` does
 /// nothing. Call it exactly once per snapshot.
@@ -579,6 +808,12 @@ fn scan_stats(walk: &WalkStats) -> TessScanStats {
         lost_entries: walk.lost_entries,
         hardlink_dups: walk.hardlink_dups,
         depth_capped: walk.depth_capped,
+        skipped_by_request_count: walk.skipped_by_request.len() as u64,
+        dataless_files: walk.dataless.files,
+        dataless_directories: walk.dataless.directories,
+        dataless_logical_bytes: walk.dataless.logical_bytes,
+        no_materialize_failed: u32::from(walk.no_materialize_failed),
+        started_at: walk.started_at,
     }
 }
 
@@ -745,6 +980,12 @@ mod tests {
             lost_entries: u64::from_ne_bytes([GARBAGE; 8]),
             hardlink_dups: u64::from_ne_bytes([GARBAGE; 8]),
             depth_capped: u64::from_ne_bytes([GARBAGE; 8]),
+            skipped_by_request_count: u64::from_ne_bytes([GARBAGE; 8]),
+            dataless_files: u64::from_ne_bytes([GARBAGE; 8]),
+            dataless_directories: u64::from_ne_bytes([GARBAGE; 8]),
+            dataless_logical_bytes: u64::from_ne_bytes([GARBAGE; 8]),
+            no_materialize_failed: u32::from_ne_bytes([GARBAGE; 4]),
+            started_at: i64::from_ne_bytes([GARBAGE; 8]),
         };
         // SAFETY: `out` is a live struct; `snapshot` is live or null.
         unsafe { tess_snapshot_stats(snapshot, &mut out) };
@@ -1059,6 +1300,8 @@ mod tests {
             node_budget: 0,
             buffer_bytes: 0,
             stall_timeout_ms: 0,
+            skip_count: 0,
+            skip: ptr::null(),
         }
     }
 
@@ -1160,6 +1403,8 @@ mod tests {
             node_budget: 11,
             buffer_bytes: 4096,
             stall_timeout_ms: 2500,
+            skip_count: 0,
+            skip: ptr::null(),
         };
         let got = walk_options(root, Some(&set));
         assert_eq!(got.max_depth, 7);
@@ -1206,10 +1451,18 @@ mod tests {
     #[test]
     fn every_stat_lands_in_its_own_field() {
         let walk = WalkStats {
+            dataless: tesserae_core::walk::DatalessStats {
+                files: 11,
+                directories: 12,
+                logical_bytes: 13,
+            },
+            no_materialize_failed: true,
+            dataless_paths: Vec::new(),
             dirs: 1,
             files: 2,
             errors: 3,
             unreadable: vec![PathBuf::from("/u1"); 4],
+            skipped_by_request: vec![(PathBuf::from("/skip"), "limited scan"); 10],
             skipped_mounts: vec![
                 (
                     PathBuf::from("/m"),
@@ -1222,8 +1475,6 @@ mod tests {
             hardlink_dups: 8,
             stalled_at: None,
             incomplete: Some(Incomplete::Stalled),
-            // Not part of `TessScanStats`: it is freeze's cutoff, and reaches
-            // the app through every directory's `modified`.
             started_at: 9,
         };
         assert_eq!(
@@ -1238,6 +1489,12 @@ mod tests {
                 lost_entries: 7,
                 hardlink_dups: 8,
                 depth_capped: 6,
+                skipped_by_request_count: 10,
+                dataless_files: 11,
+                dataless_directories: 12,
+                dataless_logical_bytes: 13,
+                no_materialize_failed: 1,
+                started_at: 9,
             }
         );
     }
@@ -1259,7 +1516,7 @@ mod tests {
         // the privacy layer refusing, which Full Disk Access can fix.
         let wrapped = with_context(
             io::Error::from_raw_os_error(libc::EPERM),
-            "open /Users/x/Library/Mail".into(),
+            "open /Fixture/Library/Mail".into(),
         );
         assert_eq!(wrapped.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(errno_of(&wrapped), -libc::EPERM);
@@ -1366,5 +1623,157 @@ mod tests {
         assert!(unsafe { tess_snapshot_stalled_at(healthy, &mut len) }.is_null());
         assert_eq!(len, 0);
         release(healthy);
+    }
+    #[test]
+    fn limited_ffi_copies_skip_inputs_and_borrows_report_paths() {
+        let fx = Fixture::new().unwrap();
+        fx.file("protected/secret", 8192).unwrap();
+        fx.file("visible", 7).unwrap();
+        let missing = fx.path().join("missing");
+        assert!(!missing.exists(), "precondition");
+        let scan = {
+            let strings = [c_root(&fx.path().join("protected")), c_root(&missing)];
+            let pointers = strings.each_ref().map(|s| s.as_ptr());
+            let options = TessScanOptions {
+                skip_count: 2,
+                skip: pointers.as_ptr(),
+                ..zero_options()
+            };
+            begin(fx.path(), Some(&options))
+        }; // All caller-owned input buffers die before the asynchronous scan finishes.
+        assert_eq!(wait(scan), TESS_STATUS_FINISHED);
+        let snapshot = finish(scan);
+        assert!(!snapshot.is_null());
+        assert_eq!(stats(snapshot).skipped_by_request_count, 2);
+        assert_eq!(stats(snapshot).files, 1);
+        let mut found = Vec::new();
+        for i in 0..2 {
+            let mut len = 999;
+            let mut reason = 999;
+            // SAFETY: live snapshot and output pointers; the returned borrow is
+            // consumed before releasing its snapshot owner.
+            let path =
+                unsafe { tess_snapshot_skipped_by_request(snapshot, i, &mut len, &mut reason) };
+            assert!(!path.is_null());
+            let bytes = unsafe { std::slice::from_raw_parts(path, len as usize) };
+            found.push((bytes.to_vec(), reason));
+            let owned = unsafe { &(&(*snapshot).0.stats.skipped_by_request)[i as usize].0 };
+            assert_eq!(
+                path,
+                owned.as_os_str().as_bytes().as_ptr(),
+                "borrow snapshot memory"
+            );
+        }
+        assert!(found.contains(&(
+            missing.as_os_str().as_bytes().to_vec(),
+            TESS_SKIP_NOT_PRESENT
+        )));
+        assert!(found.contains(&(
+            fx.path().join("protected").as_os_str().as_bytes().to_vec(),
+            TESS_SKIP_LIMITED_SCAN
+        )));
+        for (snap, index) in [(snapshot as *const TessSnapshot, 2), (ptr::null(), 0)] {
+            let mut len = 999;
+            let mut reason = 999;
+            assert!(unsafe {
+                tess_snapshot_skipped_by_request(snap, index, &mut len, &mut reason)
+            }
+            .is_null());
+            assert_eq!((len, reason), (0, 0));
+        }
+        assert!(unsafe {
+            tess_snapshot_skipped_by_request(snapshot, 0, ptr::null_mut(), ptr::null_mut())
+        }
+        .is_null());
+        release(snapshot);
+    }
+    #[test]
+    fn report_lists_borrow_every_raw_path_and_keep_request_accessor() {
+        use tesserae_core::boundary::SkipReason;
+        let raw = PathBuf::from(OsStr::from_bytes(b"/zero/unreadable\xff\n"));
+        let snapshot = Box::into_raw(Box::new(TessSnapshot(Snapshot {
+            nodes: Vec::new(),
+            names: Vec::new(),
+            root: TESS_NODE_NONE,
+            stats: WalkStats {
+                unreadable: vec![raw.clone()],
+                skipped_by_request: vec![
+                    (PathBuf::from("/limited"), "limited scan"),
+                    (PathBuf::from("/absent"), "not present"),
+                ],
+                skipped_mounts: vec![
+                    (PathBuf::from("/other"), SkipReason::OtherVolume),
+                    (PathBuf::from("/smb"), SkipReason::NonLocalMount),
+                ],
+                dataless_paths: vec![PathBuf::from("/cloud")],
+                ..WalkStats::default()
+            },
+        })));
+        // SAFETY: the snapshot and output storage stay live through release.
+        unsafe {
+            assert_eq!(
+                std::ffi::CStr::from_ptr(tess_engine_version())
+                    .to_str()
+                    .unwrap(),
+                env!("CARGO_PKG_VERSION")
+            );
+            assert_eq!(tess_snapshot_unreadable_count(snapshot), 1);
+            assert_eq!(tess_snapshot_skipped_count(snapshot), 5);
+            let mut len = 99;
+            let mut reason = 99;
+            let bytes = tess_snapshot_unreadable(snapshot, 0, &mut len);
+            assert_eq!(
+                std::slice::from_raw_parts(bytes, len as usize),
+                raw.as_os_str().as_bytes()
+            );
+            assert_eq!(
+                bytes,
+                (&(*snapshot).0.stats.unreadable)[0]
+                    .as_os_str()
+                    .as_bytes()
+                    .as_ptr()
+            );
+            for (i, (path, why)) in [
+                ("/limited", 1),
+                ("/absent", 2),
+                ("/other", 3),
+                ("/smb", 4),
+                ("/cloud", 5),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let bytes = tess_snapshot_skipped(snapshot, i as u64, &mut len, &mut reason);
+                assert!(!bytes.is_null());
+                assert_eq!(
+                    std::slice::from_raw_parts(bytes, len as usize),
+                    path.as_bytes()
+                );
+                assert_eq!(reason, *why);
+                if i < 2 {
+                    assert_eq!(
+                        bytes,
+                        tess_snapshot_skipped_by_request(snapshot, i as u64, &mut len, &mut reason)
+                    );
+                }
+            }
+            for snap in [snapshot as *const TessSnapshot, ptr::null()] {
+                assert!(tess_snapshot_unreadable(snap, u64::MAX, &mut len).is_null());
+                assert_eq!(len, 0);
+                reason = 99;
+                assert!(tess_snapshot_skipped(snap, u64::MAX, &mut len, &mut reason).is_null());
+                assert_eq!((len, reason), (0, 0));
+                assert!(tess_snapshot_unreadable(snap, 0, ptr::null_mut()).is_null());
+                reason = 99;
+                assert!(tess_snapshot_skipped(snap, 0, ptr::null_mut(), &mut reason).is_null());
+                assert_eq!(reason, 0);
+                len = 99;
+                assert!(tess_snapshot_skipped(snap, 0, &mut len, ptr::null_mut()).is_null());
+                assert_eq!(len, 0);
+            }
+            assert_eq!(tess_snapshot_skipped_count(ptr::null()), 0);
+            assert_eq!(tess_snapshot_unreadable_count(ptr::null()), 0);
+        }
+        release(snapshot);
     }
 }

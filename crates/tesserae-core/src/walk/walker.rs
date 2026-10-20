@@ -56,7 +56,9 @@ pub(super) struct Frame<'a> {
     /// How this directory's volume sizes its files: see [`Sizing`].
     pub(super) sizing: Sizing,
     /// Subdirectories found by enumeration and not yet entered.
-    pub(super) children: Vec<ScanId>,
+    pub(super) children: Vec<(ScanId, (u64, u64))>,
+    /// Metadata admission only: these directories can never be descended.
+    pub(super) dataless_skips: Vec<(ScanId, (u64, u64))>,
     /// Index into `children` of the next one to enter.
     pub(super) next: usize,
 }
@@ -65,6 +67,7 @@ pub(super) struct Frame<'a> {
 /// each with its own lane (arena and stats) and read buffer.
 pub(crate) struct Walker<'a, O> {
     opener: &'a O,
+    skips: &'a super::SkipSet,
     inodes: &'a InodeSet,
     budget: &'a NodeBudget,
     halt: &'a Halt,
@@ -110,6 +113,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         buf.resize(opts.buffer_bytes, 0);
         Ok(Walker {
             opener: ctx.opener,
+            skips: ctx.skips,
             inodes: ctx.inodes,
             budget: ctx.budget,
             halt: ctx.halt,
@@ -277,7 +281,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         self.enter(&mut stack, dir, id, depth, sizing)?;
 
         while let Some(top) = stack.last_mut() {
-            let Some(&child) = top.children.get(top.next) else {
+            let Some(&(child, _)) = top.children.get(top.next) else {
                 // Subtree finished: popping drops the frame and closes its fd.
                 stack.pop();
                 continue;
@@ -375,12 +379,79 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             depth,
             sizing,
             children: Vec::new(),
+            dataless_skips: Vec::new(),
             next: 0,
         };
         self.enumerate(&mut frame, id)?;
+        self.admit_children(&mut frame)?;
         self.offer(&mut frame, id)?;
         stack.try_reserve(1).map_err(|_| Incomplete::OutOfMemory)?;
         stack.push(frame);
+        Ok(())
+    }
+
+    /// Filter before any child open or publication to another worker. Metadata
+    /// calls run outside the arena lock, as every other filesystem call does.
+    pub(super) fn admit_children(&mut self, frame: &mut Frame<'_>) -> Result<(), Incomplete> {
+        if self.skips.is_empty() {
+            return Ok(());
+        }
+        let children = std::mem::take(&mut frame.children);
+        let dataless = std::mem::take(&mut frame.dataless_skips);
+        for (id, identity, cloud_only) in children
+            .into_iter()
+            .map(|(id, identity)| (id, identity, false))
+            .chain(
+                dataless
+                    .into_iter()
+                    .map(|(id, identity)| (id, identity, true)),
+            )
+        {
+            let mut z = [0u8; MAX_PATH_BYTES + 1];
+            let checked = if identity.1 != 0 {
+                Ok(self.skips.matches_identity(identity))
+            } else {
+                let name = {
+                    let slot = self.lock()?;
+                    nul_terminated(
+                        &mut z,
+                        slot.arena.name_bytes(slot.arena.get(id).unwrap().name),
+                    )
+                };
+                name.and_then(|name| {
+                    self.lane.during(id, || {
+                        self.skips
+                            .matches_at(frame.dir.raw(), name, false)
+                            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
+                    })
+                })
+            };
+            match checked {
+                Ok(true) => {
+                    let mut slot = self.lock()?;
+                    let path = self.report_path_of(&slot, id)?;
+                    slot.stats
+                        .skipped_by_request
+                        .try_reserve(1)
+                        .map_err(|_| Incomplete::OutOfMemory)?;
+                    slot.stats.skipped_by_request.push((path, "limited scan"));
+                    slot.arena.get_mut(id).unwrap().flags |=
+                        crate::arena::FLAG_PERM_DENIED | crate::arena::FLAG_SKIPPED_REQUEST;
+                }
+                Err(e) => self.note_error(id, e)?,
+                Ok(false) if cloud_only => {}
+                Ok(false) if frame.depth + 1 >= self.max_depth => {
+                    self.lock()?.stats.depth_capped += 1
+                }
+                Ok(false) => {
+                    frame
+                        .children
+                        .try_reserve(1)
+                        .map_err(|_| Incomplete::OutOfMemory)?;
+                    frame.children.push((id, identity));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -409,7 +480,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         let dir_rel = self.rel_of(&slot, dir)?;
         let depth = frame.depth + 1;
         while frame.children.len() > 1 && share.wants_work() {
-            let &id = frame.children.last().expect("len > 1");
+            let &(id, _) = frame.children.last().expect("len > 1");
             let Some(rel) = self.child_rel(&slot, &dir_rel, id) else {
                 // Too long to hand to `openat`: kept, and descended here with
                 // a single-name `openat` from this frame's descriptor.
@@ -576,15 +647,35 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             }
         };
         let id = self.push(slot, e.name, dir, Some(e))?;
-        if e.obj_type == ObjType::Dir {
-            // `frame.depth < max_depth` always holds for a frame on the
-            // stack, so `+ 1` cannot overflow.
-            if frame.depth + 1 < self.max_depth {
+        if e.obj_type == ObjType::Dir && crate::dataless::is_dataless(e.flags) {
+            let path = self.report_path_of(slot, id)?;
+            slot.stats
+                .dataless_paths
+                .try_reserve(1)
+                .map_err(|_| Incomplete::OutOfMemory)?;
+            slot.stats.dataless_paths.push(path);
+        }
+        if e.obj_type == ObjType::Dir
+            && crate::dataless::is_dataless(e.flags)
+            && !self.skips.is_empty()
+        {
+            frame
+                .dataless_skips
+                .try_reserve(1)
+                .map_err(|_| Incomplete::OutOfMemory)?;
+            frame
+                .dataless_skips
+                .push((id, (e.dev_id as u64, e.file_id)));
+        }
+        if e.obj_type == ObjType::Dir && !crate::dataless::is_dataless(e.flags) {
+            // Limited scans admit even depth-capped children so exclusions
+            // remain distinguishable; full scans retain the original fast path.
+            if frame.depth + 1 < self.max_depth || !self.skips.is_empty() {
                 frame
                     .children
                     .try_reserve(1)
                     .map_err(|_| Incomplete::OutOfMemory)?;
-                frame.children.push(id);
+                frame.children.push((id, (e.dev_id as u64, e.file_id)));
             } else {
                 slot.stats.depth_capped += 1;
             }
@@ -611,7 +702,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         }
         let name = slot.arena.push_name(name)?;
         let mut dup = false;
-        let node = match entry {
+        let mut node = match entry {
             Some(e) => {
                 // The gate: only a multiply-linked entry is worth a set
                 // lookup. Directories report 0 and never reach `try_claim`.
@@ -649,8 +740,24 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                 modified: 0,
             },
         };
+        if entry.is_some_and(|e| crate::dataless::is_dataless(e.flags)) {
+            node.flags |= crate::arena::FLAG_DATALESS;
+            if node.obj_type == ObjType::Dir {
+                node.flags |= crate::arena::FLAG_PERM_DENIED;
+            }
+        }
         let (is_dir, allocated) = (node.obj_type == ObjType::Dir, node.allocated);
+        let dataless = node.flags & crate::arena::FLAG_DATALESS != 0;
+        let logical = node.logical;
         let id = self.push_node(slot, node)?;
+        if dataless {
+            if is_dir {
+                slot.stats.dataless.directories += 1;
+            } else {
+                slot.stats.dataless.files += 1;
+                slot.stats.dataless.logical_bytes += logical;
+            }
+        }
         if is_dir {
             slot.stats.dirs += 1;
         } else {

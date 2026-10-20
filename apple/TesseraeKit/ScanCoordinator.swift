@@ -142,17 +142,23 @@ private final class HandleBox: @unchecked Sendable {
     }
 }
 
+@MainActor
+private final class HandleCompletion {
+    var done = false
+}
+
 /// Drives a scan through the C ABI and publishes progress and the resulting
 /// snapshot. Progress is polled at 10 Hz on the main actor; `finish` runs off
 /// it, only after `status` has left "running".
 ///
 /// Releasing the coordinator cancels its scan; the scan's task still runs to
 /// `finish` so the handle is consumed exactly once. A hung root open (spec §6)
-/// keeps `finish` blocked, and so keeps a restarted scan waiting behind it.
+/// is polled until it returns, without holding up later scans.
 @MainActor
 public final class ScanCoordinator: ObservableObject {
     @Published public private(set) var state: ScanState = .idle
     @Published public private(set) var snapshot: Snapshot?
+    public private(set) var scanMode: ScanMode = .full
 
     /// Test observer: called when a scan's `finish` returns, before the
     /// staleness check, with the snapshot (nil on failure) and its generation.
@@ -165,23 +171,27 @@ public final class ScanCoordinator: ObservableObject {
     /// The latest scan's whole lifecycle, finish included, and its generation.
     private var inFlight: Task<Void, Never>?
     private var inFlightGeneration: UInt64 = 0
+    private var inFlightEnded = HandleCompletion()
 
     /// Seconds between status checks and progress publications: 10 Hz
     /// (spec §7). Overridable by tests so a modest tree spans several ticks.
     private let progressInterval: Double
 
+    private let restartWait: Duration
     private let factory: ScanFactory
 
     public init() {
+        restartWait = .seconds(2)
         progressInterval = 0.1
         factory = { ScanHandle(root: $0, options: $1) }
     }
 
     /// Test seam: a custom progress interval and/or scan factory.
     init(
-        progressInterval: Double = 0.1,
+        progressInterval: Double = 0.1, restartWait: Duration = .seconds(2),
         factory: @escaping ScanFactory = { ScanHandle(root: $0, options: $1) }
     ) {
+        self.restartWait = restartWait
         self.progressInterval = progressInterval
         self.factory = factory
     }
@@ -191,10 +201,38 @@ public final class ScanCoordinator: ObservableObject {
     /// Whether a begun scan's handle is live (test seam).
     var hasLiveHandle: Bool { box.value != nil }
 
-    /// Cancel and wait out any scan in flight, then scan `root`. Nothing from
+    /// Cancel and wait at most two seconds for a scan in flight, then scan `root`. Nothing from
     /// an earlier scan is published once this has been called.
-    public func start(root: URL, options: TessScanOptions = .init()) {
+    public func start(root: URL, options: TessScanOptions = .init(), mode: ScanMode = .full, skip: [URL] = []) {
+        // Own the paths across a queued restart. C pointers only exist during
+        // the synchronous factory/begin call, never across an await.
+        guard options.skip_count <= UInt64(Int.max / MemoryLayout<UnsafePointer<CChar>?>.stride),
+              options.skip_count == 0 || options.skip != nil else {
+            state = .failed(errno: EINVAL)
+            return
+        }
+        var skipPaths: [Data] = []
+        if let pointers = options.skip {
+            for i in 0..<Int(options.skip_count) {
+                guard let path = pointers[i] else {
+                    state = .failed(errno: EINVAL)
+                    return
+                }
+                skipPaths.append(Data(bytes: path, count: strlen(path)))
+            }
+        }
+        skipPaths += skip.map { url in
+            url.withUnsafeFileSystemRepresentation { path in
+                path.map { Data(bytes: $0, count: strlen($0)) } ?? Data()
+            }
+        }
+        var ownedOptions = options
+        ownedOptions.skip = nil
+        ownedOptions.skip_count = 0
+        scanMode = mode
         let previous = inFlight
+        let previousEnded = inFlightEnded
+        let wait = restartWait
         box.value?.cancel()
         box.value = nil
         generation &+= 1
@@ -204,22 +242,31 @@ public final class ScanCoordinator: ObservableObject {
         let observer = onScanEnded
         let interval = progressInterval
 
-        // With nothing in flight, begin at once; otherwise begin only after the
-        // previous scan has been finished and discarded.
+        // With nothing in flight, begin at once; otherwise allow a bounded
+        // interval for the previous lifecycle to finish before beginning.
         var handle: (any ScanDriving)?
         if previous == nil {
-            handle = beginScan(root: root, options: options)
+            handle = beginScan(root: root, options: ownedOptions, skipPaths: skipPaths)
             guard let h = handle else { return }
             box.value = h
         }
+        let ended = HandleCompletion()
+        inFlightEnded = ended
         inFlightGeneration = gen
         let weakSelf = WeakCoordinator(self)
         inFlight = Task { @MainActor in
-            await previous?.value
+            defer { ended.done = true }
+            // Poll the lifecycle rather than awaiting an unbounded root syscall.
+            // Its task retains the old handle and consumes it when status exits running.
+            let deadline = ContinuousClock.now + wait
+            while previous != nil, !previousEnded.done,
+                  ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
             if handle == nil {
                 // Superseded, cancelled or released while waiting: never begin.
                 guard let me = weakSelf.value, me.generation == gen else { return }
-                handle = me.beginScan(root: root, options: options)
+                handle = me.beginScan(root: root, options: ownedOptions, skipPaths: skipPaths)
                 guard let h = handle else { return }
                 me.box.value = h
             }
@@ -242,10 +289,24 @@ public final class ScanCoordinator: ObservableObject {
         }
     }
 
-    private func beginScan(root: URL, options: TessScanOptions) -> (any ScanDriving)? {
+    private func beginScan(root: URL, options: TessScanOptions, skipPaths: [Data]) -> (any ScanDriving)? {
+        let storage = skipPaths.map { path -> NSData in
+            var terminated = path
+            terminated.append(0)
+            return terminated as NSData
+        }
+        let pointers: [UnsafePointer<CChar>?] = storage.map { $0.bytes.assumingMemoryBound(to: CChar.self) }
+        let handle = withExtendedLifetime(storage) {
+            pointers.withUnsafeBufferPointer { buffer in
+                var opts = options
+                opts.skip_count = UInt64(buffer.count)
+                opts.skip = buffer.baseAddress
+                return factory(root, opts)
+            }
+        }
         // The C ABI reports no errno for a NULL begin (empty root, or the scan
         // thread could not be spawned), so EINVAL stands for "refused".
-        guard let h = factory(root, options) else {
+        guard let h = handle else {
             state = .failed(errno: EINVAL)
             return nil
         }

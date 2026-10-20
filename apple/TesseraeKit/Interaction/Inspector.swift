@@ -127,7 +127,7 @@ public struct InspectorInfo: Equatable {
 /// How the inspector and the tile labels write a byte count ("4.2 GB"), in
 /// `locale`'s digits and unit names (macOS 12+ `ByteCountFormatStyle`;
 /// `ByteCountFormatter` has no locale property).
-func displaySize(_ bytes: UInt64, locale: Locale = .current) -> String {
+public func displaySize(_ bytes: UInt64, locale: Locale = .current) -> String {
     Int64(clamping: bytes).formatted(.byteCount(style: .file).locale(locale))
 }
 

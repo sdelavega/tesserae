@@ -25,8 +25,17 @@ import TesseraeFFI
 /// capturing the class.
 public final class Snapshot {
     public let root: UInt32
+    /// Computed once while finish builds the snapshot off the main actor. 255 means no kind.
+    let fileKinds: [UInt8]
     public let stats: TessScanStats
     public let stalledAt: Data?
+    public struct RequestedSkip: Equatable, Sendable {
+        public let path: Data
+        public let reason: String
+    }
+    public let skippedByRequest: [RequestedSkip]
+    public let unreadable: [Data]
+    public let skipped: [RequestedSkip]
 
     /// nil only for snapshots built over caller-owned buffers by the test seam.
     private let handle: OpaquePointer?
@@ -89,9 +98,42 @@ public final class Snapshot {
         _nodes = UnsafeBufferPointer(start: view.nodes, count: Int(view.count))
         _names = UnsafeRawBufferPointer(start: view.names, count: Int(view.names_len))
         root = view.root
+        fileKinds = Self.classify(nodes: _nodes, names: _names)
         var s = TessScanStats()
         tess_snapshot_stats(handle, &s)
         stats = s
+        skippedByRequest = (0..<s.skipped_by_request_count).compactMap { index in
+            var length: UInt64 = 0
+            var reason: UInt32 = 0
+            guard let path = tess_snapshot_skipped_by_request(handle, index, &length, &reason) else { return nil }
+            let description: String
+            switch reason {
+            case UInt32(TESS_SKIP_LIMITED_SCAN): description = "limited scan"
+            case UInt32(TESS_SKIP_NOT_PRESENT): description = "not present"
+            default: description = "unknown"
+            }
+            return RequestedSkip(path: Data(bytes: path, count: Int(length)), reason: description)
+        }
+        unreadable = (0..<tess_snapshot_unreadable_count(handle)).compactMap { index in
+            var length: UInt64 = 0
+            guard let path = tess_snapshot_unreadable(handle, index, &length) else { return nil }
+            return Data(bytes: path, count: Int(length))
+        }
+        skipped = (0..<tess_snapshot_skipped_count(handle)).compactMap { index in
+            var length: UInt64 = 0
+            var reason: UInt32 = 0
+            guard let path = tess_snapshot_skipped(handle, index, &length, &reason) else { return nil }
+            let description: String
+            switch reason {
+            case UInt32(TESS_SKIP_LIMITED_SCAN): description = "limited scan"
+            case UInt32(TESS_SKIP_NOT_PRESENT): description = "not present"
+            case UInt32(TESS_SKIP_OTHER_VOLUME): description = "other volume"
+            case UInt32(TESS_SKIP_NON_LOCAL_MOUNT): description = "non-local mount"
+            case UInt32(TESS_SKIP_DATALESS_DIRECTORY): description = "dataless directory"
+            default: description = "unknown (\(reason))"
+            }
+            return RequestedSkip(path: Data(bytes: path, count: Int(length)), reason: description)
+        }
         var len: UInt64 = 0
         if let p = tess_snapshot_stalled_at(handle, &len) {
             stalledAt = Data(bytes: p, count: Int(len))
@@ -107,16 +149,34 @@ public final class Snapshot {
 
     /// Test seam: a snapshot over caller-owned buffers (no Rust handle), so
     /// tests can present malformed nodes to the accessors' bounds checks.
-    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32) {
+    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [RequestedSkip] = [], stalledAt: Data? = nil) {
         handle = nil
         _nodes = nodes
         _names = names
+        fileKinds = Self.classify(nodes: nodes, names: names)
         self.root = root
-        stats = TessScanStats()
-        stalledAt = nil
+        self.stats = stats
+        self.unreadable = unreadable
+        self.skipped = skipped
+        skippedByRequest = skipped.filter { ["limited scan", "not present"].contains($0.reason) }
+        self.stalledAt = stalledAt
         #if DEBUG
         bornAt = 0
         #endif
+    }
+
+    private static func classify(nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer) -> [UInt8] {
+        nodes.map { node in
+            guard node.flags & UInt16(TESS_FLAG_DIR) == 0 else { return 255 }
+            let start = Int(node.name_off), end = Int(node.name_off) + Int(node.name_len)
+            precondition(end <= names.count, "Snapshot name range out of range")
+            return FileKind.kind(forName: Data(names[start..<end]))?.rawValue ?? 255
+        }
+    }
+
+    public func fileKind(_ index: UInt32) -> FileKind? {
+        _ = node(index)  // same bounds and liveness contract as the other accessors
+        return FileKind(rawValue: fileKinds[Int(index)])
     }
 
     deinit {
@@ -125,6 +185,20 @@ public final class Snapshot {
         #else
         if let handle { tess_snapshot_release(handle) }
         #endif
+    }
+
+    public var datalessFiles: UInt64 { stats.dataless_files }
+    public var datalessDirectories: UInt64 { stats.dataless_directories }
+    public var datalessItems: UInt64 { datalessFiles + datalessDirectories }
+    public var datalessLogicalBytes: UInt64 { stats.dataless_logical_bytes }
+    public var noMaterializeFailed: Bool { stats.no_materialize_failed != 0 }
+
+    public func isDataless(_ i: UInt32) -> Bool {
+        node(i).flags & UInt16(TESS_FLAG_DATALESS) != 0
+    }
+
+    public func isSkippedByRequest(_ i: UInt32) -> Bool {
+        node(i).flags & UInt16(TESS_FLAG_SKIPPED_REQUEST) != 0
     }
 
     public var nodes: UnsafeBufferPointer<TessNode> {

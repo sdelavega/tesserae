@@ -7,6 +7,7 @@ publish = false
 description = "Developer command line over the Tesserae scan engine"
 
 [dependencies]
+libc = "0.2"
 tesserae-core = { path = "../tesserae-core" }
 # Pinned exactly: the JSON output is a developer-facing format and the
 # dependency tree is audited against deny.toml at this version.

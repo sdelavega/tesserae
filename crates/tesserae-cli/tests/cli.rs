@@ -111,6 +111,7 @@ fn json_carries_every_incompleteness_field_even_when_clean() {
         [
             "allocated_bytes",
             "complete",
+            "dataless",
             "depth_capped",
             "dirs",
             "elapsed",
@@ -121,6 +122,7 @@ fn json_carries_every_incompleteness_field_even_when_clean() {
             "logical_bytes",
             "lost_entries",
             "modified",
+            "no_materialize_failed",
             "path",
             "skipped_mounts",
             "stalled_at",
@@ -343,4 +345,122 @@ fn bad_usage_exits_one_with_the_usage_on_stderr() {
         let stderr = String::from_utf8(out.stderr).unwrap();
         assert!(stderr.contains("usage"), "{args:?}: {stderr}");
     }
+}
+
+#[test]
+fn dataless_probe_reports_metadata_recurses_and_names_open_errors() {
+    let fx = small_tree();
+    // Nonempty, independently-sized fixture; the probe must reach b/two.bin.
+    assert_eq!(
+        std::fs::metadata(fx.path().join("a/b/two.bin"))
+            .unwrap()
+            .len(),
+        5000
+    );
+    std::os::unix::fs::symlink("a", fx.path().join("link")).unwrap();
+    assert_eq!(
+        std::fs::symlink_metadata(fx.path().join("link"))
+            .unwrap()
+            .len(),
+        1
+    );
+    for policy in [vec![], vec!["--no-materialize"]] {
+        let mut args = vec!["dataless-probe", fx.path().to_str().unwrap()];
+        args.extend(policy);
+        let out = cli(&args);
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(out.status.success(), "{text}");
+        assert!(
+            text.contains("entry path=\"./a/b/two.bin\" type=file flags=0x"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "logical=5000 allocated={}",
+                allocated(&fx.path().join("a/b/two.bin"))
+            )),
+            "{text}"
+        );
+        assert!(text.contains("type=symlink"), "{text}");
+        assert!(
+            !text.contains("./link/"),
+            "must not follow symlinks: {text}"
+        );
+        assert!(
+            text.contains("totals entries=7 directories=2 files=4 other=1 dataless=0 logical=9001"),
+            "{text}"
+        );
+        assert!(text.contains("errors=0 wall_secs="), "{text}");
+        assert!(text.contains("dataless=false"));
+        if args.contains(&"--no-materialize") {
+            assert!(
+                text.contains("policy=no-materialize scope=thread success=true"),
+                "{text}"
+            );
+        } else {
+            assert!(text.contains("policy=default unchanged"), "{text}");
+        }
+    }
+    let missing = fx.path().join("missing");
+    assert!(!missing.exists(), "precondition: nonexistent root");
+    let out = cli(&["dataless-probe", missing.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("operation=open errno=2(ENOENT)"), "{text}");
+    assert!(text.contains("errors=1 wall_secs="), "{text}");
+}
+
+#[test]
+fn dataless_runbook_only_prints_and_quotes_the_requested_path() {
+    let fx = Fixture::new().unwrap();
+    let probe_dir = fx.path().join("probe dir ' $(false)");
+    assert!(!probe_dir.exists(), "precondition: no probe directory");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/dataless-probe.sh");
+    let out = Command::new("bash")
+        .arg(script)
+        .arg(&probe_dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !probe_dir.exists(),
+        "printing must not create the directory"
+    );
+    assert_eq!(std::fs::read_dir(fx.path()).unwrap().count(), 0);
+    let text = String::from_utf8(out.stdout).unwrap();
+    for command in [
+        "dd if=/dev/zero",
+        "/usr/bin/brctl status",
+        "/usr/bin/brctl evict",
+        "stat -f '%N %Xf %z %b'",
+        "--no-materialize",
+    ] {
+        assert!(text.contains(command), "{text}");
+    }
+    // Parse the printed shell without executing its cloud operations.
+    let mut shell = Command::new("bash")
+        .arg("-n")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    shell
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+    assert!(shell.wait().unwrap().success());
+    let assignment = text.lines().find(|l| l.starts_with("probe_dir=")).unwrap();
+    let decoded = Command::new("bash")
+        .arg("-c")
+        .arg(format!("{assignment}; printf '%s' \"$probe_dir\""))
+        .output()
+        .unwrap();
+    assert!(decoded.status.success());
+    assert_eq!(decoded.stdout, probe_dir.as_os_str().as_encoded_bytes());
 }

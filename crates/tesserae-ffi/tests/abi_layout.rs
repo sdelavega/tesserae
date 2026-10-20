@@ -132,15 +132,17 @@ abi! {
         bytes_seen = 16, "u64", "uint64_t",
         errors = 24, "u64", "uint64_t",
     }
-    TessScanOptions: 32, 8 {
+    TessScanOptions: 48, 8 {
         max_depth = 0, "u16", "uint16_t",
         include_non_local = 2, "u8", "uint8_t",
         workers = 4, "u32", "uint32_t",
         node_budget = 8, "u64", "uint64_t",
         buffer_bytes = 16, "u64", "uint64_t",
         stall_timeout_ms = 24, "u64", "uint64_t",
+        skip_count = 32, "u64", "uint64_t",
+        skip = 40, "*const *const i8", "const char *const *",
     }
-    TessScanStats: 72, 8 {
+    TessScanStats: 120, 8 {
         incomplete = 0, "u32", "uint32_t",
         files = 8, "u64", "uint64_t",
         dirs = 16, "u64", "uint64_t",
@@ -150,6 +152,12 @@ abi! {
         lost_entries = 48, "u64", "uint64_t",
         hardlink_dups = 56, "u64", "uint64_t",
         depth_capped = 64, "u64", "uint64_t",
+        skipped_by_request_count = 72, "u64", "uint64_t",
+        dataless_files = 80, "u64", "uint64_t",
+        dataless_directories = 88, "u64", "uint64_t",
+        dataless_logical_bytes = 96, "u64", "uint64_t",
+        no_materialize_failed = 104, "u32", "uint32_t",
+        started_at = 112, "i64", "int64_t",
     }
 }
 
@@ -161,6 +169,13 @@ const CONSTANTS: &[(&str, &str)] = &[
     ("TESS_FLAG_HARDLINK_DUP", "0x4"),
     ("TESS_FLAG_PERM_DENIED", "0x8"),
     ("TESS_FLAG_AGGREGATED", "0x10"),
+    ("TESS_FLAG_SKIPPED_REQUEST", "0x20"),
+    ("TESS_FLAG_DATALESS", "0x40"),
+    ("TESS_SKIP_LIMITED_SCAN", "1"),
+    ("TESS_SKIP_NOT_PRESENT", "2"),
+    ("TESS_SKIP_OTHER_VOLUME", "3"),
+    ("TESS_SKIP_NON_LOCAL_MOUNT", "4"),
+    ("TESS_SKIP_DATALESS_DIRECTORY", "5"),
     ("TESS_NODE_NONE", "0xFFFFFFFFu"),
     ("TESS_INCOMPLETE_NONE", "0"),
     ("TESS_INCOMPLETE_CANCELLED", "1"),
@@ -174,11 +189,12 @@ const CONSTANTS: &[(&str, &str)] = &[
     ("TESS_STATUS_FINISHED", "1"),
 ];
 
-/// The ten functions, as pointers typed with the signatures spec section 6
+/// The exported functions, as pointers typed with the signatures spec section 6
 /// gives (plus `tess_scan_status`, `tess_snapshot_stats` and
-/// `tess_snapshot_stalled_at`). Assigning a function to a pointer of a
+/// `tess_snapshot_stalled_at` and `tess_snapshot_skipped_by_request`). Assigning a function to a pointer of a
 /// different type is an error under `-Werror`.
 const PROTOTYPES: &str = "\
+const char *(*p_engine_version)(void) = tess_engine_version;
 uint32_t (*p_version)(void) = tess_abi_version;
 TessScan *(*p_begin)(const char *, const TessScanOptions *) = tess_scan_begin;
 void (*p_progress)(TessScan *, TessProgress *) = tess_scan_progress;
@@ -188,6 +204,11 @@ TessSnapshot *(*p_finish)(TessScan *) = tess_scan_finish;
 void (*p_view)(const TessSnapshot *, TessView *) = tess_snapshot_view;
 void (*p_stats)(const TessSnapshot *, TessScanStats *) = tess_snapshot_stats;
 const uint8_t *(*p_stalled)(const TessSnapshot *, uint64_t *) = tess_snapshot_stalled_at;
+const uint8_t *(*p_skipped)(const TessSnapshot *, uint64_t, uint64_t *, uint32_t *) = tess_snapshot_skipped_by_request;
+uint64_t (*p_unreadable_count)(const TessSnapshot *) = tess_snapshot_unreadable_count;
+uint64_t (*p_skipped_count)(const TessSnapshot *) = tess_snapshot_skipped_count;
+const uint8_t *(*p_unreadable_path)(const TessSnapshot *, uint64_t, uint64_t *) = tess_snapshot_unreadable;
+const uint8_t *(*p_skipped_path)(const TessSnapshot *, uint64_t, uint64_t *, uint32_t *) = tess_snapshot_skipped;
 void (*p_release)(TessSnapshot *) = tess_snapshot_release;
 ";
 
@@ -285,8 +306,8 @@ fn the_header_has_the_layout_constants_and_signatures_in_the_abi_table() {
     );
     assert_eq!(
         PROTOTYPES.lines().count(),
-        10,
-        "all ten functions are checked"
+        16,
+        "all sixteen functions are checked"
     );
     assert!(
         source.contains("offsetof(TessNode, modified) == 40"),

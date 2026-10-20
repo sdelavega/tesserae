@@ -25,6 +25,7 @@ import os.signpost
 public final class FrameTimer: @unchecked Sendable {
     public static let shared = FrameTimer()
     public struct Sample: Codable, Sendable {
+        public let pass: String
         public let kind: String
         public let label: String
         public let seconds: Double
@@ -33,16 +34,18 @@ public final class FrameTimer: @unchecked Sendable {
     public struct Token: Sendable {
         fileprivate let generation: UInt64
         fileprivate let started: Double
+        fileprivate let pass: String
         fileprivate let kind: String
         fileprivate let label: String
         fileprivate let tiles: Int
         fileprivate let signpost: OSSignpostID
     }
     private let lock = NSLock()
-    private let log = OSLog(subsystem: "io.github.sdelavega.Tesserae", category: "FrameTiming")
+    private let log = OSLog(subsystem: "com.sdelavega.Tesserae", category: "FrameTiming")
     private let enabled: Bool
     private var generation: UInt64 = 0
     private var recording = false
+    private var pass = "depth"
     private var label = ""
     private var values: [Sample] = []
     private var lastPresentation: Double?
@@ -64,6 +67,7 @@ public final class FrameTimer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         generation &+= 1
         values.removeAll(keepingCapacity: true)
+        pass = "depth"
         label = ""
         lastPresentation = nil
         lastFrame = nil
@@ -73,6 +77,30 @@ public final class FrameTimer: @unchecked Sendable {
     public func stopCapture() {
         lock.lock(); defer { lock.unlock() }
         recording = false
+    }
+
+    public func setPass(_ pass: String) {
+        lock.lock(); defer { lock.unlock() }
+        self.pass = pass
+        label = ""
+        lastPresentation = nil
+        lastFrame = nil
+    }
+
+    public struct Summary: Codable, Sendable {
+        public let count: Int
+        public let maxSeconds: Double
+        public let p99Seconds: Double
+    }
+
+    public var passSummaries: [String: [String: Summary]] {
+        Dictionary(grouping: samples, by: \.pass).mapValues { samples in
+            Dictionary(grouping: samples, by: \.kind).mapValues { values in
+                let seconds = values.map(\.seconds)
+                return Summary(count: values.count, maxSeconds: seconds.max() ?? 0,
+                               p99Seconds: Self.percentile99(seconds))
+            }
+        }
     }
 
     public func setLabel(_ label: String) {
@@ -92,7 +120,7 @@ public final class FrameTimer: @unchecked Sendable {
         guard recording else { return nil }
         let id = OSSignpostID(log: log)
         os_signpost(.begin, log: log, name: "Treemap interval", signpostID: id, "%{public}@", kind as NSString)
-        return Token(generation: generation, started: now, kind: kind, label: label, tiles: tiles, signpost: id)
+        return Token(generation: generation, started: now, pass: pass, kind: kind, label: label, tiles: tiles, signpost: id)
     }
 
     public func end(_ token: Token?, at now: Double = CACurrentMediaTime()) {
@@ -105,7 +133,7 @@ public final class FrameTimer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard recording, token.generation == generation, seconds.isFinite, seconds >= 0,
             values.count < Self.limit else { return }
-        values.append(Sample(kind: kind, label: token.label, seconds: seconds, tiles: token.tiles))
+        values.append(Sample(pass: token.pass, kind: kind, label: token.label, seconds: seconds, tiles: token.tiles))
     }
 
     /// Time between draw callbacks during the same labelled transition.
@@ -113,7 +141,7 @@ public final class FrameTimer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard recording else { return }
         if let previous = lastFrame, now >= previous, values.count < Self.limit {
-            values.append(Sample(kind: "draw-cadence", label: label, seconds: now - previous, tiles: 0))
+            values.append(Sample(pass: pass, kind: "draw-cadence", label: label, seconds: now - previous, tiles: 0))
         }
         lastFrame = now
     }
@@ -136,9 +164,9 @@ public final class FrameTimer: @unchecked Sendable {
             guard time > 0 else { return }
             end(token, at: time)
             lock.lock(); defer { lock.unlock() }
-            guard recording, token.generation == generation, token.label == label else { return }
+            guard recording, token.generation == generation, token.label == label, token.pass == pass else { return }
             if let previous = lastPresentation, time >= previous, values.count < Self.limit {
-                values.append(Sample(kind: "present-cadence", label: token.label, seconds: time - previous, tiles: tiles))
+                values.append(Sample(pass: token.pass, kind: "present-cadence", label: token.label, seconds: time - previous, tiles: tiles))
             }
             lastPresentation = time
         }
@@ -211,7 +239,7 @@ public struct FrameGateConfiguration: Equatable, Sendable {
 /// Runs the actual window's navigation and MTKView, with normal labels/table
 /// updates, rather than substituting an offscreen render benchmark: the five
 /// largest sized, readable directories directly under the root, each entered
-/// and left three times.
+/// and left three times in Depth, Age and Type focus, followed by a hover sweep.
 @MainActor
 public final class PhaseGateRunner: ObservableObject {
     public enum Outcome: Equatable, Sendable {
@@ -241,6 +269,7 @@ public final class PhaseGateRunner: ObservableObject {
     /// and reports the outcome.
     public func run(
         session: AppSession, requiredRoot: String, minimumNodes: Int, output: URL,
+        setMode: @escaping @MainActor (ColourMode) -> Void = { _ in },
         completion: @escaping @MainActor (Outcome) -> Void = { _ in }
     ) {
         func fail(_ reason: String) {
@@ -271,23 +300,55 @@ public final class PhaseGateRunner: ObservableObject {
             try? await Task.sleep(for: pause * 3)
             timer.startCapture()
             var settleTimeouts = 0
-            for repetition in 1...3 {
-                for node in targets {
+            let passes = ["depth", "age", "type-focus", "hover"]
+            let modes: [ColourMode] = [.depth,
+                .age(now: Date(timeIntervalSince1970: Double(snapshot.stats.started_at))),
+                .typeFocus([.video, .images, .audio])]
+            for (pass, mode) in zip(passes, modes) {
+                timer.setPass(pass)
+                let switchTiming = timer.begin("mode-switch", tiles: session.tiles.count)
+                setMode(mode)
+                timer.end(switchTiming)
+                try? await Task.sleep(for: pause * 3)
+                for repetition in 1...3 {
+                    for node in targets {
+                        guard !Task.isCancelled else {
+                            timer.stopCapture()
+                            return completion(.failed("The frame gate was cancelled."))
+                        }
+                        let name = snapshot.displayName(node)
+                        self?.status = "Frame gate: \(pass) · run \(repetition)/3 · \(name) · in"
+                        timer.setLabel("\(repetition) in \(name)")
+                        session.navigator.descend(into: node)
+                        if await !Self.settle(session, pause: pause) { settleTimeouts += 1 }
+                        self?.status = "Frame gate: \(pass) · run \(repetition)/3 · \(name) · out"
+                        timer.setLabel("\(repetition) out \(name)")
+                        session.go(to: root)
+                        if await !Self.settle(session, pause: pause) { settleTimeouts += 1 }
+                    }
+                }
+            }
+            timer.setPass("hover")
+            let interaction = TreemapInteraction()
+            interaction.onHover = { session.hover(tile: $0) }
+            _ = interaction.setTiles(session.tiles)
+            let viewport = session.tiles.first?.rect ?? .zero
+            for row in 0..<12 {
+                for column in 0..<20 {
                     guard !Task.isCancelled else {
                         timer.stopCapture()
                         return completion(.failed("The frame gate was cancelled."))
                     }
-                    let name = snapshot.displayName(node)
-                    self?.status = "Frame gate: run \(repetition)/3 · \(name) · in"
-                    timer.setLabel("\(repetition) in \(name)")
-                    session.navigator.descend(into: node)
-                    if await !Self.settle(session, pause: pause) { settleTimeouts += 1 }
-                    self?.status = "Frame gate: run \(repetition)/3 · \(name) · out"
-                    timer.setLabel("\(repetition) out \(name)")
-                    session.go(to: root)
-                    if await !Self.settle(session, pause: pause) { settleTimeouts += 1 }
+                    self?.status = "Frame gate: hover sweep"
+                    let point = CGPoint(x: viewport.minX + viewport.width * (Double(column) + 0.5) / 20,
+                                        y: viewport.minY + viewport.height * (Double(row) + 0.5) / 12)
+                    let timing = timer.begin("hover", tiles: session.tiles.count)
+                    interaction.hover(at: point)
+                    timer.end(timing)
+                    try? await Task.sleep(for: min(pause, .milliseconds(16)))
                 }
             }
+            interaction.hover(at: nil)
             timer.stopCapture()
             let screen = NSApp?.keyWindow?.screen ?? NSScreen.main
             let screenID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -306,6 +367,8 @@ public final class PhaseGateRunner: ObservableObject {
                 /// Transitions whose zoom had not ended after 3 s (the view
                 /// was not drawing): a capture with any is not a valid gate run.
                 let settleTimeouts: Int
+                let passes: [String]
+                let summaries: [String: [String: FrameTimer.Summary]]
                 let samples: [FrameTimer.Sample]
             }
             #if DEBUG
@@ -313,6 +376,8 @@ public final class PhaseGateRunner: ObservableObject {
             #else
             let build = "Release"
             #endif
+            var summaries = timer.passSummaries
+            for pass in passes where summaries[pass] == nil { summaries[pass] = [:] }
             let capture = Capture(
                 root: scanned, build: build,
                 nodes: snapshot.nodes.count, incomplete: snapshot.stats.incomplete,
@@ -320,7 +385,7 @@ public final class PhaseGateRunner: ObservableObject {
                 refreshSource: reportedHz > 0 ? "CGDisplayMode.refreshRate" : "NSScreen.maximumFramesPerSecond (fallback)",
                 viewport: session.tiles.first.map { "\($0.rect.width) x \($0.rect.height) points" } ?? "none",
                 directories: targets.map { snapshot.name($0) }, settleTimeouts: settleTimeouts,
-                samples: timer.samples)
+                passes: passes, summaries: summaries, samples: timer.samples)
             // A local developer measurement: nothing is uploaded. The capture
             // names only the root's immediate child directories.
             do {
@@ -328,7 +393,7 @@ public final class PhaseGateRunner: ObservableObject {
                 encoder.outputFormatting = [.sortedKeys]
                 try encoder.encode(capture).write(to: output, options: .atomic)
                 guard settleTimeouts == 0 else {
-                    let reason = "Frame gate capture saved to \(output.path), but \(settleTimeouts) of 30 transitions"
+                    let reason = "Frame gate capture saved to \(output.path), but \(settleTimeouts) of 90 transitions"
                         + " did not finish animating within 3 s (was the window visible?); it is not a valid run."
                     self?.status = reason
                     return completion(.failed(reason))
@@ -438,7 +503,7 @@ public enum FrameGateAutorun {
         try? await Task.sleep(for: .milliseconds(500))
         log("running on \(session.snapshot.nodes.count) nodes")
         var outcome: PhaseGateRunner.Outcome?
-        runner.run(session: session, requiredRoot: root.path, minimumNodes: 0, output: output) { outcome = $0 }
+        runner.run(session: session, requiredRoot: root.path, minimumNodes: 0, output: output, setMode: model.setColourMode, completion: { outcome = $0 })
         guard await deadline.wait(every: .milliseconds(100), until: { outcome != nil }), let outcome else {
             // The runner writes and reports in one main-actor step, so with no
             // outcome yet nothing has been written; cancelling keeps it so.

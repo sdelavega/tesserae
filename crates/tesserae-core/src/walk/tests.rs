@@ -371,6 +371,7 @@ fn a_malformed_batch_reports_the_entries_it_lost() {
     let progress = Progress::default();
     let lane = Lane::new(Arena::new(0, u64::MAX));
     let ctx = WalkerCtx {
+        skips: &super::SkipSet::default(),
         opener: &OpenAt,
         inodes: &inodes,
         budget: &budget,
@@ -388,6 +389,7 @@ fn a_malformed_batch_reports_the_entries_it_lost() {
         depth: 0,
         sizing: crate::boundary::Sizing::Reported,
         children: Vec::new(),
+        dataless_skips: Vec::new(),
         next: 0,
     };
 
@@ -667,6 +669,7 @@ fn a_raised_halt_stops_a_push_dead() {
     let progress = Progress::default();
     let lane = Lane::new(Arena::new(0, u64::MAX));
     let ctx = WalkerCtx {
+        skips: &super::SkipSet::default(),
         opener: &OpenAt,
         inodes: &inodes,
         budget: &budget,
@@ -719,6 +722,7 @@ fn a_terminal_failure_raises_the_halt() {
     let progress = Progress::default();
     let lane = Lane::new(Arena::new(0, u64::MAX));
     let ctx = WalkerCtx {
+        skips: &super::SkipSet::default(),
         opener: &OpenAt,
         inodes: &inodes,
         budget: &budget,
@@ -750,4 +754,610 @@ fn empty_root_walks_to_a_single_node() {
     let (arena, stats) = walk_serial(&opts(fx.path())).unwrap();
     assert_eq!((arena.len(), stats.dirs, stats.files), (1, 1, 0));
     assert_eq!(stats.incomplete, None);
+}
+
+/// Any attempt to open the protected child fails the test, including work
+/// reopened by a different parallel worker.
+struct RefuseRequestedOpen;
+impl DirOpener for RefuseRequestedOpen {
+    fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+        assert_ne!(name.to_bytes(), b"protected", "skipped child was opened");
+        OpenAt.open_dir_at(parent, name)
+    }
+    fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+        assert!(
+            !rel.to_bytes()
+                .split(|b| *b == b'/')
+                .any(|p| p == b"protected"),
+            "skipped child was published and reopened"
+        );
+        OpenAt.reopen_dir_beneath(root, rel)
+    }
+}
+
+#[test]
+fn limited_admission_never_opens_skips_and_matches_symlink_and_parent_aliases() {
+    use crate::arena::FLAG_SKIPPED_REQUEST;
+    use std::os::unix::fs::{symlink, MetadataExt};
+    use std::sync::Arc;
+    let fx = Fixture::new().unwrap();
+    fx.file("tree/protected/secret", 8192).unwrap();
+    fx.file("tree/visible", 7).unwrap();
+    symlink("protected", fx.path().join("tree/link")).unwrap();
+    symlink("tree", fx.path().join("parent-alias")).unwrap();
+    let root = fx.path().join("tree");
+    let protected = root.join("protected");
+    assert_eq!(
+        fs::metadata(&protected).unwrap().ino(),
+        fs::metadata(fx.path().join("parent-alias/protected"))
+            .unwrap()
+            .ino(),
+        "precondition: same inode through alias"
+    );
+    let (full, _) = walk_serial(&opts(&root)).unwrap();
+    assert_eq!(
+        find(&full, b"secret").len(),
+        1,
+        "precondition: full scan enters protected"
+    );
+    let full_total = totals(&full);
+    for skip in [
+        protected.clone(),
+        root.join("link"),
+        fx.path().join("parent-alias/protected"),
+    ] {
+        for parallel in [false, true] {
+            let o = WalkOptions {
+                skip: vec![skip.clone()],
+                workers: 4,
+                ..opts(&root)
+            };
+            let (arenas, stats) = if parallel {
+                crate::pool::walk_with(&o, Arc::new(RefuseRequestedOpen), &[], &Progress::default())
+                    .unwrap()
+            } else {
+                let (a, s) = walk_serial_with(&o, &RefuseRequestedOpen).unwrap();
+                (vec![a], s)
+            };
+            assert_eq!(stats.dirs, 2);
+            assert!(stats.unreadable.is_empty());
+            assert_eq!(
+                stats.skipped_by_request,
+                vec![(protected.clone(), "limited scan")]
+            );
+            assert!(stats.incomplete.is_none());
+            assert_eq!(stats.errors, 0);
+            let mut skipped = 0;
+            for a in &arenas {
+                assert!(find(a, b"secret").is_empty());
+                for (id, node) in a.iter() {
+                    if a.name_bytes(node.name) == b"protected" {
+                        skipped += 1;
+                        assert_eq!(
+                            node.flags & (FLAG_SKIPPED_REQUEST | FLAG_PERM_DENIED),
+                            FLAG_SKIPPED_REQUEST | FLAG_PERM_DENIED
+                        );
+                        assert!(!a.iter().any(|(_, child)| child.parent == id));
+                    }
+                }
+            }
+            assert_eq!(skipped, 1);
+            let limited = arenas
+                .iter()
+                .map(totals)
+                .fold((0, 0), |(l, a), (x, y)| (l + x, a + y));
+            assert_eq!(full_total.0 - limited.0, 8192);
+            assert!(full_total.1 > limited.1, "excluded allocated bytes");
+        }
+    }
+}
+
+#[test]
+fn limited_root_is_recorded_unknown_without_entering_and_missing_is_reported() {
+    use crate::arena::FLAG_SKIPPED_REQUEST;
+    let fx = Fixture::new().unwrap();
+    fx.file("secret", 8192).unwrap();
+    let missing = fx.path().join("absent");
+    assert!(!missing.exists(), "precondition");
+    for parallel in [false, true] {
+        let o = WalkOptions {
+            skip: vec![fx.path().to_path_buf(), missing.clone()],
+            ..opts(fx.path())
+        };
+        let (arenas, stats) = if parallel {
+            crate::pool::walk(&o).unwrap()
+        } else {
+            let (a, s) = walk_serial(&o).unwrap();
+            (vec![a], s)
+        };
+        assert_eq!(arenas.iter().map(Arena::len).sum::<u64>(), 1);
+        let node = arenas[0].iter().next().unwrap().1;
+        assert_ne!(node.flags & FLAG_SKIPPED_REQUEST, 0);
+        assert_ne!(node.flags & FLAG_PERM_DENIED, 0, "unknown size path reused");
+        assert_eq!(stats.dirs, 1);
+        assert_eq!(stats.files, 0);
+        assert!(stats
+            .skipped_by_request
+            .contains(&(missing.clone(), "not present")));
+        assert!(stats
+            .skipped_by_request
+            .contains(&(fx.path().to_path_buf(), "limited scan")));
+    }
+    let o = WalkOptions {
+        skip: vec![missing.clone()],
+        ..opts(fx.path())
+    };
+    let (a, stats) = walk_serial(&o).unwrap();
+    assert_eq!(
+        find(&a, b"secret").len(),
+        1,
+        "missing request does not hide live content"
+    );
+    assert_eq!(stats.skipped_by_request, vec![(missing, "not present")]);
+}
+
+#[test]
+fn limited_admission_uses_bulk_identity_and_falls_back_for_zero_fileid() {
+    use std::os::unix::fs::MetadataExt;
+    for fallback in [false, true] {
+        let fx = Fixture::new().unwrap();
+        fx.file("protected/secret", 7).unwrap();
+        let protected = fx.path().join("protected");
+        let options = WalkOptions {
+            skip: vec![protected.clone()],
+            ..opts(fx.path())
+        };
+        let skips = super::SkipSet::resolve(&options).unwrap();
+        let (mut buf, count) = single_call(fx.path(), 4096);
+        assert_eq!(count, 1, "precondition: just the protected directory");
+        let entry = crate::parse::entries(&buf, count as u32)
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.file_id, fs::metadata(&protected).unwrap().ino());
+        assert_ne!(entry.file_id, 0, "precondition: bulk has real identity");
+        if fallback {
+            buf[60..68].copy_from_slice(&0u64.to_le_bytes());
+        }
+        let inodes = InodeSet::new(1);
+        let budget = NodeBudget::new(u64::MAX);
+        let halt = Halt::new();
+        let progress = Progress::default();
+        let lane = Lane::new(Arena::new(0, u64::MAX));
+        let ctx = WalkerCtx {
+            skips: &skips,
+            opener: &OpenAt,
+            inodes: &inodes,
+            budget: &budget,
+            halt: &halt,
+            progress: &progress,
+            root_volume: VolumeId::new(0, 0),
+            root_path: fx.path(),
+            root_dir: None,
+        };
+        let mut w = Walker::new(&ctx, None, &options, &lane).unwrap();
+        let mut slot = lane.lock_raw().unwrap();
+        let root = w.push(&mut slot, b"", ScanId::NONE, None).unwrap();
+        let mut frame = Frame {
+            dir: Dir::new(OwnedFd::from(File::open(fx.path()).unwrap()), root, &lane),
+            depth: 0,
+            sizing: crate::boundary::Sizing::Reported,
+            children: Vec::new(),
+            dataless_skips: Vec::new(),
+            next: 0,
+        };
+        w.consume_batch(&mut slot, &mut frame, root, &buf, count as u32)
+            .unwrap();
+        assert_eq!(frame.children.len(), 1, "precondition: pending child");
+        drop(slot);
+        // A real bulk identity needs no further lookup. The fallback must
+        // resolve the still-present directory with fstatat.
+        if !fallback {
+            fs::remove_dir_all(&protected).unwrap();
+        }
+        w.admit_children(&mut frame).unwrap();
+        assert!(frame.children.is_empty());
+        let (_, stats) = w.finish();
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.skipped_by_request, vec![(protected, "limited scan")]);
+    }
+}
+
+#[test]
+fn dataless_bulk_entries_are_counted_and_directories_never_queued() {
+    for directory in [false, true] {
+        let fx = Fixture::new().unwrap();
+        if directory {
+            fx.dir("cloud").unwrap();
+        } else {
+            fx.file("cloud", 1048576).unwrap();
+        }
+        let options = opts(fx.path());
+        let (mut buf, count) = single_call(fx.path(), 4096);
+        assert_eq!(count, 1, "precondition: one entry");
+        buf[56..60].copy_from_slice(&0x40000000u32.to_le_bytes());
+        if !directory {
+            buf[72..80].copy_from_slice(&0u64.to_le_bytes());
+        }
+        let e = crate::parse::entries(&buf, 1).next().unwrap().unwrap();
+        assert_eq!(e.flags, 0x40000000);
+        assert_eq!(e.obj_type == ObjType::Dir, directory);
+        let inodes = InodeSet::new(1);
+        let budget = NodeBudget::new(u64::MAX);
+        let halt = Halt::new();
+        let progress = Progress::default();
+        let lane = Lane::new(Arena::new(0, u64::MAX));
+        let skips = SkipSet::resolve(&options).unwrap();
+        let ctx = WalkerCtx {
+            skips: &skips,
+            opener: &OpenAt,
+            inodes: &inodes,
+            budget: &budget,
+            halt: &halt,
+            progress: &progress,
+            root_volume: VolumeId::new(0, 0),
+            root_path: fx.path(),
+            root_dir: None,
+        };
+        let mut w = Walker::new(&ctx, None, &options, &lane).unwrap();
+        let mut slot = lane.lock_raw().unwrap();
+        let root = w.push(&mut slot, b"", ScanId::NONE, None).unwrap();
+        let mut frame = Frame {
+            dir: Dir::new(OwnedFd::from(File::open(fx.path()).unwrap()), root, &lane),
+            depth: 0,
+            sizing: crate::boundary::Sizing::Reported,
+            children: Vec::new(),
+            dataless_skips: Vec::new(),
+            next: 0,
+        };
+        w.consume_batch(&mut slot, &mut frame, root, &buf, count as u32)
+            .unwrap();
+
+        assert_eq!(
+            slot.stats.dataless_paths,
+            if directory {
+                vec![fx.path().join("cloud")]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(slot.stats.dataless.files, u64::from(!directory));
+        assert_eq!(slot.stats.dataless.directories, u64::from(directory));
+        assert_eq!(
+            slot.stats.dataless.logical_bytes,
+            if directory { 0 } else { 1048576 }
+        );
+        assert_eq!(
+            slot.stats.unreadable.len(),
+            0,
+            "cloud is not permission failure"
+        );
+        assert_eq!(slot.stats.errors, 0);
+        assert_eq!(slot.bytes, 0, "no local allocation");
+        assert!(
+            frame.children.is_empty(),
+            "cloud directory must not be entered or published"
+        );
+        let node = find(&slot.arena, b"cloud")[0];
+        assert_ne!(node.flags & (1 << 6), 0, "dataless flag survives parsing");
+        if directory {
+            assert_ne!(node.flags & FLAG_PERM_DENIED, 0, "unknown size");
+        } else {
+            assert_eq!(node.logical, 1048576, "logical size retained");
+        }
+        drop(slot);
+        drop(frame);
+        let (arena, stats) = w.finish();
+        let snapshot = crate::freeze::freeze(vec![arena], stats);
+        assert_eq!(snapshot.nodes.len(), 2, "precondition: no hidden children");
+        let frozen = snapshot
+            .nodes
+            .iter()
+            .find(|n| n.flags & crate::arena::FLAG_DATALESS != 0)
+            .unwrap();
+        assert_eq!(frozen.child_count, 0);
+        assert_eq!(frozen.allocated, 0);
+        assert_eq!(frozen.flags & FLAG_PERM_DENIED != 0, directory);
+    }
+}
+
+#[test]
+fn every_scan_thread_attempts_policy_before_open_and_failure_is_nonfatal() {
+    use std::sync::{Arc, Mutex};
+    thread_local! { static ATTEMPTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+    struct Policy {
+        supervisor: Option<std::thread::ThreadId>,
+        threads: Mutex<std::collections::HashSet<std::thread::ThreadId>>,
+    }
+    impl DirOpener for Policy {
+        fn no_materialize(&self) -> io::Result<()> {
+            ATTEMPTED.set(true);
+            self.threads
+                .lock()
+                .unwrap()
+                .insert(std::thread::current().id());
+            if self.supervisor == Some(std::thread::current().id()) {
+                Ok(())
+            } else {
+                Err(io::Error::from_raw_os_error(libc::EPERM))
+            }
+        }
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            assert!(ATTEMPTED.get(), "policy precedes worker open");
+            OpenAt.open_dir_at(parent, name)
+        }
+        fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+            assert!(ATTEMPTED.get(), "policy precedes worker reopen");
+            OpenAt.reopen_dir_beneath(root, rel)
+        }
+    }
+    let fx = Fixture::new().unwrap();
+    fx.file("child/file", 17).unwrap();
+    for parallel in [false, true] {
+        ATTEMPTED.set(false);
+        let policy = Arc::new(Policy {
+            supervisor: parallel.then(|| std::thread::current().id()),
+            threads: Mutex::default(),
+        });
+        let mut options = opts(fx.path());
+        options.workers = 4;
+        let (nodes, stats, expected) = if parallel {
+            let (arenas, stats) =
+                crate::pool::walk_with(&options, Arc::clone(&policy), &[], &Progress::default())
+                    .unwrap();
+            assert_eq!(arenas.len(), 4, "precondition: genuinely parallel");
+            let expected = arenas.len() + 1; // workers and root-opening supervisor
+            (arenas.iter().map(Arena::len).sum::<u64>(), stats, expected)
+        } else {
+            let (arena, stats) = walk_serial_with(&options, &*policy).unwrap();
+            (arena.len(), stats, 1)
+        };
+        assert_eq!(nodes, 3, "failure must not stop scanning");
+        assert_eq!(stats.incomplete, None);
+        assert!(stats.no_materialize_failed, "failure reaches report");
+        assert_eq!(
+            policy.threads.lock().unwrap().len(),
+            expected,
+            "even idle workers attempt policy"
+        );
+    }
+}
+
+#[test]
+fn dataless_requested_skip_uses_bulk_identity_and_zero_fileid_fallback() {
+    use std::os::unix::fs::MetadataExt;
+    for (fallback, matched) in [(false, true), (true, true), (false, false), (true, false)] {
+        let fx = Fixture::new().unwrap();
+        fx.file("protected/secret", 7).unwrap();
+        let protected = fx.path().join("protected");
+        let options = WalkOptions {
+            skip: vec![if matched {
+                protected.clone()
+            } else {
+                fx.path().to_path_buf()
+            }],
+            ..opts(fx.path())
+        };
+        let skips = super::SkipSet::resolve(&options).unwrap();
+        let (mut buf, count) = single_call(fx.path(), 4096);
+        assert_eq!(count, 1, "precondition: just the protected directory");
+        let entry = crate::parse::entries(&buf, count as u32)
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.file_id, fs::metadata(&protected).unwrap().ino());
+        assert_ne!(entry.file_id, 0, "precondition: bulk has real identity");
+        if fallback {
+            buf[60..68].copy_from_slice(&0u64.to_le_bytes());
+        }
+        buf[56..60].copy_from_slice(&0x40000000u32.to_le_bytes());
+        let inodes = InodeSet::new(1);
+        let budget = NodeBudget::new(u64::MAX);
+        let halt = Halt::new();
+        let progress = Progress::default();
+        let lane = Lane::new(Arena::new(0, u64::MAX));
+        let ctx = WalkerCtx {
+            skips: &skips,
+            opener: &OpenAt,
+            inodes: &inodes,
+            budget: &budget,
+            halt: &halt,
+            progress: &progress,
+            root_volume: VolumeId::new(0, 0),
+            root_path: fx.path(),
+            root_dir: None,
+        };
+        let mut w = Walker::new(&ctx, None, &options, &lane).unwrap();
+        let mut slot = lane.lock_raw().unwrap();
+        let root = w.push(&mut slot, b"", ScanId::NONE, None).unwrap();
+        let mut frame = Frame {
+            dir: Dir::new(OwnedFd::from(File::open(fx.path()).unwrap()), root, &lane),
+            depth: 0,
+            sizing: crate::boundary::Sizing::Reported,
+            children: Vec::new(),
+            dataless_skips: Vec::new(),
+            next: 0,
+        };
+        w.consume_batch(&mut slot, &mut frame, root, &buf, count as u32)
+            .unwrap();
+        assert!(frame.children.is_empty(), "dataless must never queue");
+        let child = find(&slot.arena, b"protected")[0];
+        assert_ne!(child.flags & crate::arena::FLAG_DATALESS, 0);
+        assert_eq!(
+            frame.dataless_skips.len(),
+            1,
+            "precondition: metadata admission pending"
+        );
+        drop(slot);
+        // A real bulk identity needs no further lookup. The fallback must
+        // resolve the still-present directory with fstatat.
+        if !fallback {
+            fs::remove_dir_all(&protected).unwrap();
+        }
+        w.admit_children(&mut frame).unwrap();
+        assert!(frame.dataless_skips.is_empty());
+        let slot = lane.lock_raw().unwrap();
+        assert_eq!(
+            find(&slot.arena, b"protected")[0].flags & crate::arena::FLAG_SKIPPED_REQUEST != 0,
+            matched
+        );
+        drop(slot);
+        assert!(frame.children.is_empty());
+        let (_, stats) = w.finish();
+        assert_eq!(stats.errors, 0);
+        assert_eq!(
+            stats.skipped_by_request,
+            if matched {
+                vec![(protected, "limited scan")]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+#[test]
+fn dataless_hardlink_duplicate_does_not_double_count_logical_bytes() {
+    let fx = Fixture::new().unwrap();
+    fx.file("cloud", 1048576).unwrap();
+    let options = opts(fx.path());
+    let (mut buf, count) = single_call(fx.path(), 4096);
+    assert_eq!(count, 1, "precondition: one entry");
+    buf[56..60].copy_from_slice(&0x40000000u32.to_le_bytes());
+    buf[72..80].copy_from_slice(&0u64.to_le_bytes());
+    buf[68..72].copy_from_slice(&2u32.to_le_bytes());
+    let e = crate::parse::entries(&buf, 1).next().unwrap().unwrap();
+    assert_eq!(e.flags, 0x40000000);
+    assert_eq!(e.obj_type, ObjType::Reg);
+    let inodes = InodeSet::new(1);
+    let budget = NodeBudget::new(u64::MAX);
+    let halt = Halt::new();
+    let progress = Progress::default();
+    let lane = Lane::new(Arena::new(0, u64::MAX));
+    let skips = SkipSet::resolve(&options).unwrap();
+    let ctx = WalkerCtx {
+        skips: &skips,
+        opener: &OpenAt,
+        inodes: &inodes,
+        budget: &budget,
+        halt: &halt,
+        progress: &progress,
+        root_volume: VolumeId::new(0, 0),
+        root_path: fx.path(),
+        root_dir: None,
+    };
+    let mut w = Walker::new(&ctx, None, &options, &lane).unwrap();
+    let mut slot = lane.lock_raw().unwrap();
+    let root = w.push(&mut slot, b"", ScanId::NONE, None).unwrap();
+    let mut frame = Frame {
+        dir: Dir::new(OwnedFd::from(File::open(fx.path()).unwrap()), root, &lane),
+        depth: 0,
+        sizing: crate::boundary::Sizing::Reported,
+        children: Vec::new(),
+        dataless_skips: Vec::new(),
+        next: 0,
+    };
+    w.consume_batch(&mut slot, &mut frame, root, &buf, count as u32)
+        .unwrap();
+    w.consume_batch(&mut slot, &mut frame, root, &buf, count as u32)
+        .unwrap();
+    assert_eq!(slot.stats.hardlink_dups, 1, "precondition: duplicate inode");
+
+    assert_eq!(slot.stats.dataless.files, 2);
+    assert_eq!(slot.stats.dataless.directories, 0);
+    assert_eq!(slot.stats.dataless.logical_bytes, 1048576);
+    assert_eq!(
+        slot.stats.unreadable.len(),
+        0,
+        "cloud is not permission failure"
+    );
+    assert_eq!(slot.stats.errors, 0);
+    assert_eq!(slot.bytes, 0, "no local allocation");
+    assert!(
+        frame.children.is_empty(),
+        "cloud directory must not be entered or published"
+    );
+    let node = find(&slot.arena, b"cloud")[0];
+    assert_ne!(node.flags & (1 << 6), 0, "dataless flag survives parsing");
+    assert_eq!(node.logical, 1048576, "logical size retained");
+    drop(slot);
+    drop(frame);
+    let (arena, stats) = w.finish();
+    let snapshot = crate::freeze::freeze(vec![arena], stats);
+    assert_eq!(snapshot.nodes.len(), 3, "precondition: no hidden children");
+    let frozen = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.flags & crate::arena::FLAG_DATALESS != 0)
+        .unwrap();
+    assert_eq!(frozen.child_count, 0);
+    assert_eq!(frozen.allocated, 0);
+    assert_eq!(frozen.flags & FLAG_PERM_DENIED, 0);
+}
+
+#[test]
+fn dataless_root_is_admitted_without_open_in_serial_and_pool_even_if_policy_fails() {
+    struct CloudRoot(bool);
+    impl DirOpener for CloudRoot {
+        fn no_materialize(&self) -> io::Result<()> {
+            if self.0 {
+                Err(io::Error::from_raw_os_error(libc::EPERM))
+            } else {
+                Ok(())
+            }
+        }
+        fn root_metadata(&self, _: &Path) -> io::Result<libc::stat> {
+            // SAFETY: all-zero stat fields are valid; only mode, flags and time are read.
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            st.st_mode = libc::S_IFDIR;
+            st.st_flags = 0x40000000;
+            st.st_mtime = 123;
+            Ok(st)
+        }
+        fn open_dir_at(&self, _: RawFd, _: &CStr) -> Result<OwnedFd, c_int> {
+            panic!("dataless root must never enumerate children")
+        }
+    }
+    for failed in [false, true] {
+        for pooled in [false, true] {
+            // A missing path makes any attempt to open the root fail deterministically.
+            let fx = Fixture::new().unwrap();
+            let options = opts(&fx.path().join("metadata-only-root"));
+            assert!(
+                !options.root.exists(),
+                "precondition: cannot open injected root"
+            );
+            let (arenas, stats) = if pooled {
+                crate::pool::walk_with(
+                    &options,
+                    std::sync::Arc::new(CloudRoot(failed)),
+                    &[],
+                    &Progress::default(),
+                )
+                .unwrap()
+            } else {
+                let (arena, stats) = walk_serial_with(&options, &CloudRoot(failed)).unwrap();
+                (vec![arena], stats)
+            };
+            let nodes: Vec<_> = arenas.iter().flat_map(|a| a.iter()).collect();
+            assert_eq!(nodes.len(), 1);
+            let node = nodes[0].1;
+            assert_eq!(
+                node.flags & (crate::arena::FLAG_DATALESS | FLAG_PERM_DENIED),
+                crate::arena::FLAG_DATALESS | FLAG_PERM_DENIED
+            );
+            assert_eq!(node.modified, 123);
+            assert_eq!((node.logical, node.allocated), (0, 0));
+            assert_eq!(
+                (stats.dirs, stats.files, stats.dataless.directories),
+                (1, 0, 1)
+            );
+            assert_eq!(stats.dataless_paths, vec![options.root.clone()]);
+            assert!(stats.unreadable.is_empty());
+            assert_eq!(stats.errors, 0);
+            assert_eq!(stats.no_materialize_failed, failed);
+            assert!(stats.started_at > 0);
+            assert_eq!(stats.incomplete, None);
+        }
+    }
 }

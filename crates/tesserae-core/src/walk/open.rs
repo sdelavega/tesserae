@@ -41,6 +41,20 @@ use crate::boundary::retry_eintr;
 /// `cfg(test)` thread-local: a thread-local seam would be invisible to the
 /// worker threads.
 pub(crate) trait DirOpener: Sync {
+    /// Set thread-scoped metadata policy before any scan syscall.
+    fn no_materialize(&self) -> io::Result<()> {
+        crate::dataless::no_materialize()
+    }
+
+    /// Metadata-only admission of the selected root, following caller-named aliases.
+    fn root_metadata(&self, path: &std::path::Path) -> io::Result<libc::stat> {
+        with_cstr(path.as_os_str().as_bytes(), |c| {
+            super::skip::metadata_at(libc::AT_FDCWD, c, 0)
+                .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
+        })
+        .map_err(io::Error::from_raw_os_error)
+    }
+
     /// Open the directory `name`, a single entry name, relative to the
     /// directory open as `parent`. Returns the errno on failure.
     fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int>;

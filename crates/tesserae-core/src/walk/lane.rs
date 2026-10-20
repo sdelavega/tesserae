@@ -204,6 +204,13 @@ impl Lane {
         self.ticks.load(Ordering::Relaxed)
     }
 
+    /// Preserve a thread policy failure even if this worker receives no task.
+    pub(crate) fn note_policy_failure(&self, failed: bool) {
+        if let Some(mut slot) = self.lock_raw() {
+            slot.stats.no_materialize_failed |= failed;
+        }
+    }
+
     /// The slot, locked, unless it has been taken. Poisoning is ignored: a
     /// worker that panicked has its panic resumed on the caller, and the slot
     /// is consistent between any two statements that change it.

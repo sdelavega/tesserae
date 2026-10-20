@@ -162,7 +162,7 @@ What the two have in common, which is why they agree:
   (a file and four clones: tree 40 MiB, volume 8 MiB). It does not show up in
   CLI against `du`, only against what the volume reports.
 * **Volume boundary.** Both stay on the Data volume. The CLI listed nine
-  mount points it did not enter (`~/Library/Developer/CoreDevice/DeviceFS`,
+  mount points it did not enter (`<user-home>/Library/Developer/CoreDevice/DeviceFS`,
   the Recovery volume and two other volumes under `/Volumes`, four
   simulator and toolchain cryptexes, and the non-local `/home` automount);
   `du -x` skips other devices too, and the totals agree.
@@ -707,3 +707,190 @@ of 17.7 ms are MTKView callback jitter, not missed presentations.
 
 Raw capture (minified): [`benchmarks/2026-10-19-phase2-release-gate.json`](benchmarks/2026-10-19-phase2-release-gate.json);
 summarise with `python3 scripts/frame-gate-summary.py <capture>`.
+
+
+## Full Disk Access: with and without
+
+Measured 2026-10-20 on this Mac, macOS 27.2, Release build, scanning
+`/System/Volumes/Data`. The coordinator and user ran the guided measurements.
+The complete no-FDA run used the linker-signed Release build whose grant did
+not apply; the granted run used the properly ad-hoc-signed copy at
+`apple/build/fda-run/Tesserae.app`.
+
+| Access | Probe verdict | `~/Library/Mail` errno | `~/Library/Messages` errno | `~/Library/Safari` errno | User `TCC.db` errno | Entries | Dirs | Files | Errors | Unreadable | Incomplete | Wall-clock |
+|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---:|
+| No FDA, complete | denied | 1 (`EPERM`) | 1 (`EPERM`) | 1 (`EPERM`) | 2 (`ENOENT`) | 6,161,948 | 795,209 | 5,366,739 | 0 | 1,008 | 0 (complete) | 27.0 s |
+| FDA granted | granted | 0 | 0 | 0 | 2 (`ENOENT`) | 6,809,908 | 855,639 | 5,954,269 | 0 | 261 | 0 (complete) | 21.9 s |
+
+The user-level candidate `~/Library/Application Support/com.apple.TCC/TCC.db`
+and its containing `com.apple.TCC` directory do not exist on this Mac.
+`EPERM` on the existing Mail, Messages and Safari candidates means denied in
+these measurements; all three return 0 with FDA. The unreadable count differs
+in degree (1,008 without versus 261 with) but does not discriminate access on
+its own: it is never zero, even with FDA.
+
+An earlier no-FDA run ended **STALLED** (`incomplete=4`) at **3,236,590** entries
+(439,388 dirs, 2,797,202 files, 0 errors, 345 unreadable, 24.8 s). The cause
+was **confirmed by the user on 2026-10-20**: unanswered macOS privacy consent
+prompts blocked the scan while the user was away. Limited scan (Task 7)
+avoids those protected folders.
+
+Source of the complete run numbers: the Task 5 Step 3 ledger in
+`.superpowers/sdd/2026-10-20-tesserae-phase-3-reconciliation/progress.md`;
+the complete no-FDA JSON was overwritten. Local raw reports (not committed):
+`apple/build/access-without-fda.json` records the stalled run,
+`apple/build/access-with-fda.json` records the granted run, and
+`apple/build/access-recheck.json` and `apple/build/access-signed-precheck.json`
+record denied probe-only checks. Times above use the ledger's rounded values.
+
+FDA grants depend on the bundle identifier plus code requirement. Every build
+shares `com.sdelavega.Tesserae`, so System Settings keeps one entry;
+a grant for one build does not necessarily apply to another. The
+`CODE_SIGNING_ALLOWED=NO` build is linker-signed only (Info.plist unbound,
+no internal requirement) and cannot hold the grant. For another guided test,
+build with `just app-build`, then prepare a properly ad-hoc-signed copy with
+`just fda-copy`. After replacing the copy, the user needs to toggle FDA off/on
+for the new signature if testing again.
+
+
+## Dataless items
+
+Measured 2026-10-20 on macOS 27.2 in
+`~/Library/Mobile Documents/com~apple~CloudDocs/tesserae-dataless-probe/`.
+The Task 8 Step 1 result in the reconciliation progress ledger records four
+files (1 KiB, 1 MiB, 4 MiB, 10 MiB): **15,729,664 B logical, 0 B allocated**
+after eviction, flags `0x40000060` (`SF_DATALESS` set), `st_blocks = 0`.
+Both `getattrlistbulk` runs (default policy and thread-scoped no-materialize,
+whose policy call succeeded) took **<1 ms**, with **0 errors**; neither
+materialized any file, and flags/blocks were unchanged afterwards.
+Evicting the directory evicted only its contents, so dataless directories
+could not be produced and their enumeration behaviour remains unmeasured.
+
+The scanner nevertheless disables materialization on every scan thread,
+reports policy failures, and records cloud-only directories without entering
+them (unknown size). Cloud-only files retain logical sizes and reported local
+allocation; reconciliation lists their logical bytes separately from local usage.
+This note uses the completed probe's ledger; no iCloud operation was repeated.
+
+
+## Phase 3 frame gate (rerun)
+
+Measured **2026-10-20**, Apple M5, macOS **27.2**, **60 Hz**, **Release**,
+scanning `/System/Volumes/Data`. Phase 3 `310e023` used the signed
+`apple/build/fda-run` copy with FDA granted; the two initial runs were back
+to back with Codex/GLM idle. The subsequent control alternated A/B/A/B with
+the Mac idle: A was Phase 2 `main` at `0d82881`, signed copy
+`apple/build/control-phase2`; B was the same Phase 3 signed copy.
+The control's FDA grant **did not take**: 6.19M nodes, **1,008 unreadable**,
+versus Phase 3's 6.84M and 261 unreadable. This strengthens rather than
+weakens the comparison: the control scanned less and still missed frames.
+The control viewport was 1679.0 × 493.5 pt, Phase 3 1679.0 × 461.75 pt;
+this is a same-machine control, not an identical-workload experiment.
+
+| Capture | Build | Nodes (raw) | FDA |
+|---|---|---:|---|
+| P3 run 1 | Phase 3 | 6,837,576 | Granted |
+| P3 run 2 | Phase 3 | 6,837,578 | Granted |
+| A/B 1 (A) | Phase 2 | 6,191,520 | Grant did not take |
+| A/B 2 (B) | Phase 3 | 6,838,893 | Granted |
+| A/B 3 (A) | Phase 2 | 6,191,525 | Grant did not take |
+| A/B 4 (B) | Phase 3 | 6,838,896 | Granted |
+
+Per-pass results below are recomputed from each JSON's `samples`, grouped by
+`pass` (the Phase 2 control has only Depth and no pass field). A multi-refresh
+gap is a `present-cadence` interval > 1.5 × (1 / `refreshHz`), distinguishing
+a missed refresh from timestamp jitter without changing the zero-gap bar.
+Maxima use `max`; p99 uses nearest rank, sorted value at `ceil(0.99 × n)`
+(1-based). Seconds are multiplied by 1,000 and rounded to six decimal places
+for this table. Relayout means `layout`; hover means the separate `hover`
+sweep (240 samples per Phase 3 capture). `—` means unmeasured, not zero;
+Age, Type focus and hover were not recorded by the Phase 2 control.
+
+| Capture | Pass | Multi-refresh gaps / samples | Present max ms | Present p99 ms | Relayout max ms | Hover max ms |
+|---|---|---:|---:|---:|---:|---:|
+| P3 run 1 | depth | 5/415 | 33.333333 | 33.333042 | 1.497917 | — |
+| P3 run 1 | age | 3/412 | 33.333167 | 16.666917 | 1.447125 | — |
+| P3 run 1 | type-focus | 1/415 | 33.333208 | 16.667000 | 1.564667 | — |
+| P3 run 1 | hover | — | — | — | — | 0.777167 |
+| P3 run 2 | depth | 4/416 | 33.333167 | 16.667458 | 1.317250 | — |
+| P3 run 2 | age | 4/414 | 33.333333 | 16.667833 | 1.423417 | — |
+| P3 run 2 | type-focus | 2/417 | 33.333167 | 16.667000 | 1.536625 | — |
+| P3 run 2 | hover | — | — | — | — | 0.843583 |
+| A/B 1 (A) | depth | 3/414 | 33.333042 | 16.666792 | 1.080792 | — |
+| A/B 2 (B) | depth | 3/410 | 33.333208 | 16.669208 | 1.198667 | — |
+| A/B 2 (B) | age | 3/415 | 33.333208 | 16.667042 | 1.190625 | — |
+| A/B 2 (B) | type-focus | 0/414 | 16.667125 | 16.666917 | 1.502083 | — |
+| A/B 2 (B) | hover | — | — | — | — | 1.015667 |
+| A/B 3 (A) | depth | 3/403 | 33.333167 | 16.666750 | 0.697958 | — |
+| A/B 4 (B) | depth | 2/406 | 33.333042 | 16.666833 | 0.934792 | — |
+| A/B 4 (B) | age | 2/413 | 33.333125 | 16.667125 | 1.423125 | — |
+| A/B 4 (B) | type-focus | 4/413 | 33.333250 | 16.667083 | 1.556500 | — |
+| A/B 4 (B) | hover | — | — | — | — | 0.577167 |
+
+**Ruling T11-G1:** no Phase 3 regression — the Phase 2 code, on a smaller
+tree, misses frames at the same rate today though it measured 0/414 when
+Phase 2 passed; the misses are presentation-side (app draw/encode/GPU on
+time), i.e. this machine's compositor today. The absolute bar (0 gaps) is
+**NOT met by either build today**; recorded as such, not tuned. Relayout
+1.5 ms vs 100 ms bar: PASS. Cost if wrong: a real presentation regression
+hides under environmental noise — revisit if gaps exceed the control's.
+
+All observed multi-refresh gaps are approximately 33.3 ms: one-vblank
+presentation delays. The ledger's inspection at the gaps found draw cadence
+≈16.66 ms, encode <0.5 ms and GPU <10 ms, with app work on time (these are
+at-gap observations, not whole-capture maxima). The table preserves the
+raw relayout maxima; “1.5 ms” above is the ruling's rounded description.
+Thresholds are unchanged: zero multi-refresh presentation gaps and relayout
+under 100 ms.
+
+Sources: the reconciliation `progress.md` entries from “Task 11 M1 frame
+gate” through Ruling T11-G1, and local raw captures
+`apple/build/framegate-p3-run{1,2}.json`,
+`apple/build/framegate-ab{1,3}-control-phase2.json` and
+`apple/build/framegate-ab{2,4}-fda-run.json` (not committed).
+
+## Cold-cache scan speed
+
+Measured **2026-10-20**, same Apple M5 and macOS 27.2, release
+`tesserae-cli scan /System/Volumes/Data`, default workers. The ledger records
+that the user ran `sudo purge` before each of five cold runs; each cold run
+was followed by one warm run. No scan or purge was repeated for this write-up.
+All ten raw outputs report complete scans, 261 unreadable, 0 errors and
+0 lost entries.
+
+Wall, walk and freeze seconds below are copied verbatim from
+`apple/build/cold{1..5}-{cold,warm}.out`. Entries are recomputed separately
+for each output as `dirs + files`; the live tree changes slightly.
+
+| Run | Cold wall s | Cold walk s | Cold freeze s | Cold entries | Warm wall s | Warm walk s | Warm freeze s | Warm entries |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 23.499 | 22.705 | 0.794 | 6,838,896 | 23.918 | 23.179 | 0.739 | 6,838,898 |
+| 2 | 23.057 | 22.327 | 0.730 | 6,838,899 | 24.287 | 23.521 | 0.766 | 6,838,900 |
+| 3 | 23.838 | 23.035 | 0.802 | 6,838,931 | 25.441 | 24.650 | 0.790 | 6,838,948 |
+| 4 | 24.768 | 24.024 | 0.744 | 6,838,948 | 27.712 | 26.933 | 0.779 | 6,838,952 |
+| 5 | 27.206 | 26.478 | 0.727 | 6,838,951 | 28.997 | 28.213 | 0.784 | 6,838,952 |
+
+For each run, seconds per 1M entries = `wall seconds × 1,000,000 /
+(dirs + files)`. The summary takes the median and maximum of those five
+per-run rates, rounded to two decimals; wall summaries use the five printed
+wall times. It does not reuse the ledger summary's single 6,838,896-entry
+denominator for all runs. Both methods round to the same headline rates.
+
+| Cache state | Median wall s | Worst wall s | Median s / 1M entries | Worst s / 1M entries |
+|---|---:|---:|---:|---:|
+| Cold | 23.838 | 27.206 | 3.49 | 3.98 |
+| Warm | 25.441 | 28.997 | 3.72 | 4.24 |
+
+Cold was no slower than its paired warm run in all five pairs. Both series
+drifted upward across the session (cold 23.499 → 27.206 s, with run 2 dipping
+to 23.057 s; warm 23.918 → 28.997 s). The ledger suggests thermal effects;
+that cause was not established by these runs. This drift limits any claim
+that cold scans are inherently faster than warm scans.
+
+**Ruling T12-1:** cold median **3.49 s** and worst **3.98 s per 1M entries**
+are within spec §1's ≈5 s rate, so §3's stateless-scan decision is **settled**.
+**Purge caveat:** purge flushes the unified buffer cache; whether APFS
+metadata caches are fully flushed is not established. These are five
+post-purge runs on one machine, not a guarantee for every cold-cache state.
+Source: the reconciliation `progress.md` “Task 12 cold run” entries,
+“Task 12 SUMMARY” and Ruling T12-1, checked against the ten local raw outputs.

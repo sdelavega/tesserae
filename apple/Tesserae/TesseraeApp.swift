@@ -20,7 +20,26 @@ import TesseraeKit
 
 @main
 struct TesseraeApp: App {
+    private let accessReport: AccessReportConfiguration?
+
     init() {
+        do {
+            accessReport = try AccessReportConfiguration(environment: ProcessInfo.processInfo.environment)
+        } catch {
+            FileHandle.standardError.write(Data("tesserae access report: \(error)\n".utf8))
+            exit(2)
+        }
+        if let configuration = accessReport {
+            Task {
+                do {
+                    let status = try await AccessReportRunner.run(configuration)
+                    exit(status)
+                } catch {
+                    FileHandle.standardError.write(Data("tesserae access report: \(error)\n".utf8))
+                    exit(1)
+                }
+            }
+        }
         // A mistyped frame-gate variable must not silently launch an ordinary session.
         if case .failure(let problem) = FrameGateConfiguration.current {
             FileHandle.standardError.write(Data("tesserae frame gate: \(problem)\n".utf8))
@@ -30,7 +49,11 @@ struct TesseraeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if accessReport != nil {
+                ProgressView("Writing access report…").padding()
+            } else {
+                ContentView()
+            }
         }
         #if DEBUG
         .commands {

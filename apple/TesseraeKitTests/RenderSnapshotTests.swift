@@ -370,6 +370,25 @@ final class RenderSnapshotTests: XCTestCase {
         XCTAssertEqual(mismatches, [], "Metal and CoreGraphics bytes differ")
     }
 
+    @MainActor
+    func test_fallback_identity_skips_colour_mapping_on_hover_and_scale_updates() {
+        let view = TreemapView.FallbackView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        let t = TestSnapshot(.dir("/R", [.file("clip.mp4", 10)]))
+        let tiles = [Tile(rect: view.bounds, node: t["clip.mp4"], depth: 0)]
+        let palette = Palette.colours(.typeFocus([.video]), dark: false)
+        var calls = 0
+        let colour: (Tile) -> UInt16 = { _ in calls += 1; return 2 }
+        view.set(tiles: tiles, palette: palette, colourOf: colour, dark: false, snapshot: t.snapshot, mode: .typeFocus([.video]))
+        let initial = calls
+        XCTAssertGreaterThan(initial, 0, "precondition: first input mapped")
+        view.set(tiles: tiles, palette: palette, colourOf: colour, dark: false, snapshot: t.snapshot, mode: .typeFocus([.video]))
+        view.layout()
+        view.scaleOverride = 2
+        XCTAssertEqual(calls, initial, "no name lookup or palette mapping on identical input or backing scale")
+        view.set(tiles: tiles, palette: palette, colourOf: colour, dark: false, snapshot: t.snapshot, mode: .age(now: Date(timeIntervalSince1970: 100)))
+        XCTAssertGreaterThan(calls, initial, "mode changes invalidate colours")
+    }
+
     // MARK: Fallback view caching
 
     @MainActor

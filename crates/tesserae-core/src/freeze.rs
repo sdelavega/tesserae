@@ -1034,9 +1034,13 @@ mod tests {
     #[test]
     fn walk_stats_are_carried_through_unchanged() {
         let stats = WalkStats {
+            dataless: crate::walk::DatalessStats::default(),
+            dataless_paths: vec![PathBuf::from("/cloud")],
+            no_materialize_failed: false,
             dirs: 11,
             files: 22,
             errors: 3,
+            skipped_by_request: Vec::new(),
             unreadable: vec![PathBuf::from("/locked")],
             skipped_mounts: vec![
                 (PathBuf::from("/Volumes/x"), SkipReason::OtherVolume),

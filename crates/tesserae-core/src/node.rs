@@ -50,16 +50,18 @@ pub const FLAG_SYMLINK: u16 = 1 << 1;
 /// bits). It is defined here only so that no other flag can claim the bit.
 pub const FLAG_AGGREGATED: u16 = 1 << 4;
 
-// The five bits are fixed by the spec and read by Phase 2; two flags sharing a
+// The seven bits are fixed by the spec and read by Phase 2; two flags sharing a
 // bit would silently misreport a node, so the set is checked at compile time.
 const _: () = {
-    use crate::arena::{FLAG_HARDLINK_DUP, FLAG_PERM_DENIED};
+    use crate::arena::{FLAG_DATALESS, FLAG_HARDLINK_DUP, FLAG_PERM_DENIED, FLAG_SKIPPED_REQUEST};
     let all = [
         FLAG_DIR,
         FLAG_SYMLINK,
         FLAG_HARDLINK_DUP,
         FLAG_PERM_DENIED,
         FLAG_AGGREGATED,
+        FLAG_SKIPPED_REQUEST,
+        FLAG_DATALESS,
     ];
     let mut seen = 0u16;
     let mut i = 0;
@@ -68,7 +70,7 @@ const _: () = {
         seen |= all[i];
         i += 1;
     }
-    assert!(seen == 0b1_1111);
+    assert!(seen == 0b111_1111);
 };
 
 /// One entry of the frozen tree. 48 bytes, C layout.

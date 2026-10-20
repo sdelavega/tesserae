@@ -54,8 +54,9 @@ public struct CGTreemapRenderer {
     /// returns). `colourOf` gives each tile's index into `colours`
     /// (`Palette.colours`).
     public func render(
-        tiles: [Tile], colours: [SIMD4<Float>], colourOf: (Tile) -> UInt16, size: CGSize, scale: CGFloat
+        tiles: [Tile], colours: [SIMD4<Float>], colourOf: (Tile) -> UInt16, indices: [UInt16]? = nil, size: CGSize, scale: CGFloat
     ) -> CGImage {
+        precondition(indices == nil || indices?.count == tiles.count, "one colour index per tile")
         let width = Self.pixels(size.width * scale)
         let height = Self.pixels(size.height * scale)
         let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
@@ -82,12 +83,12 @@ public struct CGTreemapRenderer {
         fill(0..<width, 0..<height)
 
         let s = Double(scale)
-        for tile in tiles {
+        for (position, tile) in tiles.enumerated() {
             let r = tile.rect
             guard r.origin.x.isFinite, r.origin.y.isFinite, r.size.width.isFinite, r.size.height.isFinite,
                 s.isFinite
             else { continue }
-            let idx = Int(colourOf(tile))
+            let idx = Int(indices?[position] ?? colourOf(tile))
             precondition(idx < colours.count, "colour index \(idx) outside a palette of \(colours.count)")
             let (x0, x1) = (Double(r.minX) * s, Double(r.maxX) * s)
             let (y0, y1) = (Double(r.minY) * s, Double(r.maxY) * s)

@@ -43,9 +43,12 @@
 //! newest anywhere beneath it, or `null` for an empty snapshot), `elapsed`
 //! (`walk_secs`, `freeze_secs`, `total_secs`), `incomplete` (the variant name
 //! or `null`), `stalled_at`, `unreadable`, `skipped_mounts` (`path`,
-//! `reason`), `lost_entries`, `hardlink_dups`, `depth_capped`, `errors`.
+//! `reason`), `lost_entries`, `hardlink_dups`, `depth_capped`, `errors`,
+//! `dataless` (files, directories, logical_bytes), `no_materialize_failed`.
 //! Paths are not guaranteed to be UTF-8; they are written lossily
 //! (invalid bytes become U+FFFD), because JSON strings cannot carry them.
+
+mod dataless_probe;
 
 use std::ffi::OsString;
 use std::io;
@@ -59,19 +62,26 @@ use tesserae_core::node::{Snapshot, NODE_NONE};
 use tesserae_core::progress::{walk_with_progress, Progress};
 use tesserae_core::walk::{os_errno, WalkOptions};
 
-const USAGE: &str = "usage: tesserae-cli scan <path> [--json] [--workers N] [--max-depth N] [--node-budget N]\n       tesserae-cli --help";
+const USAGE: &str = "usage: tesserae-cli scan <path> [--json] [--workers N] [--max-depth N] [--node-budget N]\n       tesserae-cli dataless-probe <dir> [--no-materialize]\n       tesserae-cli --help";
 
 const HELP: &str = "\
 tesserae-cli: scan a directory tree with the Tesserae engine
 
 usage: tesserae-cli scan <path> [--json] [--workers N] [--max-depth N] [--node-budget N]
+       tesserae-cli dataless-probe <dir> [--no-materialize]
        tesserae-cli --help
+
+The dataless probe recursively reports metadata through the engine parser,
+without reading file contents. --no-materialize sets the walking thread policy.
+Directory sizes are the engine’s bulk values (zero when not supplied).
+Exit 2 means a policy, open, enumeration or parse error; totals are partial.
 
 Prints the directory and file counts, the logical and allocated byte totals,
 the root's modification time (the newest anywhere beneath it, in UTC), the
 elapsed time and every field that says the result may be short:
 incomplete, stalled_at, unreadable, skipped_mounts, lost_entries,
-hardlink_dups, depth_capped and errors.
+hardlink_dups, depth_capped, errors, dataless (files, directories, logical_bytes),
+and no_materialize_failed.
 
 options:
   --json              print one JSON object instead of text. Output paths
@@ -96,6 +106,7 @@ const TEXT_LIST_LIMIT: usize = 20;
 #[derive(Debug, PartialEq)]
 enum Invocation {
     Help,
+    DatalessProbe { path: PathBuf, no_materialize: bool },
     Scan(ScanArgs),
 }
 
@@ -115,6 +126,25 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, St
     match args.next() {
         None => return Err("no command given".into()),
         Some(a) if a == "--help" || a == "-h" => return Ok(Invocation::Help),
+        Some(a) if a == "dataless-probe" => {
+            let mut path = None;
+            let mut no_materialize = false;
+            for arg in args {
+                if arg == "--no-materialize" {
+                    no_materialize = true;
+                } else if arg.to_str().is_some_and(|s| s.starts_with("--")) {
+                    return Err(format!("unknown option {arg:?}"));
+                } else if path.is_none() {
+                    path = Some(PathBuf::from(arg));
+                } else {
+                    return Err(format!("unexpected argument {arg:?}"));
+                }
+            }
+            return Ok(Invocation::DatalessProbe {
+                path: path.ok_or("dataless-probe needs a directory")?,
+                no_materialize,
+            });
+        }
         Some(a) if a == "scan" => {}
         Some(a) => return Err(format!("unknown command {a:?}")),
     }
@@ -262,6 +292,9 @@ impl Report {
             "hardlink_dups": stats.hardlink_dups,
             "depth_capped": stats.depth_capped,
             "errors": stats.errors,
+            "dataless": { "files": stats.dataless.files, "directories": stats.dataless.directories,
+                          "logical_bytes": stats.dataless.logical_bytes },
+            "no_materialize_failed": stats.no_materialize_failed,
         })
     }
 
@@ -270,7 +303,8 @@ impl Report {
         let (logical, allocated) = self.totals();
         let mut out = format!("scanned: {}\n", path_text(&self.path));
         let mut line = |label: &str, value: String| {
-            out.push_str(&format!("{:<16}{value}\n", format!("{label}:")));
+            let gap = if label.len() + 1 >= 16 { " " } else { "" };
+            out.push_str(&format!("{:<16}{gap}{value}\n", format!("{label}:")));
         };
         line("dirs", stats.dirs.to_string());
         line("files", stats.files.to_string());
@@ -307,6 +341,13 @@ impl Report {
         line("hardlink_dups", stats.hardlink_dups.to_string());
         line("depth_capped", stats.depth_capped.to_string());
         line("errors", stats.errors.to_string());
+        line("dataless_files", stats.dataless.files.to_string());
+        line("dataless_dirs", stats.dataless.directories.to_string());
+        line("dataless_bytes", stats.dataless.logical_bytes.to_string());
+        line(
+            "no_materialize_failed",
+            stats.no_materialize_failed.to_string(),
+        );
 
         let mut list = |title: &str, items: Vec<String>| {
             if items.is_empty() {
@@ -385,6 +426,10 @@ fn main() -> ExitCode {
             print!("{HELP}");
             return ExitCode::SUCCESS;
         }
+        Ok(Invocation::DatalessProbe {
+            path,
+            no_materialize,
+        }) => return dataless_probe::run(&path, no_materialize),
         Ok(Invocation::Scan(args)) => args,
         Err(message) => {
             eprintln!("error: {message}\n{USAGE}");
@@ -426,6 +471,30 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn dataless_probe_arguments_are_strict_and_preserve_paths() {
+        for no_materialize in [false, true] {
+            let mut input = args(&["dataless-probe", "nested dir"]);
+            if no_materialize {
+                input.push("--no-materialize".into());
+            }
+            assert_eq!(
+                parse_args(input).unwrap(),
+                Invocation::DatalessProbe {
+                    path: "nested dir".into(),
+                    no_materialize
+                }
+            );
+        }
+        for input in [
+            vec!["dataless-probe"],
+            vec!["dataless-probe", "x", "y"],
+            vec!["dataless-probe", "x", "--json"],
+        ] {
+            assert!(parse_args(args(&input)).is_err());
+        }
     }
 
     #[test]
@@ -480,9 +549,17 @@ mod tests {
     /// field's name cannot pass.
     fn synthetic_report() -> Report {
         let stats = WalkStats {
+            dataless: tesserae_core::walk::DatalessStats {
+                files: 19,
+                directories: 23,
+                logical_bytes: 29,
+            },
+            no_materialize_failed: true,
+            dataless_paths: Vec::new(),
             dirs: 13,
             files: 17,
             errors: 11,
+            skipped_by_request: Vec::new(),
             unreadable: vec!["/v/locked".into()],
             skipped_mounts: vec![("/v/mnt".into(), SkipReason::NonLocalMount)],
             depth_capped: 7,
@@ -527,6 +604,8 @@ mod tests {
                 "hardlink_dups": 5,
                 "depth_capped": 7,
                 "errors": 11,
+                "dataless": { "files": 19, "directories": 23, "logical_bytes": 29 },
+                "no_materialize_failed": true,
             })
         );
     }
@@ -545,6 +624,10 @@ mod tests {
             "hardlink_dups:  5",
             "depth_capped:   7",
             "errors:         11",
+            "dataless_files: 19",
+            "dataless_dirs:  23",
+            "dataless_bytes: 29",
+            "no_materialize_failed: true",
             "modified:       -",
             "  /v/locked",
             "  /v/mnt (NonLocalMount)",

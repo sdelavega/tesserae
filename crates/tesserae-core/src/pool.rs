@@ -312,6 +312,7 @@ impl Drop for Finished<'_> {
 /// in a blocked syscall outlives the call that started it, so nothing it can
 /// still reach may be borrowed from that call. See the module note.
 struct Shared<O> {
+    skips: crate::walk::SkipSet,
     opener: Arc<O>,
     inodes: InodeSet,
     budget: NodeBudget,
@@ -377,7 +378,19 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     progress: &Progress,
 ) -> io::Result<(Vec<Arena>, WalkStats)> {
     check_options(opts)?;
+    let no_materialize_failed = opener.no_materialize().is_err();
     let started_at = now_epoch_secs();
+    let skips = crate::walk::SkipSet::resolve(opts)?;
+    if let Some((arena, mut stats)) = skips.root_snapshot(opts, started_at, opener.as_ref())? {
+        stats.no_materialize_failed = no_materialize_failed;
+        progress.set(crate::progress::ProgressValues {
+            dirs: stats.dirs,
+            files: 0,
+            bytes: 0,
+            errors: 0,
+        });
+        return Ok((vec![arena], stats));
+    }
     let workers = worker_count(opts.workers, opts.max_depth, raise_nofile(NOFILE_TARGET));
 
     // Before anything is spawned: if the root cannot be opened or its volume
@@ -415,6 +428,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
         })
         .collect();
     let shared = Arc::new(Shared {
+        skips,
         opener,
         inodes: InodeSet::new(workers * INODE_SHARDS_PER_WORKER),
         budget: NodeBudget::new(opts.node_budget),
@@ -486,7 +500,10 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     arenas
         .try_reserve_exact(workers)
         .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
-    let mut stats = WalkStats::default();
+    let mut stats = WalkStats {
+        no_materialize_failed,
+        ..WalkStats::default()
+    };
     for seat in &shared.seats {
         // Taken in index order, so arena `i` still carries thread tag `i`,
         // which is what `apply_foreign` and freeze rely on. A lane is taken
@@ -520,6 +537,9 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     }
     progress.set(shared.counters.snapshot());
     stats.started_at = started_at;
+    stats
+        .skipped_by_request
+        .extend(shared.skips.missing.clone());
     Ok((arenas, stats))
 }
 
@@ -632,7 +652,9 @@ fn run_worker<O: DirOpener>(
     index: usize,
     local: Worker<Task>,
 ) -> io::Result<()> {
+    let no_materialize_failed = shared.opener.no_materialize().is_err();
     let seat = &shared.seats[index];
+    seat.lane.note_policy_failure(no_materialize_failed);
     // Declared first so it is dropped last: `done` is set only once
     // everything else this worker holds, its open directories included, has
     // been released.
@@ -642,6 +664,7 @@ fn run_worker<O: DirOpener>(
     };
     let _halt_on_panic = HaltOnPanic(&shared.halt);
     let ctx = WalkerCtx {
+        skips: &shared.skips,
         opener: &*shared.opener,
         inodes: &shared.inodes,
         budget: &shared.budget,
@@ -711,11 +734,15 @@ fn run_worker<O: DirOpener>(
 /// this compiling instead of being silently dropped from every parallel scan.
 fn merge(into: &mut WalkStats, from: WalkStats) -> io::Result<()> {
     let WalkStats {
+        dataless,
+        dataless_paths,
+        no_materialize_failed,
         dirs,
         files,
         errors,
         unreadable,
         skipped_mounts,
+        skipped_by_request,
         depth_capped,
         lost_entries,
         hardlink_dups,
@@ -726,6 +753,10 @@ fn merge(into: &mut WalkStats, from: WalkStats) -> io::Result<()> {
     // The earliest start any part of the walk recorded. Workers' own stats
     // carry the default (no cutoff), so this keeps the walk's.
     into.started_at = into.started_at.min(started_at);
+    into.dataless.files += dataless.files;
+    into.dataless.directories += dataless.directories;
+    into.dataless.logical_bytes += dataless.logical_bytes;
+    into.no_materialize_failed |= no_materialize_failed;
     into.dirs += dirs;
     into.files += files;
     into.errors += errors;
@@ -733,7 +764,9 @@ fn merge(into: &mut WalkStats, from: WalkStats) -> io::Result<()> {
     into.lost_entries += lost_entries;
     into.hardlink_dups += hardlink_dups;
     concat(&mut into.unreadable, unreadable)?;
+    concat(&mut into.dataless_paths, dataless_paths)?;
     concat(&mut into.skipped_mounts, skipped_mounts)?;
+    concat(&mut into.skipped_by_request, skipped_by_request)?;
     into.stalled_at = into.stalled_at.take().or(stalled_at);
     // A terminal reason names what stopped the walk and outranks a reason the
     // walk noticed and carried on past, exactly as in a serial walk. Equal
@@ -1537,9 +1570,17 @@ mod tests {
     #[test]
     fn merging_carries_every_field() {
         let mut into = WalkStats {
+            dataless: crate::walk::DatalessStats {
+                files: 7,
+                directories: 8,
+                logical_bytes: 9,
+            },
+            no_materialize_failed: false,
             dirs: 1,
             files: 2,
             errors: 3,
+            dataless_paths: vec![Path::new("/cloud-a").to_path_buf()],
+            skipped_by_request: Vec::new(),
             unreadable: vec![Path::new("/a").to_path_buf()],
             skipped_mounts: vec![(
                 Path::new("/m").to_path_buf(),
@@ -1555,9 +1596,17 @@ mod tests {
         merge(
             &mut into,
             WalkStats {
+                dataless: crate::walk::DatalessStats {
+                    files: 70,
+                    directories: 80,
+                    logical_bytes: 90,
+                },
+                no_materialize_failed: true,
                 dirs: 10,
                 files: 20,
                 errors: 30,
+                dataless_paths: vec![Path::new("/cloud-b").to_path_buf()],
+                skipped_by_request: Vec::new(),
                 unreadable: vec![Path::new("/b").to_path_buf()],
                 skipped_mounts: vec![(
                     Path::new("/n").to_path_buf(),
@@ -1572,6 +1621,22 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(
+            into.dataless_paths,
+            vec![
+                Path::new("/cloud-a").to_path_buf(),
+                Path::new("/cloud-b").to_path_buf()
+            ]
+        );
+        assert_eq!(
+            into.dataless,
+            crate::walk::DatalessStats {
+                files: 77,
+                directories: 88,
+                logical_bytes: 99
+            }
+        );
+        assert!(into.no_materialize_failed);
         assert_eq!(into.started_at, 300, "the earliest start");
         // A worker's own stats carry the default, which is no cutoff and
         // must not displace the walk's start.

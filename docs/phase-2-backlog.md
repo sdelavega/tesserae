@@ -24,11 +24,12 @@ rulings list kept outside the repo.
   for `f33dd4a` on PR #2; the Apple runner is now `macos-26`.
 - ~~**Split `walk.rs` as a pure move.**~~ Closed in Phase 2 Task 1; the lane,
   coordination, opening and error modules are now separate.
-- **Decide how to treat dataless (iCloud "Optimize Mac Storage") items.** The Data
-  volume census found 664,076 dataless regular files and no dataless directories.
-  Enumerating a dataless directory may trigger downloads, slow the scan or trip the
-  stall watchdog (inferred from the API, not measured). `ATTR_CMN_FLAGS` is already
-  requested for this (`SF_DATALESS`) and for `UF_COMPRESSED`, but nothing reads it.
+- ~~**Decide how to treat dataless (iCloud "Optimize Mac Storage") items.**~~
+  Done in Phase 3: read `SF_DATALESS`, flag and count cloud-only files/directories,
+  and never enter a dataless directory (including a selected root). Set the
+  thread-scoped no-materialize policy and report any failure. The measured census
+  found 664,076 dataless regular files and no dataless directories; real dataless
+  directory behaviour remains unmeasured (spec §16).
 
 ## Engine behaviour
 
@@ -146,30 +147,19 @@ findings C1, I1 and I2, and its doc batch, were fixed before merge.)
 
 **Minor findings**
 
-- **M1 — performance paths the frame gate never exercised.** The gate ran Depth mode
-  only. Type focus calls `FileKind.kind(forName:)` per tile, allocating a `Data` and a
-  `String` each time (about 15–20 ms per 50k lookups at `-O`), before the first zoom
-  frame on every navigation and selection change, and the CG fallback recomputes
-  `tiles.map(colourOf)` for its cache key on every SwiftUI update, hover included. Each
-  hover republishes `AppSession.inspector`, re-evaluating `SessionView.body`: two full
-  `filter`s over the tiles, three `[Tile]` comparisons and a palette allocation. Fix
-  together: a per-node kind byte computed off the main actor, the inspector in its own
-  `ObservableObject`, selected and denied tile lists precomputed when `tiles` is set,
-  and Age, Type focus and hover-sweep runs added to the gate protocol.
-- **M2 — the Age reference time is fixed at launch** (`AppModel.swift`,
-  `ageReference = Date()`). After a day of uptime a rescan buckets ages against a stale
-  "now" and anything newer lands in "future → most recent". Use the snapshot's scan
-  start, or a `Date()` captured per session.
-- **M3 — a hung root open blocks every later scan until relaunch**
-  (`ScanCoordinator.start` awaits the previous task). A `finish` stuck in `open` on a
-  dead SMB/NFS share never returns; Cancel abandons only the waiting scan, new scans
-  chain behind it at zero counts, and the call holds a cooperative-pool thread. This
-  is the UI half of the engine item "hung root open not covered by the watchdog".
-- **M4 — duplicated logic.** `sizeText` in `ContentView.swift` duplicates
-  `displaySize` without the locale injection. `Snapshot.name` (C0 only) and
-  `Snapshot.displayName` (the label rules) are still two sanitisers; every display
-  site now uses `displayName`, but the table's name sort still keys on `name`.
-  (`aggregateLogical`'s copy of the tail rule went with the C1 fix.)
+- **M1 — performance paths the frame gate never exercised. Done in Phase 3**
+  (`310e023`): cache snapshot kinds, isolate hover observation, cache selected
+  and denied tile lists and fallback colours, and extend the protocol with Age,
+  Type focus and hover sweeps. The rerun found no Phase 3 regression versus
+  control; neither build meets the unchanged zero-gap bar today (Ruling T11-G1;
+  see `docs/benchmarks.md`).
+- **M2 — the Age reference time is fixed at launch. Done in Phase 3**
+  (`49400d5`): Age mode now uses the engine's scan start.
+- **M3 — a hung root open blocks every later scan until relaunch. Done in Phase 3**
+  (`44b8bf0`): bound scan-restart waits after cancellation so a hung prior
+  scan does not block a new one.
+- **M4 — duplicated logic. Done in Phase 3** (`fcee206`): use shared size
+  formatting and display-name sorting.
 - **M5 — dead or vestigial code.** `Snapshot.generation` is public, Debug-only and
   unused outside tests. `TessNode`'s `AGGREGATED` bit is reserved and set by nothing
   (now documented so). `Tile.Flag.staged`, and `TileInstance.depth`/`.flags`, which the
@@ -181,8 +171,8 @@ findings C1, I1 and I2, and its doc batch, were fixed before merge.)
 - **M7 — CLI doc wording** (`crates/tesserae-cli/src/main.rs`): the root's `modified`
   is the newest *not later than the scan's start*, not "the newest anywhere beneath
   it" — the cutoff exists for the 2076-dated files.
-- **M8 — a refused `tess_scan_begin` shows `strerror(EINVAL)`** ("Invalid argument")
-  in the welcome view; "Couldn't start the scan" would be accurate.
+- **M8 — a refused `tess_scan_begin` shows `strerror(EINVAL)`. Done in Phase 3**
+  (`8ddbf5f`): explain refused scan starts plainly.
 - **M9 — `FileTableContent` is `@unchecked Sendable`** but could be plain `Sendable`
   (`Snapshot` is Sendable, and so is `[UInt32]`).
 
@@ -193,8 +183,9 @@ findings C1, I1 and I2, and its doc batch, were fixed before merge.)
 - FAT symlink 1,536-byte rule measured on a 4-byte target only (P2-1): XSym is
   fixed-format and the doc argues the whole 1,025–1,536 range rounds the same; measure
   one 1,024-byte target to close it. FAT symlinks are rare.
-- Bundle ID `io.github.sdelavega.*` is a placeholder: needs the user's decision before
-  the first signing; does not block merge.
+- Bundle ID placeholder question **decided by the user on 2026-10-20**:
+  app `com.sdelavega.Tesserae`, framework `com.sdelavega.TesseraeKit`,
+  test bundle `com.sdelavega.TesseraeKitTests`.
 - The FFI stamp ignores `include_str!`/`include_bytes!` and `.cargo/config.toml`: the
   only includes are in benches, and there is no `.cargo/config.toml` or build.rs.
   Revisit if the shipped crates gain any.

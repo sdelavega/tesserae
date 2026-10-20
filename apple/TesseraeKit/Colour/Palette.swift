@@ -94,7 +94,7 @@ public func colourIndex(_ node: UInt32, depth: UInt8, in src: Snapshot, mode: Co
         return UInt16(first + bucket)
     case .typeFocus(let kinds):
         guard !src.isDirectory(node),
-            let kind = FileKind.kind(forName: src.nameBytes(node)),
+            let kind = src.fileKind(node),
             let slot = kinds.prefix(3).firstIndex(of: kind)
         else { return UInt16(Palette.neutralIndex) }
         return UInt16(first + slot)

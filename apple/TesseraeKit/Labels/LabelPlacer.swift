@@ -127,7 +127,11 @@ extension Snapshot {
     /// says (spec §8; final review I2). Display text only: actions use the
     /// node index and `rawPath(_:)`.
     public func displayName(_ i: UInt32) -> String {
-        let name = singleLine(String(decoding: nameBytes(i), as: UTF8.self)).trimmingCharacters(in: .whitespaces)
+        Self.displayName(bytes: nameBytes(i))
+    }
+
+    static func displayName(bytes: Data) -> String {
+        let name = singleLine(String(decoding: bytes, as: UTF8.self)).trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? "(unnamed)" : name
     }
 }

@@ -22,16 +22,24 @@ struct ContentView: View {
     @StateObject private var model = AppModel()
     /// The frame-gate runner exists only when `TESSERAE_FRAME_TIMING=1`.
     @State private var phaseGate: PhaseGateRunner? = FrameTimer.shared.isEnabled ? PhaseGateRunner() : nil
+    @State private var showScanReport = false
+    @Environment(\.locale) private var locale
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
 
     var body: some View {
         VStack(spacing: 0) {
             if let phaseGate { PhaseGateStatus(runner: phaseGate) }
+            if model.onboarding.showsLimitedAffordance {
+                LimitedAccessView { model.sendOnboarding(.reopen) }
+            }
             if model.colourChoice == 2 { focusControls }
             if let session = model.session {
-                SessionView(session: session, mode: model.colourMode, dark: dark)
-                    .id(session.id)
+                HSplitView {
+                    SessionView(session: session, mode: model.colourMode, dark: dark, grantAccess: { model.sendOnboarding(.openSettings) })
+                        .id(session.id)
+                    if showScanReport { ScanReportView(report: session.scanReport) }
+                }
             } else {
                 welcome
             }
@@ -40,7 +48,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("TesseraeRunFrameGate"))) { _ in
             guard let phaseGate, let session = model.session, case .success(let gate) = FrameGateConfiguration.current
             else { return }
-            phaseGate.run(session: session, requiredRoot: "/System/Volumes/Data", minimumNodes: 1_000_000, output: gate.output)
+            phaseGate.run(session: session, requiredRoot: "/System/Volumes/Data", minimumNodes: 1_000_000, output: gate.output, setMode: model.setColourMode)
         }
         .task {
             guard let phaseGate, case .success(let gate) = FrameGateConfiguration.current,
@@ -48,12 +56,19 @@ struct ContentView: View {
             await FrameGateAutorun.run(
                 root: root, output: gate.output, timeout: gate.timeout, model: model, runner: phaseGate)
         }
+        .sheet(isPresented: Binding(get: { model.onboardingPresented }, set: model.setOnboardingPresented)) {
+            OnboardingView(state: model.onboarding, send: model.sendOnboarding)
+        }
         .toolbar {
             ToolbarItemGroup {
                 Button { model.scan(URL(fileURLWithPath: "/System/Volumes/Data")) } label: {
                     Label("Scan Data Volume", systemImage: "internaldrive")
                 }
                 Button { chooseFolder() } label: { Label("Scan Folder…", systemImage: "folder") }
+                if model.session != nil {
+                    Button { showScanReport.toggle() } label: { Label("Scan report", systemImage: "doc.text.magnifyingglass") }
+                        .help("Show or hide the scan report")
+                }
                 if model.isScanning { Button("Cancel", role: .cancel) { model.cancel() } }
                 Picker("Colour", selection: $model.colourChoice) {
                     Text("Depth").tag(0)
@@ -70,14 +85,11 @@ struct ContentView: View {
                 ProgressView().controlSize(.large)
                 Text("Scanning…").font(.title2)
                 Text("\(progress.dirs.formatted()) folders · \(progress.files.formatted()) files")
-                Text("\(Int(progress.entriesPerSecond).formatted()) entries/s · \(sizeText(progress.bytes))")
+                Text("\(Int(progress.entriesPerSecond).formatted()) entries/s · \(displaySize(progress.bytes, locale: locale))")
                     .monospacedDigit()
                 if progress.errors > 0 { Text("\(progress.errors.formatted()) errors").foregroundStyle(.secondary) }
             } else if case .failed(let errno) = model.scanState {
-                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
-                Text("Couldn’t scan this folder").font(.title2)
-                Text(String(cString: strerror(errno))).foregroundStyle(.secondary)
-                Button("Choose another folder…") { chooseFolder() }
+                ScanFailureView(errno: errno, chooseFolder: chooseFolder)
             } else {
                 Image(systemName: "square.grid.3x3.fill").font(.system(size: 48)).foregroundStyle(.blue)
                 Text("See where your space goes").font(.largeTitle)
@@ -136,13 +148,15 @@ private struct SessionView: View {
     @ObservedObject var session: AppSession
     var mode: ColourMode
     var dark: Bool
+    var grantAccess: () -> Void
+    @Environment(\.locale) private var locale
 
     var body: some View {
         let generation = session.layoutGeneration
         VStack(spacing: 0) {
-            if let banner = session.banner { warning(banner) }
+            if let banner = session.banner { ScanWarningView(text: banner) }
             if session.droppedTileCount > 0 {
-                warning("Rendering limit: \(session.droppedTileCount.formatted()) tiles could not be displayed.")
+                ScanWarningView(text: "Rendering limit: \(session.droppedTileCount.formatted()) tiles could not be displayed.")
             }
             HStack(spacing: 6) {
                 Button { session.navigator.ascend() } label: { Image(systemName: "arrow.up") }
@@ -158,7 +172,7 @@ private struct SessionView: View {
                     }
                 }
                 Spacer()
-                Text(sizeText(session.root == Tile.noNode ? 0 : session.snapshot.allocated(session.root))).monospacedDigit().foregroundStyle(.secondary)
+                Text(displaySize(session.root == Tile.noNode ? 0 : session.snapshot.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(.secondary)
             }.padding(12)
             Divider()
             HSplitView {
@@ -183,7 +197,8 @@ private struct SessionView: View {
                                     labels: session.labels, palette: Palette.colours(mode, dark: dark),
                                     colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) }, dark: dark,
                                     zoomRunning: session.zoomRunning, labelsReady: session.labelsReady)
-                                ForEach(Array(session.tiles.enumerated().filter { $0.element.flags & Tile.Flag.selected != 0 }), id: \.offset) { _, tile in
+                                ForEach(session.selectedTiles) { item in
+                                    let tile = item.tile
                                     Rectangle().stroke(Color.primary, lineWidth: 2)
                                         .frame(width: tile.rect.width, height: tile.rect.height)
                                         .offset(x: tile.rect.minX, y: tile.rect.minY)
@@ -201,33 +216,48 @@ private struct SessionView: View {
                     TablePane(rows: session.table, selection: session.selection)
                         .frame(minHeight: 150, idealHeight: 220)
                 }.frame(minWidth: 600)
-                inspector.frame(width: 240)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let model = session.reconciliation {
+                            ReconciliationView(model: model, grantAccess: grantAccess).padding(16)
+                            Divider()
+                        }
+                        InspectorPane(model: session.inspectorModel)
+                    }
+                }.frame(width: 240)
             }
         }
     }
 
     private var deniedBadges: some View {
-        ForEach(Array(session.tiles.enumerated().filter { $0.element.isPermissionDenied }), id: \.offset) { _, tile in
-            Image(systemName: "lock.fill")
+        ForEach(session.deniedTiles) { item in
+            let tile = item.tile
+            let badge = FolderBadge(snapshot: session.snapshot, node: tile.node)
+            Image(systemName: badge.symbol)
                 .font(.system(size: min(11, max(3, min(tile.rect.width, tile.rect.height) - 1))))
                 .foregroundStyle(LabelStyle.inkColour(over: Palette.colours(mode, dark: dark)[Palette.statusIndex]))
                 .frame(width: tile.rect.width, height: tile.rect.height, alignment: .topLeading)
                 .offset(x: tile.rect.minX, y: tile.rect.minY)
-                .accessibilityLabel("Unreadable folder")
+                .accessibilityLabel(badge.label)
                 .allowsHitTesting(false)
         }.opacity(session.zoomRunning ? 0 : 1)
     }
 
-    private var inspector: some View {
+}
+
+private struct InspectorPane: View {
+    @ObservedObject var model: InspectorModel
+    @Environment(\.locale) private var locale
+    var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Inspector").font(.headline)
-            if let info = session.inspector {
+            if let info = model.info {
                 Text(info.displayTitle).font(.callout).lineLimit(1).truncationMode(.middle)
                     .help(info.displayTitle).textSelection(.enabled)
                 Divider()
                 detail("Kind", info.kind.displayName)
-                detail("Allocated", sizeText(info.allocated))
-                detail("Logical", sizeText(info.logical))
+                detail("Allocated", displaySize(info.allocated, locale: locale))
+                detail("Logical", displaySize(info.logical, locale: locale))
                 detail("Modified", info.modified?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown")
             } else {
                 Text("Point to a tile to see its path, size and modification date.")
@@ -242,12 +272,6 @@ private struct SessionView: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.callout).textSelection(.enabled)
         }
-    }
-
-    private func warning(_ text: String) -> some View {
-        Label(text, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout).padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.yellow.opacity(0.16))
     }
 }
 
@@ -265,10 +289,6 @@ private struct TablePane: View {
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
     }
-}
-
-private func sizeText(_ value: UInt64) -> String {
-    Int64(clamping: value).formatted(.byteCount(style: .file))
 }
 
 private func colour(_ value: SIMD4<Float>) -> Color {

@@ -116,7 +116,7 @@ public final class FileTableModel: @unchecked Sendable {
             }
             order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }
         case .name:
-            let k = rows.map { s.name($0) }
+            let k = rows.map { s.displayName($0) }
             order = { Self.sign(k[$0].localizedStandardCompare(k[$1])) }
         case .kind:
             let k = rows.map { nodeKind($0, in: s).displayName }

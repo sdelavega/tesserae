@@ -16,7 +16,12 @@ default:
     @just --list
 
 # Every check CI runs, in CI's order.
-gate: lint test header ship-lib deny ffi app-test
+gate: no-home-paths lint test header ship-lib deny ffi app-test
+
+# Reject personal home paths in every tracked text file (including this recipe).
+# Split the pattern literal so the check does not match its own definition.
+no-home-paths:
+    @status=0; git grep -n -I -e '/''Users/' -- . || status=$?; test "$status" -eq 1
 
 # The disk-image integration tests attach and detach real images with hdiutil.
 # `setrlimit` is process-wide, so the descriptor-limit test is `#[ignore]`d in
@@ -65,6 +70,16 @@ app-test:
 app-build:
     rm -rf apple/build/Tesserae-build.xcresult
     xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO
+
+# FDA grants need a real code signature; if testing again, the user must toggle FDA off/on for the new signature.
+fda-copy:
+    test -d apple/build/DerivedData/Build/Products/Release/Tesserae.app || { echo "Release app missing; run just app-build first." >&2; exit 1; }
+    mkdir -p apple/build/fda-run
+    rm -rf apple/build/fda-run/Tesserae.app
+    ditto apple/build/DerivedData/Build/Products/Release/Tesserae.app apple/build/fda-run/Tesserae.app
+    codesign --force --sign - apple/build/fda-run/Tesserae.app/Contents/Frameworks/TesseraeKit.framework
+    codesign --force --sign - --identifier com.sdelavega.Tesserae apple/build/fda-run/Tesserae.app
+    codesign --verify --deep --strict apple/build/fda-run/Tesserae.app
 
 # Criterion benchmarks (parse and freeze). Reported, not asserted.
 bench:

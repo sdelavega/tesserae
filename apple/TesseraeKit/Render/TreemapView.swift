@@ -87,7 +87,7 @@ public struct TreemapView: NSViewRepresentable {
         guard let device = MTLCreateSystemDefaultDevice(), let renderer = TreemapRenderer(device: device) else {
             let fallback = FallbackView(frame: .zero)
             fallback.interaction = interaction
-            fallback.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
+            fallback.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark, snapshot: snapshot, mode: mode)
             return fallback
         }
         let view = InteractiveMTKView(frame: .zero, device: device)
@@ -119,7 +119,7 @@ public struct TreemapView: NSViewRepresentable {
         let zoomFrom = pending ?? inferred
         guard let renderer = coordinator.renderer, let view = nsView as? MTKView else {
             // No animation without Metal: the new layout at once.
-            (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark)
+            (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark, snapshot: snapshot, mode: mode)
             if previousTiles != tiles { coordinator.reportZoom(false, force: true) }
             return
         }
@@ -220,7 +220,9 @@ public struct TreemapView: NSViewRepresentable {
 
         private var tiles: [Tile] = []
         private var palette: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1)]
-        private var colourOf: (Tile) -> UInt16 = { _ in 0 }
+        private var indices: [UInt16] = []
+        private var inputSnapshot: Snapshot?
+        private var inputMode: ColourMode?
         private var dark = false
         private var lastKey: Key?
         weak var interaction: TreemapInteraction?
@@ -253,10 +255,16 @@ public struct TreemapView: NSViewRepresentable {
             }
         }
 
-        func set(tiles: [Tile], palette: [SIMD4<Float>], colourOf: @escaping (Tile) -> UInt16, dark: Bool) {
+        func set(tiles: [Tile], palette: [SIMD4<Float>], colourOf: @escaping (Tile) -> UInt16, dark: Bool,
+                 snapshot: Snapshot? = nil, mode: ColourMode? = nil) {
+            if snapshot == nil || mode == nil || inputSnapshot !== snapshot || inputMode != mode
+                || self.tiles != tiles || self.palette != palette || self.dark != dark {
+                indices = tiles.map(colourOf)
+            }
+            inputSnapshot = snapshot
+            inputMode = mode
             self.tiles = tiles
             self.palette = palette
-            self.colourOf = colourOf
             self.dark = dark
             redraw()
         }
@@ -275,13 +283,13 @@ public struct TreemapView: NSViewRepresentable {
             guard let layer, bounds.width > 0, bounds.height > 0 else { return }
             let scale = scaleOverride ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
             let key = Key(
-                tiles: tiles, indices: tiles.map(colourOf), palette: palette, dark: dark,
+                tiles: tiles, indices: indices, palette: palette, dark: dark,
                 size: bounds.size, scale: scale)
             guard key != lastKey else { return }
             lastKey = key
             renderCount += 1
             let image = CGTreemapRenderer(clearColour: Palette.surface(dark: dark)).render(
-                tiles: tiles, colours: palette, colourOf: colourOf, size: bounds.size, scale: scale)
+                tiles: tiles, colours: palette, colourOf: { _ in 0 }, indices: indices, size: bounds.size, scale: scale)
             layer.contentsScale = scale
             layer.contentsGravity = .topLeft
             layer.contents = image

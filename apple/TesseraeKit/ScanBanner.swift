@@ -19,23 +19,30 @@ import TesseraeFFI
 
 public enum ScanBanner {
     /// `stalledAt` is shown as names are (`singleLine`): it is made of them.
-    public static func text(for stats: TessScanStats, stalledAt: String?) -> String? {
+    public static func text(for stats: TessScanStats, stalledAt: String?, volumePath: String? = nil) -> String? {
         var parts: [String] = []
-        switch stats.incomplete {
-        case UInt32(TESS_INCOMPLETE_NONE): break
-        case UInt32(TESS_INCOMPLETE_CANCELLED): parts.append("Scan cancelled")
-        case UInt32(TESS_INCOMPLETE_NODE_BUDGET): parts.append("Scan reached its node limit")
-        case UInt32(TESS_INCOMPLETE_OUT_OF_MEMORY): parts.append("Scan ran out of memory")
-        case UInt32(TESS_INCOMPLETE_STALLED):
-            parts.append("Scan stalled" + (stalledAt.map { " at " + singleLine($0) } ?? ""))
-        case UInt32(TESS_INCOMPLETE_FD_EXHAUSTED): parts.append("Scan exhausted file descriptors")
-        case UInt32(TESS_INCOMPLETE_MALFORMED_BATCH): parts.append("Scan stopped at a malformed filesystem batch")
-        case UInt32(TESS_INCOMPLETE_VOLUME_LOST): parts.append("Scan volume became unavailable")
-        default: parts.append("Scan ended with unknown incomplete code \(stats.incomplete)")
+        if let reason = incompleteReason(for: stats, stalledAt: stalledAt) {
+            parts.append(reason + (stats.incomplete == UInt32(TESS_INCOMPLETE_VOLUME_LOST)
+                ? volumePath.map { ": " + singleLine($0) } ?? "" : ""))
         }
         if stats.errors > 0 { parts.append("\(stats.errors) errors") }
         if stats.unreadable_count > 0 { parts.append("\(stats.unreadable_count) unreadable folders") }
         guard !parts.isEmpty else { return nil }
         return "Partial result — " + parts.joined(separator: "; ")
+    }
+
+    public static func incompleteReason(for stats: TessScanStats, stalledAt: String?) -> String? {
+        switch stats.incomplete {
+        case UInt32(TESS_INCOMPLETE_NONE): return nil
+        case UInt32(TESS_INCOMPLETE_CANCELLED): return "Scan cancelled"
+        case UInt32(TESS_INCOMPLETE_NODE_BUDGET): return "Scan reached its node limit"
+        case UInt32(TESS_INCOMPLETE_OUT_OF_MEMORY): return "Scan ran out of memory"
+        case UInt32(TESS_INCOMPLETE_STALLED):
+            return "Scan stalled" + (stalledAt.map { " at " + singleLine($0) } ?? "")
+        case UInt32(TESS_INCOMPLETE_FD_EXHAUSTED): return "Scan exhausted file descriptors"
+        case UInt32(TESS_INCOMPLETE_MALFORMED_BATCH): return "Scan stopped at a malformed filesystem batch"
+        case UInt32(TESS_INCOMPLETE_VOLUME_LOST): return "Scan volume became unavailable"
+        default: return "Scan ended with unknown incomplete code \(stats.incomplete)"
+        }
     }
 }

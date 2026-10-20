@@ -7,6 +7,33 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E04000000000000000000007 /* ScanStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04000000000000000000004; };
+		E04000000000000000000006 /* ScanReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03900000000000000000004; };
+		E04000000000000000000005 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03600000000000000000004; };
+		E04000000000000000000003 /* ScanStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04000000000000000000004; };
+		E04000000000000000000001 /* DegradedModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04000000000000000000002; };
+		E03900000000000000000003 /* ScanReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03900000000000000000004; };
+		E03900000000000000000001 /* ScanReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03900000000000000000002; };
+		E03900000000000000000005 /* ScanReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03900000000000000000006; };
+		E03600000000000000000003 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03600000000000000000004; };
+		E03600000000000000000001 /* Onboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03600000000000000000002; };
+		E03600000000000000000005 /* OnboardingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03600000000000000000006; };
+		E03500000000000000000007 /* AccessReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03500000000000000000008; };
+		E03500000000000000000005 /* FullDiskAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03500000000000000000006; };
+		E03500000000000000000003 /* AccessReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03500000000000000000004; };
+		E03500000000000000000001 /* FullDiskAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03500000000000000000002; };
+		E03400000000000000000007 /* ReconciliationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03400000000000000000006; };
+		E03400000000000000000005 /* ReconciliationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03400000000000000000004; };
+		E03400000000000000000003 /* ReconciliationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03400000000000000000002; };
+		E03300000000000000000005 /* AccessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03300000000000000000006 /* AccessState.swift */; };
+		E03300000000000000000003 /* Reconcile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03300000000000000000004 /* Reconcile.swift */; };
+		E03300000000000000000001 /* ReconcileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03300000000000000000002 /* ReconcileTests.swift */; };
+		E03200000000000000000007 /* SnapshotFactsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03200000000000000000008 /* SnapshotFactsTests.swift */; };
+		E03200000000000000000005 /* CommandRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03200000000000000000006 /* CommandRunnerTests.swift */; };
+		E03200000000000000000003 /* SnapshotFacts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03200000000000000000004 /* SnapshotFacts.swift */; };
+		E03200000000000000000001 /* CommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03200000000000000000002 /* CommandRunner.swift */; };
+		E03100000000000000000001 /* VolumeFacts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03100000000000000000002 /* VolumeFacts.swift */; };
+		E03100000000000000000003 /* VolumeFactsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03100000000000000000004 /* VolumeFactsTests.swift */; };
 		B1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift */; };
 		B1C9D4E5F60718293A4B5C01 /* CGTreemapRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C9D4E5F60718293A4B5C01 /* CGTreemapRenderer.swift */; };
 		B2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */; };
@@ -103,6 +130,30 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E04000000000000000000004 /* ScanStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanStatusViews.swift; sourceTree = "<group>"; };
+		E04000000000000000000002 /* DegradedModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DegradedModeTests.swift; sourceTree = "<group>"; };
+		E03900000000000000000004 /* ScanReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanReportView.swift; sourceTree = "<group>"; };
+		E03900000000000000000002 /* ScanReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Report/ScanReport.swift; sourceTree = "<group>"; };
+		E03900000000000000000006 /* ScanReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanReportTests.swift; sourceTree = "<group>"; };
+		E03600000000000000000004 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		E03600000000000000000002 /* Onboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Onboarding.swift; sourceTree = "<group>"; };
+		E03600000000000000000006 /* OnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingTests.swift; sourceTree = "<group>"; };
+		E03500000000000000000008 /* AccessReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessReportTests.swift; sourceTree = "<group>"; };
+		E03500000000000000000006 /* FullDiskAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullDiskAccessTests.swift; sourceTree = "<group>"; };
+		E03500000000000000000004 /* AccessReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessReport.swift; sourceTree = "<group>"; };
+		E03500000000000000000002 /* FullDiskAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullDiskAccess.swift; sourceTree = "<group>"; };
+		E03400000000000000000006 /* ReconciliationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconciliationViewModelTests.swift; sourceTree = "<group>"; };
+		E03400000000000000000004 /* ReconciliationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconciliationView.swift; sourceTree = "<group>"; };
+		E03400000000000000000002 /* ReconciliationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconciliationViewModel.swift; sourceTree = "<group>"; };
+		E03300000000000000000006 /* AccessState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessState.swift; sourceTree = "<group>"; };
+		E03300000000000000000004 /* Reconcile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reconcile.swift; sourceTree = "<group>"; };
+		E03300000000000000000002 /* ReconcileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconcileTests.swift; sourceTree = "<group>"; };
+		E03200000000000000000008 /* SnapshotFactsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFactsTests.swift; sourceTree = "<group>"; };
+		E03200000000000000000006 /* CommandRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandRunnerTests.swift; sourceTree = "<group>"; };
+		E03200000000000000000004 /* SnapshotFacts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFacts.swift; sourceTree = "<group>"; };
+		E03200000000000000000002 /* CommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandRunner.swift; sourceTree = "<group>"; };
+		E03100000000000000000002 /* VolumeFacts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeFacts.swift; sourceTree = "<group>"; };
+		E03100000000000000000004 /* VolumeFactsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeFactsTests.swift; sourceTree = "<group>"; };
 		A1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderSnapshotTests.swift; sourceTree = "<group>"; };
 		A1C9D4E5F60718293A4B5C01 /* CGTreemapRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGTreemapRenderer.swift; sourceTree = "<group>"; };
 		A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanCoordinator.swift; sourceTree = "<group>"; };
@@ -178,6 +229,30 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		E03500000000000000000009 /* Permissions */ = {
+			isa = PBXGroup;
+			children = (
+				E03600000000000000000002 /* Onboarding.swift */,
+				E03500000000000000000002 /* FullDiskAccess.swift */,
+				E03500000000000000000004 /* AccessReport.swift */,
+			);
+			path = Permissions;
+			sourceTree = "<group>";
+		};
+		E03100000000000000000005 /* Reconciliation */ = {
+			isa = PBXGroup;
+			children = (
+				E03100000000000000000002 /* VolumeFacts.swift */,
+				E03300000000000000000004 /* Reconcile.swift */,
+				E03400000000000000000004 /* ReconciliationView.swift */,
+				E03400000000000000000002 /* ReconciliationViewModel.swift */,
+				E03300000000000000000006 /* AccessState.swift */,
+				E03200000000000000000004 /* SnapshotFacts.swift */,
+				E03200000000000000000002 /* CommandRunner.swift */,
+			);
+			path = Reconciliation;
+			sourceTree = "<group>";
+		};
 		06703E27D4C362736298C050 = {
 			isa = PBXGroup;
 			children = (
@@ -191,6 +266,16 @@
 		0866F50D291F796035D5ED3B /* TesseraeKitTests */ = {
 			isa = PBXGroup;
 			children = (
+				E04000000000000000000002 /* DegradedModeTests.swift */,
+				E03100000000000000000004 /* VolumeFactsTests.swift */,
+				E03300000000000000000002 /* ReconcileTests.swift */,
+				E03600000000000000000006 /* OnboardingTests.swift */,
+				E03500000000000000000006 /* FullDiskAccessTests.swift */,
+				E03500000000000000000008 /* AccessReportTests.swift */,
+				E03900000000000000000006 /* ScanReportTests.swift */,
+				E03400000000000000000006 /* ReconciliationViewModelTests.swift */,
+				E03200000000000000000008 /* SnapshotFactsTests.swift */,
+				E03200000000000000000006 /* CommandRunnerTests.swift */,
 				E01300000000000000000001 /* AppModelTests.swift */,
 				8723AA9194DE0F498DAC322F /* LinkTests.swift */,
 				C1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift */,
@@ -221,7 +306,10 @@
 		675361416C3060D7EE6539E3 /* Tesserae */ = {
 			isa = PBXGroup;
 			children = (
+				E03600000000000000000004 /* OnboardingView.swift */,
+				E04000000000000000000004 /* ScanStatusViews.swift */,
 				C2143F348021411D5954085B /* ContentView.swift */,
+				E03900000000000000000004 /* ScanReportView.swift */,
 				D48C8DD9DA800BE9728D7A62 /* Info.plist */,
 				B9642A9CE095BEB5C5D01E19 /* Tesserae.entitlements */,
 				25C795E77AC247CB2BB2A411 /* TesseraeApp.swift */,
@@ -232,12 +320,15 @@
 		B44C549377661B3C8A9D0A6E /* TesseraeKit */ = {
 			isa = PBXGroup;
 			children = (
+				E03500000000000000000009 /* Permissions */,
+				E03100000000000000000005 /* Reconciliation */,
 				E01400000000000000000010 /* FrameTimer.swift */,
 				E01300000000000000000003 /* ScanBanner.swift */,
 				E01300000000000000000002 /* AppModel.swift */,
 				84D57130E3E47C4FB4AF9941 /* TesseraeKit.h */,
 				75C38E56BF70B11E7DBBC176 /* Version.swift */,
 				A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */,
+				E03900000000000000000002 /* ScanReport.swift */,
 				A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */,
 				E1B2C3D4E5F60718293A4B5C /* Layout */,
 				E6B2C3D4E5F60718293A4B5C /* Colour */,
@@ -494,11 +585,22 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E03100000000000000000001 /* VolumeFacts.swift in Sources */,
+				E03300000000000000000003 /* Reconcile.swift in Sources */,
+				E03600000000000000000001 /* Onboarding.swift in Sources */,
+				E03500000000000000000001 /* FullDiskAccess.swift in Sources */,
+				E03500000000000000000003 /* AccessReport.swift in Sources */,
+				E03400000000000000000005 /* ReconciliationView.swift in Sources */,
+				E03400000000000000000003 /* ReconciliationViewModel.swift in Sources */,
+				E03300000000000000000005 /* AccessState.swift in Sources */,
+				E03200000000000000000003 /* SnapshotFacts.swift in Sources */,
+				E03200000000000000000001 /* CommandRunner.swift in Sources */,
 				E01400000000000000000011 /* FrameTimer.swift in Sources */,
 				E01400000000000000000003 /* ScanBanner.swift in Sources */,
 				E01400000000000000000002 /* AppModel.swift in Sources */,
 				4578FE5C5643A78DDC6C0B63 /* Version.swift in Sources */,
 				B1B2C3D4E5F60718293A4B5C /* Snapshot.swift in Sources */,
+				E03900000000000000000001 /* ScanReport.swift in Sources */,
 				B2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift in Sources */,
 				B3B2C3D4E5F60718293A4B5C /* TreeSource.swift in Sources */,
 				B4B2C3D4E5F60718293A4B5C /* SquarifiedLayout.swift in Sources */,
@@ -528,7 +630,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E03600000000000000000003 /* OnboardingView.swift in Sources */,
+				E04000000000000000000003 /* ScanStatusViews.swift in Sources */,
 				434DDC8E332E0EE5E1372929 /* ContentView.swift in Sources */,
+				E03900000000000000000003 /* ScanReportView.swift in Sources */,
 				B41FDD4DF9CD58338B9470A8 /* TesseraeApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -537,6 +642,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E04000000000000000000001 /* DegradedModeTests.swift in Sources */,
+				E04000000000000000000005 /* OnboardingView.swift in Sources */,
+				E04000000000000000000006 /* ScanReportView.swift in Sources */,
+				E04000000000000000000007 /* ScanStatusViews.swift in Sources */,
+				E03100000000000000000003 /* VolumeFactsTests.swift in Sources */,
+				E03300000000000000000001 /* ReconcileTests.swift in Sources */,
+				E03600000000000000000005 /* OnboardingTests.swift in Sources */,
+				E03500000000000000000005 /* FullDiskAccessTests.swift in Sources */,
+				E03500000000000000000007 /* AccessReportTests.swift in Sources */,
+				E03900000000000000000005 /* ScanReportTests.swift in Sources */,
+				E03400000000000000000007 /* ReconciliationViewModelTests.swift in Sources */,
+				E03200000000000000000007 /* SnapshotFactsTests.swift in Sources */,
+				E03200000000000000000005 /* CommandRunnerTests.swift in Sources */,
 				E01500000000000000000002 /* AppModelTests.swift in Sources */,
 				4AD32EA6DAEEE56249B35629 /* LinkTests.swift in Sources */,
 				D1B2C3D4E5F60718293A4B5C /* SnapshotTests.swift in Sources */,
@@ -584,7 +702,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKitTests;
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -743,7 +861,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/build";
 				OTHER_LDFLAGS = "-ltesserae";
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKit;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -762,7 +880,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.Tesserae;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.Tesserae;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -778,7 +896,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKitTests;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -795,7 +913,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.Tesserae;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.Tesserae;
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -819,7 +937,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/build";
 				OTHER_LDFLAGS = "-ltesserae";
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdelavega.TesseraeKit;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";

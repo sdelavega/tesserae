@@ -156,5 +156,6 @@ display's frame budget, and each relayout must take under 100 ms.
 
 ## Open questions for the user
 
-- The app's bundle ID is a placeholder, `io.github.sdelavega.*`. Confirm it before
-  signing (Phase 5).
+- Bundle ID placeholder question **decided by the user on 2026-10-20**:
+  app `com.sdelavega.Tesserae`, framework `com.sdelavega.TesseraeKit`,
+  test bundle `com.sdelavega.TesseraeKitTests`.

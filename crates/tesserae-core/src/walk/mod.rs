@@ -189,6 +189,8 @@ mod coordination;
 mod errors;
 mod lane;
 mod open;
+mod skip;
+pub(crate) use skip::SkipSet;
 mod walker;
 
 pub(crate) use coordination::{Halt, NodeBudget, Share, WalkerCtx};
@@ -249,6 +251,8 @@ pub(crate) static OOM_INJECTED: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone)]
 pub struct WalkOptions {
     pub root: PathBuf,
+    /// Absolute directories to record without entering, matched by device and inode.
+    pub skip: Vec<PathBuf>,
     /// The deepest level the walk records. A directory at exactly this depth
     /// is recorded but not entered, so nothing deeper exists. The root is
     /// depth 0.
@@ -312,6 +316,7 @@ impl Default for WalkOptions {
     fn default() -> Self {
         WalkOptions {
             root: PathBuf::from(DEFAULT_ROOT),
+            skip: Vec::new(),
             max_depth: DEFAULT_MAX_DEPTH,
             node_budget: DEFAULT_NODE_BUDGET,
             buffer_bytes: DEFAULT_BUFFER_BYTES,
@@ -324,9 +329,22 @@ impl Default for WalkOptions {
     }
 }
 
+/// Cloud-only entries, including files' logical sizes (zero local allocation).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DatalessStats {
+    pub files: u64,
+    pub directories: u64,
+    pub logical_bytes: u64,
+}
+
 /// What a walk saw. Counts cover nodes that were actually pushed.
 #[derive(Debug)]
 pub struct WalkStats {
+    pub dataless: DatalessStats,
+    /// Cloud-only directories that were not entered (raw report paths).
+    pub dataless_paths: Vec<PathBuf>,
+    /// At least one scan thread could not disable materialization.
+    pub no_materialize_failed: bool,
     /// Directory nodes, the root included, whether or not they were entered.
     pub dirs: u64,
     /// Every non-directory node: regular files, symlinks (never followed) and
@@ -349,6 +367,8 @@ pub struct WalkStats {
     /// a [`SkipReason::NonLocalMount`] is a network or other non-local mount
     /// (opt in with `include_non_local`).
     pub skipped_mounts: Vec<(PathBuf, SkipReason)>,
+    /// Requested exclusions ("limited scan") and absent requests ("not present").
+    pub skipped_by_request: Vec<(PathBuf, &'static str)>,
     /// Directories recorded at `max_depth` and therefore not entered.
     pub depth_capped: u64,
     /// Entries the kernel returned that the parser rejected or never reached
@@ -382,11 +402,15 @@ pub struct WalkStats {
 impl Default for WalkStats {
     fn default() -> Self {
         WalkStats {
+            dataless: DatalessStats::default(),
+            dataless_paths: Vec::new(),
+            no_materialize_failed: false,
             dirs: 0,
             files: 0,
             errors: 0,
             unreadable: Vec::new(),
             skipped_mounts: Vec::new(),
+            skipped_by_request: Vec::new(),
             depth_capped: 0,
             lost_entries: 0,
             hardlink_dups: 0,
@@ -439,7 +463,13 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     inodes: &InodeSet,
 ) -> io::Result<(Arena, WalkStats)> {
     check_options(opts)?;
+    let no_materialize_failed = opener.no_materialize().is_err();
     let started_at = now_epoch_secs();
+    let skips = SkipSet::resolve(opts)?;
+    if let Some((arena, mut stats)) = skips.root_snapshot(opts, started_at, opener)? {
+        stats.no_materialize_failed = no_materialize_failed;
+        return Ok((arena, stats));
+    }
     let root_fd = open_root(opts)?;
     let root_volume = root_volume_of(opts, &root_fd)?;
     // A budget and a halt for one walker: nothing else draws on the counter,
@@ -458,6 +488,7 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
         .try_clone()
         .map_err(|e| with_context(e, format!("dup {}", opts.root.display())))?;
     let ctx = WalkerCtx {
+        skips: &skips,
         opener,
         inodes,
         budget: &budget,
@@ -472,7 +503,9 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     // worker to tell.
     let _ = walker.run_root(root_fd);
     let (arena, mut stats) = walker.finish();
+    stats.no_materialize_failed = no_materialize_failed;
     stats.started_at = started_at;
+    stats.skipped_by_request.extend(skips.missing);
     Ok((arena, stats))
 }
 

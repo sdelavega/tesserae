@@ -23,6 +23,140 @@ import XCTest
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func test_age_reference_follows_each_snapshot_scan_start() throws {
+        let app = AppModel()
+        app.colourChoice = 1
+        for seconds: Int64 in [1_700_000_000, 1_800_000_000] {
+            var stats = TessScanStats(); stats.started_at = seconds
+            let tree = TestSnapshot(.dir("/fixture", [.file("f", 100)]), stats: stats)
+            XCTAssertNotEqual(seconds, 0, "precondition: known scan start")
+            app.replaceSnapshot(tree.snapshot)
+            XCTAssertEqual(app.colourMode, .age(now: Date(timeIntervalSince1970: Double(seconds))))
+        }
+    }
+
+    func test_hover_updates_only_inspector_and_overlay_lists_follow_tiles() throws {
+        let t = TestSnapshot(.dir("/R", [.file("movie.MP4", 100), .denied("private")]))
+        let session = AppSession(snapshot: t.snapshot)
+        session.resize(to: CGSize(width: 800, height: 600))
+        XCTAssertFalse(session.tiles.isEmpty)
+        XCTAssertEqual(session.deniedTiles.map(\.tile.node), [t["private"]])
+        session.selection.nodes = [t["movie.MP4"]]
+        XCTAssertEqual(session.selectedTiles.map(\.tile.node), [t["movie.MP4"]])
+        var sessionChanges = 0, inspectorChanges = 0
+        let a = session.objectWillChange.sink { sessionChanges += 1 }
+        let b = session.inspectorModel.objectWillChange.sink { inspectorChanges += 1 }
+        let index = try XCTUnwrap(session.tiles.firstIndex { $0.node == t["movie.MP4"] })
+        session.hover(tile: index)
+        XCTAssertEqual(session.inspectorModel.info?.node, t["movie.MP4"])
+        XCTAssertEqual(inspectorChanges, 1)
+        XCTAssertEqual(sessionChanges, 0, "hover must not invalidate SessionView")
+        session.hover(tile: nil)
+        XCTAssertNil(session.inspectorModel.info)
+        session.resize(to: .zero)
+        XCTAssertTrue(session.selectedTiles.isEmpty)
+        XCTAssertTrue(session.deniedTiles.isEmpty)
+        withExtendedLifetime((a, b)) {}
+    }
+
+    func test_snapshot_caches_one_kind_byte_per_node() throws {
+        let t = kindsFixture()
+        let snapshot = t.snapshot
+        XCTAssertEqual(snapshot.fileKinds.count, snapshot.nodes.count)
+        XCTAssertEqual(MemoryLayout.size(ofValue: snapshot.fileKinds[0]), 1)
+        XCTAssertNil(snapshot.fileKind(t["/R.mp4"]), "directories are neutral")
+        XCTAssertEqual(snapshot.fileKind(t["movie.MP4"]), .video)
+        XCTAssertEqual(snapshot.fileKind(t["photo.png"]), .images)
+        XCTAssertNil(snapshot.fileKind(t[".mp4"]))
+        XCTAssertNil(snapshot.fileKind(t["unknown.bin"]))
+        for _ in 0..<3 {
+            XCTAssertEqual(colourIndex(t["movie.MP4"], depth: 0, in: snapshot, mode: .typeFocus([.images, .video])), 3)
+        }
+    }
+
+    private func kindsFixture() -> TestSnapshot {
+        TestSnapshot(.dir("/R.mp4", [.file("movie.MP4", 100), .file("photo.png", 80), .file(".mp4", 60), .file("unknown.bin", 40)]))
+    }
+
+    func test_frame_pass_summary_preserves_maximum_p99_and_late_pass_identity() throws {
+        let timer = FrameTimer(enabled: true)
+        timer.startCapture()
+        timer.setPass("age")
+        let old = timer.begin("inputs", at: 1)
+        timer.setPass("type-focus")
+        timer.end(old, at: 1.02)
+        let next = timer.begin("inputs", at: 2)
+        timer.end(next, at: 2.01)
+        timer.setPass("hover")
+        for i in 1...100 {
+            let token = timer.begin("hover", at: 10)
+            timer.end(token, at: 10 + Double(i) / 1000)
+        }
+        let summaries = timer.passSummaries
+        XCTAssertEqual(timer.samples.count, 102)
+        XCTAssertEqual(summaries["hover"]?["hover"]?.count, 100)
+        XCTAssertEqual(try XCTUnwrap(summaries["hover"]?["hover"]?.maxSeconds), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(summaries["hover"]?["hover"]?.p99Seconds), 0.099, accuracy: 1e-9)
+        XCTAssertEqual(summaries["age"]?["inputs"]?.count, 1)
+        XCTAssertEqual(try XCTUnwrap(summaries["age"]?["inputs"]?.maxSeconds), 0.02, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(summaries["type-focus"]?["inputs"]?.p99Seconds), 0.01, accuracy: 1e-9)
+    }
+
+    func test_limited_mode_reaches_engine_and_scan_facts_end_to_end() async throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent("tess-limited-\(UUID())")
+        defer { try? fm.removeItem(at: home) }
+        let relative = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
+        for path in relative {
+            let directory = home.appendingPathComponent(path)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(repeating: 0x41, count: 8192).write(to: directory.appendingPathComponent("secret"))
+        }
+        try Data(repeating: 0x42, count: 7).write(to: home.appendingPathComponent("visible"))
+        let expected = relative.map { home.appendingPathComponent($0).path }
+        for mode in [ScanMode.full, .limited] {
+            let suite = "Tesserae.LimitedTests.\(UUID())"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let c = ScanCoordinator(progressInterval: 0.001, factory: { root, options in
+                let paths = (0..<Int(options.skip_count)).map { String(cString: options.skip![$0]!) }
+                XCTAssertEqual(paths, mode == .limited ? expected : [])
+                return ScanHandle(root: root, options: options)
+            })
+            let app = AppModel(coordinator: c, accessLoader: { mode == .full ? .granted : .unknown },
+                onboardingStore: OnboardingStore(defaults: defaults), homeDirectory: home,
+                factsLoader: { _, scan in
+                    XCTAssertEqual(scan.limited, mode == .limited, "facts describe the scan mode at launch")
+                    return ReconciliationViewModel(wholeVolume: false, reconciliation: nil, scan: scan,
+                        locale: Locale(identifier: "en_US"))
+                })
+            await app.waitForAccess()
+            if mode == .limited { app.sendOnboarding(.useLimited) }
+            XCTAssertEqual(app.scanMode, mode, "precondition")
+            app.scan(home)
+            // A later permission change must not relabel a Limited scan as Full.
+            if mode == .limited { app.sendOnboarding(.activated(.granted)) }
+            for _ in 0..<2000 {
+                if app.scanState == .finished { break }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTAssertEqual(app.scanState, .finished)
+            let snap = try XCTUnwrap(app.session?.snapshot)
+            XCTAssertEqual(snap.stats.files, mode == .limited ? 1 : 5)
+            XCTAssertEqual(snap.skippedByRequest.map { String(decoding: $0.path, as: UTF8.self) }.sorted(),
+                mode == .limited ? expected.sorted() : [])
+            XCTAssertTrue(snap.skippedByRequest.allSatisfy { $0.reason == "limited scan" })
+            if mode == .limited {
+                let nodes = snap.nodes.indices.filter { snap.isSkippedByRequest(UInt32($0)) }
+                XCTAssertEqual(nodes.count, 4)
+                for node in nodes {
+                    XCTAssertTrue(snap.children(UInt32(node)).isEmpty)
+                    XCTAssertTrue(snap.isPermissionDenied(UInt32(node)), "uses unknown-size rendering")
+                }
+            }
+        }
+    }
+
     func test_banner_text_for_every_incomplete_code() throws {
         let cases: [(UInt32, String)] = [
             (UInt32(TESS_INCOMPLETE_NONE), ""),
@@ -209,11 +343,11 @@ final class AppModelTests: XCTestCase {
         let on = try FrameGateConfiguration(
             environment: [
                 "TESSERAE_FRAME_TIMING": "1", "TESSERAE_FRAME_GATE_AUTORUN": "/System/Volumes/Data",
-                "TESSERAE_FRAME_GATE_OUT": "/Users/someone/gate.json",
+                "TESSERAE_FRAME_GATE_OUT": "/Fixture/gate.json",
             ], temporaryDirectory: tmp)
         XCTAssertTrue(on.timingEnabled)
         XCTAssertEqual(on.autorunRoot?.path, "/System/Volumes/Data")
-        XCTAssertEqual(on.output.path, "/Users/someone/gate.json")
+        XCTAssertEqual(on.output.path, "/Fixture/gate.json")
         XCTAssertNil(try FrameGateConfiguration(
             environment: ["TESSERAE_FRAME_TIMING": "1", "TESSERAE_FRAME_GATE_AUTORUN": ""], temporaryDirectory: tmp).autorunRoot)
         XCTAssertThrowsError(try FrameGateConfiguration(
@@ -295,10 +429,10 @@ final class AppModelTests: XCTestCase {
         let runner = PhaseGateRunner(timer: FrameTimer(enabled: true), pause: .milliseconds(100))
         let done = expectation(description: "gate stopped")
         var outcome: PhaseGateRunner.Outcome?
-        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output) {
+        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output, completion: {
             outcome = $0
             done.fulfill()
-        }
+        })
         XCTAssertTrue(runner.isRunning, "precondition")
         try await Task.sleep(for: .milliseconds(50))
         runner.cancel()
@@ -319,25 +453,32 @@ final class AppModelTests: XCTestCase {
         let runner = PhaseGateRunner(timer: FrameTimer(enabled: true), pause: .milliseconds(1))
 
         var refused: PhaseGateRunner.Outcome?
-        runner.run(session: session, requiredRoot: "/elsewhere", minimumNodes: 0, output: output) { refused = $0 }
+        runner.run(session: session, requiredRoot: "/elsewhere", minimumNodes: 0, output: output, completion: { refused = $0 })
         guard case .failed(let reason)? = refused else { return XCTFail("a different root must be refused") }
         XCTAssertTrue(reason.contains("/elsewhere"), reason)
         XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
 
         let done = expectation(description: "gate finished")
         var outcome: PhaseGateRunner.Outcome?
-        runner.run(session: session, requiredRoot: "/gate/", minimumNodes: 0, output: output) {
+        var modes: [ColourMode] = []
+        runner.run(session: session, requiredRoot: "/gate/", minimumNodes: 0, output: output, setMode: { modes.append($0) }, completion: {
             outcome = $0
             done.fulfill()
-        }
+        })
         await fulfillment(of: [done], timeout: 30)
         XCTAssertEqual(outcome, .saved(output))
         XCTAssertEqual(session.navigator.root, t.snapshot.root)
         struct Capture: Decodable {
             let root: String, build: String, nodes: Int, directories: [String], settleTimeouts: Int
             let samples: [FrameTimer.Sample]
+            let passes: [String]
+            let summaries: [String: [String: FrameTimer.Summary]]
         }
         let capture = try JSONDecoder().decode(Capture.self, from: Data(contentsOf: output))
+        XCTAssertEqual(capture.passes, ["depth", "age", "type-focus", "hover"])
+        XCTAssertEqual(modes, [.depth, .age(now: Date(timeIntervalSince1970: Double(t.snapshot.stats.started_at))), .typeFocus([.video, .images, .audio])])
+        XCTAssertEqual(Set(capture.summaries.keys), Set(capture.passes))
+        XCTAssertEqual(capture.summaries["hover"]?["hover"]?.count, 240)
         XCTAssertEqual(capture.root, "/gate")
         XCTAssertEqual(capture.directories, ["d1", "d2", "d3", "d4", "d5"], "the five largest readable root directories")
         XCTAssertEqual(capture.nodes, t.snapshot.nodes.count)
@@ -363,16 +504,16 @@ final class AppModelTests: XCTestCase {
         let runner = PhaseGateRunner(timer: FrameTimer(enabled: true), pause: .milliseconds(1))
         let done = expectation(description: "gate finished")
         var outcome: PhaseGateRunner.Outcome?
-        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output) {
+        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output, completion: {
             outcome = $0
             done.fulfill()
-        }
+        })
         await fulfillment(of: [done], timeout: 30)
         guard case .failed(let reason)? = outcome else { return XCTFail("\(String(describing: outcome))") }
         XCTAssertTrue(reason.contains("not a valid run"), reason)
         struct Capture: Decodable { let settleTimeouts: Int }
         let capture = try JSONDecoder().decode(Capture.self, from: Data(contentsOf: output))
-        XCTAssertEqual(capture.settleTimeouts, 30, "the evidence is kept, and says why it is invalid")
+        XCTAssertEqual(capture.settleTimeouts, 90, "the evidence is kept, and says why it is invalid")
     }
 
     func test_return_zoom_shrinks_the_old_root_into_its_parent_tile() throws {

@@ -64,6 +64,20 @@
 // the bit.
 #define TESS_FLAG_AGGREGATED (1 << 4)
 
+// Requested exclusion; also carries PERM_DENIED for unknown-size rendering.
+#define TESS_FLAG_SKIPPED_REQUEST (1 << 5)
+
+// Cloud-only entry (SF_DATALESS). Files retain logical size and reported
+// local allocation. Directories are not entered and also carry PERM_DENIED
+// to represent unknown subtree size; this does not count as a permission error.
+#define TESS_FLAG_DATALESS (1 << 6)
+
+// Requested directory was not entered.
+#define TESS_SKIP_LIMITED_SCAN 1
+
+// Requested path did not exist at scan start.
+#define TESS_SKIP_NOT_PRESENT 2
+
 // `TessNode.parent` of the root, and `TessView.root` of a snapshot that holds
 // no nodes.
 #define TESS_NODE_NONE UINT32_MAX
@@ -110,6 +124,15 @@
 // block. (A negative status is the scan's failure, as a negated errno.)
 #define TESS_STATUS_FINISHED 1
 
+// A local volume mounted beneath the scan root.
+#define TESS_SKIP_OTHER_VOLUME 3
+
+// A network or other non-local mount excluded by policy.
+#define TESS_SKIP_NON_LOCAL_MOUNT 4
+
+// A cloud-only directory; its contents were not downloaded.
+#define TESS_SKIP_DATALESS_DIRECTORY 5
+
 // A scan in progress. Opaque: the app only holds the pointer.
 typedef struct TessScan TessScan;
 
@@ -138,6 +161,11 @@ typedef struct {
   // How long a scan may go without completing a single syscall before it is
   // declared stalled, in milliseconds. 0 means 15000.
   uint64_t stall_timeout_ms;
+  // Number of absolute directory paths in skip. Zero means no exclusions.
+  uint64_t skip_count;
+  // Caller-owned NUL-terminated paths, copied during tess_scan_begin.
+  // The array and strings must remain live until that call returns.
+  const char *const *skip;
 } TessScanOptions;
 
 // What a scan has found so far; see `tess_scan_progress`.
@@ -233,9 +261,57 @@ typedef struct {
   uint64_t hardlink_dups;
   // Directories recorded at `max_depth` and therefore not entered.
   uint64_t depth_capped;
+  // Number of path/reason records available from tess_snapshot_skipped_by_request.
+  uint64_t skipped_by_request_count;
+  // Cloud-only non-directory entries, also included in files.
+  uint64_t dataless_files;
+  // Cloud-only directories recorded without entering; subtree size unknown.
+  uint64_t dataless_directories;
+  // Logical bytes of cloud-only files; excluded from local usage naturally.
+  uint64_t dataless_logical_bytes;
+  // 1 if any scan thread failed to disable materialization; 0 otherwise.
+  uint32_t no_materialize_failed;
+  // Scan start in whole seconds since the Unix epoch, used by Age mode.
+  int64_t started_at;
 } TessScanStats;
 
 
+
+// Engine package version as a static NUL-terminated UTF-8 string.
+// Never free the returned pointer.
+const char *tess_engine_version(void);
+
+// Number of borrowed unreadable paths. Null snapshot returns zero.
+// # Safety
+// snapshot must be null or live.
+uint64_t tess_snapshot_unreadable_count(const TessSnapshot *snapshot);
+
+// Number of skipped path/reason records, including requested exclusions,
+// mounts and cloud-only directories. A path can have more than one reason.
+// Null snapshot returns zero.
+// # Safety
+// snapshot must be null or live.
+uint64_t tess_snapshot_skipped_count(const TessSnapshot *snapshot);
+
+// Borrow raw unreadable path bytes until snapshot release; not NUL terminated
+// or necessarily UTF-8. Null snapshot, missing output or invalid index returns
+// null and clears any supplied length. Caller must not free the bytes.
+// # Safety
+// snapshot must be null or live; len must be null or writable.
+const uint8_t *tess_snapshot_unreadable(const TessSnapshot *snapshot,
+                                        uint64_t index,
+                                        uint64_t *len);
+
+// Borrow one skipped path and TESS_SKIP_* reason until snapshot release.
+// Order: requested exclusions, mounts, cloud-only directories. No NUL or
+// UTF-8 promise. Null snapshot, invalid index or missing output returns null
+// and clears supplied outputs. Caller must not free the bytes.
+// # Safety
+// snapshot must be null or live; len and reason must be null or writable.
+const uint8_t *tess_snapshot_skipped(const TessSnapshot *snapshot,
+                                     uint64_t index,
+                                     uint64_t *len,
+                                     uint32_t *reason);
 
 // The version of this ABI; see `TESS_ABI_VERSION`.
 uint32_t tess_abi_version(void);
@@ -260,7 +336,8 @@ uint32_t tess_abi_version(void);
 // # Safety
 //
 // `root` must be null or point to a NUL-terminated string. `options` must be
-// null or point to a `TessScanOptions`.
+// null or point to a `TessScanOptions`. Its skip array must contain skip_count
+// live pointers to NUL-terminated strings, all valid until this call returns.
 TessScan *tess_scan_begin(const char *root, const TessScanOptions *options);
 
 // Copy the scan's counters into `out`. Never blocks. A null `scan` writes
@@ -357,6 +434,18 @@ void tess_snapshot_stats(const TessSnapshot *snapshot, TessScanStats *out);
 // `snapshot` must be null or a snapshot from `tess_scan_finish` that has not
 // been released. `len_out` must be null or point to a `uint64_t`.
 const uint8_t *tess_snapshot_stalled_at(const TessSnapshot *snapshot, uint64_t *len_out);
+
+// Borrow one requested exclusion's raw path bytes and reason code. No NUL
+// terminator is promised. The borrow lives until tess_snapshot_release;
+// callers must not free it. Null snapshot, bad index or missing outputs
+// returns null and zeroes any supplied outputs.
+//
+// # Safety
+// snapshot must be null or live. len and reason must be null or writable.
+const uint8_t *tess_snapshot_skipped_by_request(const TessSnapshot *snapshot,
+                                                uint64_t index,
+                                                uint64_t *len,
+                                                uint32_t *reason);
 
 // Free the snapshot. Every view, and every pointer taken from it or from
 // `tess_snapshot_stalled_at`, is invalid afterwards. A null `snapshot` does

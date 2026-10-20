@@ -18,7 +18,7 @@
 import Foundation
 
 /// A coarse file kind for the type-focus colour mode, by lowercased extension.
-public enum FileKind: CaseIterable, Hashable, Sendable {
+public enum FileKind: UInt8, CaseIterable, Hashable, Sendable {
     case video, images, audio, archives, documents
 
     static let extensions: [FileKind: Set<String>] = [

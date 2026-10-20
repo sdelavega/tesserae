@@ -23,18 +23,42 @@ public struct FocusLegendItem {
     public let colour: SIMD4<Float>
 }
 
+/// Hover has its own observation boundary; SessionView never observes it.
+@MainActor
+public final class InspectorModel: ObservableObject {
+    @Published public fileprivate(set) var info: InspectorInfo?
+}
+
 /// One snapshot and everything that indexes it. Replacing this object also
 /// replaces the view identity, navigation, selection, hover and table together.
 @MainActor
 public final class AppSession: ObservableObject, Identifiable {
     public let id = UUID()
+    public let reconciliation: ReconciliationViewModel?
+    public let scanReport: ScanReport
     public let snapshot: Snapshot
     public let navigator: Navigator
     public let selection = Selection()
     public let table = FileTableRows()
-    @Published public private(set) var tiles: [Tile] = []
+    public struct OverlayTile: Identifiable {
+        public let id: Int
+        public let tile: Tile
+    }
+    public private(set) var selectedTiles: [OverlayTile] = []
+    public private(set) var deniedTiles: [OverlayTile] = []
+    @Published public private(set) var tiles: [Tile] = [] {
+        didSet {
+            selectedTiles = []; deniedTiles = []
+            for (index, tile) in tiles.enumerated() {
+                let overlay = OverlayTile(id: index, tile: tile)
+                if tile.flags & Tile.Flag.selected != 0 { selectedTiles.append(overlay) }
+                if tile.isPermissionDenied { deniedTiles.append(overlay) }
+            }
+        }
+    }
     @Published public private(set) var labels: [PlacedLabel] = []
-    @Published public private(set) var inspector: InspectorInfo?
+    public let inspectorModel = InspectorModel()
+    public var inspector: InspectorInfo? { inspectorModel.info }
     /// Whether the renderer is animating a zoom. Only `setZoomRunning`, the
     /// generation-guarded report from the current treemap, and `settle` (when
     /// no treemap remains to report) change it.
@@ -62,14 +86,18 @@ public final class AppSession: ObservableObject, Identifiable {
     /// thread-safe (`LabelStyle.measure` is). Tests substitute a probe.
     var labelMeasure: @Sendable (String) -> CGSize = LabelStyle.measure
 
-    init(snapshot: Snapshot) {
+    init(snapshot: Snapshot, reconciliation: ReconciliationViewModel? = nil, access: AccessState = .unknown, scanTime: Date = Date()) {
+        scanReport = ScanReport(snapshot: snapshot, caveats: reconciliation?.caveats ?? [], access: access,
+            scanTime: scanTime, appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—",
+            engineVersion: engineVersion + " (ABI \(abiVersion))")
+        self.reconciliation = reconciliation
         self.snapshot = snapshot
         navigator = Navigator(snapshot: snapshot)
         root = snapshot.root
         navigator.$root.dropFirst().sink { [weak self] root in
             guard let self else { return }
             self.root = root
-            self.inspector = nil
+            self.inspectorModel.info = nil
             self.decorationsPending = true
             self.tableTask?.cancel()
             self.table.reset()
@@ -95,7 +123,8 @@ public final class AppSession: ObservableObject, Identifiable {
 
     public var banner: String? {
         let path = snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }
-        return ScanBanner.text(for: snapshot.stats, stalledAt: path)
+        return ScanBanner.text(for: snapshot.stats, stalledAt: path,
+            volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath)
     }
 
     public func resize(to size: CGSize) {
@@ -106,7 +135,7 @@ public final class AppSession: ObservableObject, Identifiable {
 
     private func relayout() {
         layoutGeneration &+= 1
-        inspector = nil
+        inspectorModel.info = nil
         labelsReady = false
         guard root != Tile.noNode, size.width.isFinite, size.height.isFinite,
             size.width >= 1, size.height >= 1 else {
@@ -184,8 +213,8 @@ public final class AppSession: ObservableObject, Identifiable {
     }
 
     public func hover(tile: Int?) {
-        guard let tile, tiles.indices.contains(tile) else { inspector = nil; return }
-        inspector = inspect(tileAt: tile, in: tiles, snapshot: snapshot)
+        guard let tile, tiles.indices.contains(tile) else { inspectorModel.info = nil; return }
+        inspectorModel.info = inspect(tileAt: tile, in: tiles, snapshot: snapshot)
     }
 
     public func go(to node: UInt32) {
@@ -215,32 +244,211 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var scanState: ScanState = .idle
     @Published public var colourChoice = 0
     @Published public private(set) var focusKinds: [FileKind] = []
+    @Published public private(set) var onboarding: Onboarding
+    @Published public private(set) var onboardingPresented = false
+    private var relaunchGeneration = 0
+    public var scanMode: ScanMode { onboarding.scanMode }
+    private let onboardingStore: OnboardingStore
+    private let homeDirectory: URL
+    private let openSettings: () -> Bool
+    private let relaunch: () async throws -> Void
+    private let terminate: () -> Void
+    private var accessTask: Task<Void, Never>?
+    private var accessGeneration = 0
+    private var pendingScan: URL?
     private let coordinator: ScanCoordinator
     private var observers: Set<AnyCancellable> = []
-    private let ageReference = Date()
+    private var factsTask: Task<Void, Never>?
+    private var factsWork: Task<(ReconciliationViewModel, AccessState), Never>?
+    private var scanStartedAt = Date()
+    private var accessWork: Task<AccessState, Never>?
+    private let accessLoader: @Sendable () -> AccessState
+    private var factsGeneration = 0
+    private let factsLoader: @Sendable (URL, ScanFacts) -> ReconciliationViewModel
 
     public convenience init() { self.init(coordinator: ScanCoordinator()) }
 
-    init(coordinator: ScanCoordinator) {
+    init(coordinator: ScanCoordinator,
+         accessLoader: @escaping @Sendable () -> AccessState = { AccessProbe().probe() },
+         onboardingStore: OnboardingStore = OnboardingStore(),
+         openSettings: @escaping () -> Bool = { NSWorkspace.shared.open(FullDiskAccessSettings.url) },
+         relaunch: @escaping () async throws -> Void = AppModel.openNewInstance,
+         terminate: @escaping () -> Void = { NSApp.terminate(nil) },
+         homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
+         factsLoader: @escaping @Sendable (URL, ScanFacts) -> ReconciliationViewModel = ReconciliationViewModel.load) {
+        self.homeDirectory = homeDirectory
+        self.onboardingStore = onboardingStore
+        onboarding = Onboarding(choice: onboardingStore.choice)
+        self.openSettings = openSettings
+        self.relaunch = relaunch
+        self.terminate = terminate
+        self.accessLoader = accessLoader
+        self.factsLoader = factsLoader
         self.coordinator = coordinator
         coordinator.$snapshot.sink { [weak self] snapshot in
-            self?.replaceSnapshot(snapshot)
+            self?.prepareSnapshot(snapshot)
         }.store(in: &observers)
-        coordinator.$state.sink { [weak self] state in self?.scanState = state }.store(in: &observers)
+        coordinator.$state.sink { [weak self] state in
+            guard let self else { return }
+            // A finished app scan includes its facts; frame-gate callers also
+            // rely on finished meaning a session is ready.
+            if state == .finished, self.factsTask != nil { return }
+            self.scanState = state
+        }.store(in: &observers)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.refreshAccess() }.store(in: &observers)
+        refreshAccess()
     }
+
+    deinit {
+        factsTask?.cancel()
+        factsWork?.cancel()
+        accessWork?.cancel()
+        accessTask?.cancel()
+    }
+
+    func refreshAccess() {
+        accessWork?.cancel()
+        accessTask?.cancel()
+        accessGeneration += 1
+        let generation = accessGeneration
+        let probe = accessLoader
+        let work = Task.detached(priority: .utility) { probe() }
+        accessWork = work
+        accessTask = Task { [weak self] in
+            let access = await work.value
+            guard let self, !Task.isCancelled, generation == self.accessGeneration else { return }
+            self.sendOnboarding(.activated(access))
+        }
+    }
+
+    func waitForAccess() async { await accessTask?.value }
+
+    public func sendOnboarding(_ event: Onboarding.Event) {
+        let command = onboarding.send(event)
+        onboardingPresented = onboarding.isPresented
+        if !onboarding.isRelaunching { relaunchGeneration += 1 }
+        if onboardingStore.choice != onboarding.choice { onboardingStore.choice = onboarding.choice }
+        switch command {
+        case .openSettings:
+            if !openSettings() {
+                // No activation will follow a failed open; allow a manual retry.
+                sendOnboarding(.settingsFailed("Couldn’t open System Settings. Open Privacy & Security → Full Disk Access in System Settings."))
+            }
+        case .relaunch:
+            relaunchGeneration += 1
+            let generation = relaunchGeneration
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.relaunch()
+                    guard self.onboarding.isRelaunching, generation == self.relaunchGeneration else { return }
+                    self.terminate()
+                } catch {
+                    guard self.onboarding.isRelaunching, generation == self.relaunchGeneration else { return }
+                    self.sendOnboarding(.relaunchFailed("Couldn’t relaunch Tesserae: \(error.localizedDescription)"))
+                }
+            }
+        case nil: break
+        }
+        if onboarding.canScan, let url = pendingScan {
+            pendingScan = nil
+            startScan(url)
+        }
+    }
+
+    public func setOnboardingPresented(_ presented: Bool) {
+        guard !presented else { return }
+        sendOnboarding(.dismissed)
+        onboardingPresented = false
+        Task { [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            self.onboardingPresented = self.onboarding.isPresented
+        }
+    }
+
+    static func openNewInstance() async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+    }
+
+    func prepareSnapshot(_ snapshot: Snapshot?) {
+        factsTask?.cancel()
+        factsWork?.cancel()
+        factsWork = nil
+        factsTask = nil
+        factsGeneration += 1
+        let generation = factsGeneration
+        guard let snapshot else { session = nil; return }
+        let path = String(decoding: snapshot.rawPath(snapshot.root), as: UTF8.self)
+        let root = URL(fileURLWithPath: path)
+        let access = accessWork
+        let loader = factsLoader
+        let scanTime = scanStartedAt
+        let limited = coordinator.scanMode == .limited
+        let work = Task.detached(priority: .userInitiated) {
+            let state = await access?.value ?? .unknown
+            let scan = ScanFacts(allocatedSum: snapshot.root == Tile.noNode ? 0 : snapshot.allocated(snapshot.root),
+                unreadableLocations: Int(clamping: snapshot.stats.unreadable_count),
+                incompleteReason: ScanBanner.incompleteReason(for: snapshot.stats,
+                    stalledAt: snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }),
+                limited: limited, datalessItems: snapshot.datalessItems, access: state,
+                datalessLogicalBytes: snapshot.datalessLogicalBytes, noMaterializeFailed: snapshot.noMaterializeFailed)
+            return (loader(root, scan), state)
+        }
+        factsWork = work
+        factsTask = Task { [weak self] in
+            let (model, state) = await work.value
+            guard let self, !Task.isCancelled, generation == self.factsGeneration else { return }
+            self.session = AppSession(snapshot: snapshot, reconciliation: model, access: state, scanTime: scanTime)
+            self.factsTask = nil
+            self.factsWork = nil
+            self.scanState = self.coordinator.state
+        }
+    }
+
+    func waitForFacts() async { await factsTask?.value }
 
     func replaceSnapshot(_ snapshot: Snapshot?) {
-        session = snapshot.map(AppSession.init)
+        session = snapshot.map { AppSession(snapshot: $0) }
     }
 
-    public func scan(_ url: URL) { coordinator.start(root: url) }
+    public func scan(_ url: URL) {
+        guard onboarding.canScan else {
+            pendingScan = url
+            sendOnboarding(.reopen)
+            return
+        }
+        startScan(url)
+    }
+
+    private func startScan(_ url: URL) {
+        scanStartedAt = Date()
+        let mode = scanMode
+        let skip = mode == .limited ? ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
+            .map { homeDirectory.appendingPathComponent($0) } : []
+        coordinator.start(root: url, mode: mode, skip: skip)
+    }
+
     public func cancel() { coordinator.cancel() }
     public var isScanning: Bool { if case .scanning = scanState { return true }; return false }
     public var colourMode: ColourMode {
         switch colourChoice {
-        case 1: return .age(now: ageReference)
+        case 1: return .age(now: Date(timeIntervalSince1970: Double(session?.snapshot.stats.started_at ?? 0)))
         case 2: return .typeFocus(focusKinds)
         default: return .depth
+        }
+    }
+
+    public func setColourMode(_ mode: ColourMode) {
+        switch mode {
+        case .depth: colourChoice = 0
+        case .age: colourChoice = 1
+        case .typeFocus(let kinds):
+            focusKinds = Array(kinds.prefix(3))
+            colourChoice = 2
         }
     }
 

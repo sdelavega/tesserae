@@ -65,6 +65,50 @@ final class ScanCoordinatorTests: XCTestCase {
         }
     }
 
+    func test_hung_root_does_not_block_a_new_scan() async throws {
+        let hung = FakeScan(tag: 1)
+        let next = FakeScan(tag: 2)
+        let begun = Locked<[String]>([])
+        let c = ScanCoordinator(progressInterval: 0.005, restartWait: .milliseconds(30)) { url, _ in
+            begun.mutate { $0.append(url.path) }
+            return url.path == "/hung" ? hung : next
+        }
+        var ended: [UInt32?] = []
+        c.onScanEnded = { snapshot, _ in ended.append(snapshot?.root) }
+        c.start(root: URL(fileURLWithPath: "/hung"))
+        XCTAssertTrue(c.hasLiveHandle)
+        XCTAssertEqual(hung.status(), Int32(TESS_STATUS_RUNNING))
+        c.start(root: URL(fileURLWithPath: "/next"))
+        await wait(1, until: { begun.value.count == 2 }, "replacement begins despite hung open")
+        XCTAssertTrue(hung.wasCancelled)
+        XCTAssertEqual(hung.status(), Int32(TESS_STATUS_RUNNING), "precondition: cancellation did not unblock root")
+        XCTAssertTrue(ended.isEmpty, "never finish a still-running handle")
+        next.finishNow()
+        await wait(1, until: { c.state == .finished }, "replacement completes")
+        XCTAssertEqual(c.snapshot?.root, 2)
+        hung.finishNow()
+        await wait(1, until: { ended.count == 2 }, "abandoned handle eventually reclaimed")
+        XCTAssertEqual(ended, [2, 1])
+        XCTAssertEqual(c.snapshot?.root, 2, "late cleanup cannot publish stale data")
+    }
+
+    func test_invalid_skip_arrays_are_refused_before_factory() {
+        let calls = Locked(0)
+        let c = ScanCoordinator(factory: { _, _ in calls.mutate { $0 += 1 }; return nil })
+        var null: UnsafePointer<CChar>? = nil
+        withUnsafePointer(to: &null) { pointer in
+            for (count, pointers) in [(UInt64.max, pointer), (1, nil), (1, pointer)] {
+                var options = TessScanOptions()
+                options.skip_count = count
+                options.skip = pointers
+                c.start(root: URL(fileURLWithPath: "/fixture"), options: options)
+                XCTAssertEqual(c.state, .failed(errno: EINVAL))
+                XCTAssertEqual(calls.value, 0, "invalid input must not reach factory")
+                XCTAssertFalse(c.hasLiveHandle)
+            }
+        }
+    }
+
     func test_scan_of_a_temp_tree_finishes_with_matching_totals() async throws {
         let root = try makeTree(dirs: 3, filesPer: 4)
         let c = ScanCoordinator()
