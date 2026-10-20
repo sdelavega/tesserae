@@ -125,17 +125,15 @@ rulings list kept outside the repo.
 
 ## Phase 2 exit gate (2026-10-19)
 
-- **Frame gate failed; Phase 2 remains open.** Targeted label/table deferral
-  and renderer caching brought presentation p99 to 16.67 ms on the latest 6.15M-node
-  Data snapshot (no incomplete stop code, 1,006 unreadable folders), but two
-  presentation gaps still reached 33.33 ms on the 60 Hz display. Raw relayout
-  peaked at 4.65 ms. See `docs/benchmarks.md` for both optimization captures,
-  earlier captures, toolchain caveats and the unchanged gate definition.
-- Label placement still runs on the main actor after motion and can take ~67 ms;
-  deferral removes it from the zoom-start path but does not accelerate text shaping.
+- **Frame gate passed on a Release build.** On the 6.15M-node Data volume (no incomplete
+  stop code, 1,006 unreadable folders) at 60 Hz, 0 of 414 presentation intervals spanned
+  more than one refresh (maximum 16.668 ms) and relayout peaked at 1.2 ms. The earlier
+  Debug `-O` captures failed (33–50 ms gaps); the Release build drops Snapshot's debug
+  liveness lock, and label measurement now runs off the main actor. See
+  `docs/benchmarks.md`, "Phase 2: Release frame gate — PASSED".
+- Not yet measured: a 120 Hz (ProMotion) display, an Intel Mac, and hit testing in a
+  Release build (the 0.08 ms figure is from a Debug `-O` build).
 - An optimized ad-hoc Debug app can fail dyld library validation with the
-  project's hardened runtime enabled. The measurement used a command-line-only
+  project's hardened runtime enabled. The measurements used a command-line-only
   `ENABLE_HARDENED_RUNTIME=NO` override. Resolve development/distribution signing
   deliberately; keep the shipped hardened-runtime setting enabled.
-- Final whole-branch review, parked-item triage and plan/spec reconciliation
-  remain pending because the phase-gate stop rule was reached.
