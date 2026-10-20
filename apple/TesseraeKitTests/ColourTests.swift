@@ -94,12 +94,12 @@ final class ColourTests: XCTestCase {
             XCTAssertEqual(got[Palette.statusIndex], "#fab219", file: file, line: line)
         }
         let kinds: [FileKind] = [.video, .images, .audio]
-        expect(.depth, dark: false, ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281"])
+        expect(.depth, dark: false, ["#86b6ef", "#5598e7", "#256bc0", "#184f95", "#0d366b"])
         expect(.depth, dark: true, ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4"])
         let age = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
         expect(.age(now: now), dark: false, age)
         expect(.age(now: now), dark: true, age.reversed())
-        expect(.typeFocus(kinds), dark: false, ["#2a78d6", "#eb6834", "#1baf7a"])
+        expect(.typeFocus(kinds), dark: false, ["#256bc0", "#eb6834", "#1baf7a"])
         expect(.typeFocus(kinds), dark: true, ["#3987e5", "#d95926", "#199e70"])
         XCTAssertEqual(hex(Palette.surface(dark: false)), "#fcfcfb")
         XCTAssertEqual(hex(Palette.surface(dark: true)), "#1a1a19")

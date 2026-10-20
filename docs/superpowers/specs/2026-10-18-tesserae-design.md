@@ -812,16 +812,24 @@ Validated under `--pairs all`, the eight-slot categorical palette caps at
 **three slots**. So a rainbow-by-file-type is not available, which is
 fortunate, because a twelve-hue legend was never readable anyway.
 
-**Mode 1 — Depth (default).** Ordinal blue ramp, steps 250–650 light,
-anchor-flipped dark.
+**Mode 1 — Depth (default).** Ordinal blue ramp, steps 250–700 light (with
+step 3 darkened to `#256bc0`), anchor-flipped dark.
 
 ```
-light  #86b6ef  #5598e7  #2a78d6  #1c5cab  #104281
+light  #86b6ef  #5598e7  #256bc0  #184f95  #0d366b
 dark   #184f95  #256abf  #3987e5  #6da7ec  #9ec5f4
 ```
 
 Validated: monotone L, adjacent ΔL ≥ 0.06, light-end contrast 2.06:1 light
-/ 2.15:1 dark, hue spread 3°. Passes both modes.
+/ 2.15:1 dark, hue spread 4° light / 3° dark. Passes both modes.
+
+Why the light ramp changed (after the Phase 2 final review): labels choose
+their ink per tile (see Labels), and the original light step 3, `#2a78d6`
+(reference step 450), gave its better ink only 4.46:1, under WCAG AA's 4.5:1
+for text. It is darkened to `#256bc0` (4.63:1 with `#f0efec`). Darkening
+step 3 alone failed the adjacent-ΔL check (0.051), so steps 4–5 moved to
+reference steps 600 and 700 (`#184f95`, `#0d366b`, were `#1c5cab`,
+`#104281`). Revalidated with `--ordinal --mode light`: all checks pass.
 
 **Mode 2 — Age.** Sequential blue ramp, full 100→700, light = recently
 modified, dark = stale, flipped in dark mode. Old-and-large is the reclaim
@@ -845,7 +853,7 @@ archives and documents, matched on the lowercased file extension (a dotfile
 such as `.mp4` has none); directories are neutral in this mode.
 
 ```
-light  #2a78d6  #eb6834  #1baf7a   worst all-pairs CVD ΔE 9.2 · normal 24.0
+light  #256bc0  #eb6834  #1baf7a   worst all-pairs CVD ΔE 9.2 (deutan) · tritan 14.0 · normal 25.3
 dark   #3987e5  #d95926  #199e70   worst all-pairs CVD ΔE 9.4 · normal 20.9
 ```
 
@@ -894,8 +902,9 @@ not per appearance: of the two tokens, whichever has the higher WCAG 2.x
 contrast ratio against that tile's fill as currently painted (the palette is
 sRGB-encoded), so it follows the colour mode, the appearance and the neutral,
 status and aggregate fills. Over every shipped colour the chosen ink reaches
-at least 4.46:1; the one fill below 4.5:1 is `#2a78d6` (light depth step 3,
-light type-focus slot 1) at 4.46:1 with `#0b0b0b`. The lock badge on an
+at least 4.63:1 (on `#256bc0`, light depth step 3 and light type-focus slot
+1, with `#f0efec`), so every label clears WCAG AA's 4.5:1; `#2a78d6`, which
+gave 4.46:1, was replaced for this (see Colour). The lock badge on an
 unreadable tile takes the ink the same way (on the status amber, `#0b0b0b`).
 
 As built:

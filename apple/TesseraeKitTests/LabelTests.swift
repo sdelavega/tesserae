@@ -234,9 +234,10 @@ final class LabelTests: XCTestCase {
 
     /// Every colour of every shipped palette (depth, age, type focus; light and
     /// dark; with the neutral and status entries each palette carries) gets
-    /// whichever ink token reads better on it. The minimum best contrast is
-    /// reported and pinned: it is below 4.5:1 on #2a78d6, and this test
-    /// records that, it does not hide it.
+    /// whichever ink token reads better on it, and every one clears WCAG AA
+    /// for text (4.5:1). The minimum best contrast is reported and pinned
+    /// (#256bc0, the light depth step 3 and type-focus slot 1, darkened from
+    /// #2a78d6 at 4.46:1 for exactly this), so a palette change re-reports it.
     func test_label_ink_is_the_token_with_the_higher_contrast_on_every_palette_colour() {
         let darkInk = rgb(LabelStyle.ink(dark: false)), lightInk = rgb(LabelStyle.ink(dark: true))
         XCTAssertEqual(hex(darkInk), "#0b0b0b", "precondition: the light-mode token")
@@ -261,10 +262,11 @@ final class LabelTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(seen.count, 19, "precondition: every distinct shipped colour was visited")
+        XCTAssertEqual(seen.count, 17, "precondition: every distinct shipped colour was visited")
         print("label ink: minimum best contrast \(String(format: "%.3f", minimum.ratio)):1 on \(minimum.colour) (\(minimum.palette))")
-        XCTAssertEqual(minimum.colour, "#2a78d6")
-        XCTAssertEqual((minimum.ratio * 100).rounded() / 100, 4.46)
+        XCTAssertGreaterThanOrEqual(minimum.ratio, 4.5, "a label fails WCAG AA on \(minimum.colour)")
+        XCTAssertEqual(minimum.colour, "#256bc0")
+        XCTAssertEqual((minimum.ratio * 100).rounded() / 100, 4.63)
     }
 
     /// The overlay picks each label's ink from its tile's actual colour, so the
@@ -291,7 +293,7 @@ final class LabelTests: XCTestCase {
         }
         let age = Self.modes[1].1
         XCTAssertEqual(colourIndex(for: deep, in: s, mode: .depth), UInt16(Palette.firstColourIndex + 4), "precondition")
-        // Light depth: #104281 (darkest) light ink; #5598e7 for the aggregate at depth 1; amber.
+        // Light depth: #0d366b (darkest) light ink; #5598e7 for the aggregate at depth 1; amber.
         XCTAssertEqual(inks(.depth, dark: false), [lightInk, darkInk, darkInk])
         // Dark depth: #9ec5f4 (lightest) dark ink; #256abf light ink; amber.
         XCTAssertEqual(inks(.depth, dark: true), [darkInk, lightInk, darkInk])
@@ -322,7 +324,7 @@ final class LabelTests: XCTestCase {
     }
 
     /// Drawn for real: a label over the darkest light-mode depth step
-    /// (#104281) is painted in the light ink, so its glyphs are lighter than
+    /// (#0d366b) is painted in the light ink, so its glyphs are lighter than
     /// the fill, where the old fixed light-mode ink drew them darker.
     @MainActor
     func test_a_label_over_the_darkest_depth_step_renders_in_the_light_ink() throws {
@@ -333,7 +335,7 @@ final class LabelTests: XCTestCase {
         let palette = Palette.colours(.depth, dark: false)
         let fillIndex = Int(colourIndex(for: deep, in: s, mode: .depth))
         let fill = palette[fillIndex]
-        XCTAssertEqual(hex(rgb(fill)), "#104281", "precondition: the darkest light-mode depth step")
+        XCTAssertEqual(hex(rgb(fill)), "#0d366b", "precondition: the darkest light-mode depth step")
         let label = PlacedLabel(rect: CGRect(x: 4, y: 4, width: 150, height: 14), text: "WWWW MMMM 4.2 GB", tile: deep)
         let view = NSHostingView(
             rootView: ZStack(alignment: .topLeading) {

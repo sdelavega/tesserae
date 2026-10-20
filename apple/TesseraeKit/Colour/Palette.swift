@@ -43,12 +43,12 @@ public struct Palette {
 
     private static let status = rgb(0xfab219)
 
-    private static let depthLight: [UInt32] = [0x86b6ef, 0x5598e7, 0x2a78d6, 0x1c5cab, 0x104281]
+    private static let depthLight: [UInt32] = [0x86b6ef, 0x5598e7, 0x256bc0, 0x184f95, 0x0d366b]
     private static let depthDark: [UInt32] = [0x184f95, 0x256abf, 0x3987e5, 0x6da7ec, 0x9ec5f4]
     private static let ageLight: [UInt32] = [
         0xcde2fb, 0x9ec5f4, 0x6da7ec, 0x3987e5, 0x256abf, 0x184f95, 0x0d366b,
     ]
-    private static let focusLight: [UInt32] = [0x2a78d6, 0xeb6834, 0x1baf7a]
+    private static let focusLight: [UInt32] = [0x256bc0, 0xeb6834, 0x1baf7a]
     private static let focusDark: [UInt32] = [0x3987e5, 0xd95926, 0x199e70]
 
     /// The page surface the treemap sits on (light `#fcfcfb`, dark `#1a1a19`).

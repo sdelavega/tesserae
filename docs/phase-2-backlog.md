@@ -234,11 +234,13 @@ findings C1, I1 and I2, and its doc batch, were fixed before merge.)
   chose per-tile ink. Each label (and the unreadable-folder lock badge) uses
   whichever of `#0b0b0b` and `#f0efec` has the higher WCAG 2.x contrast against
   its tile's actual fill, in every mode and appearance (spec §8 "Labels"). The
-  worst case over every shipped colour is now 4.46:1, on `#2a78d6` (light depth
-  step 3 and light type-focus slot 1, with `#0b0b0b`), just under the 4.5:1 AA
-  text threshold; every other fill is at least 4.69:1. A test pins the 4.46 so
-  any palette change re-reports it. Bringing `#2a78d6` to 4.5 needs a palette
-  change, a spec decision.
+  worst case over every shipped colour was 4.46:1 on `#2a78d6` (light depth
+  step 3 and light type-focus slot 1), just under the 4.5:1 AA text threshold.
+  ~~That blue~~ is resolved too: the user chose to darken it. It is now `#256bc0`
+  (4.63:1 with `#f0efec`), with light depth steps 4–5 moved to `#184f95` and
+  `#0d366b` to keep the ramp's adjacent ΔL ≥ 0.06 (revalidated; spec §8
+  Colour). Every label now clears 4.5:1; a test asserts that and pins the
+  4.63 minimum on `#256bc0`.
 - ~~**Watchdog test's wall-clock bound.**~~ `watchdog_names_a_blocked_reopen_across_arenas`
   now asserts the ordering it means (the walk returned before the blocked
   reopen's sleep ended, read from a flag the hook sets after its sleep)
