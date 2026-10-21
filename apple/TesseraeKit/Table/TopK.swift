@@ -22,9 +22,10 @@ import Foundation
 /// A bounded min-heap of at most `k` entries whose root is the worst kept
 /// entry, so memory is O(k) and time O(n log k) however large the snapshot.
 /// `root` itself counts if it is a file. Inside a cancelled task it returns [].
-public func topK(_ k: Int, files s: Snapshot, under root: UInt32) -> [UInt32] {
+public func topK(_ k: Int, files s: Snapshot, under root: UInt32, overlay: SizeOverlay = SizeOverlay()) -> [UInt32] {
     precondition(Int(root) < s.nodes.count, "topK: root \(root) outside the snapshot")
-    guard k > 0 else { return [] }
+    guard k > 0, !overlay.isDeleted(root, in: s) else { return [] }
+    let source = OverlaySource(s, overlay)
     var heap = BoundedHeap(capacity: k)
     var stack: [UInt32] = [root]
     while let i = stack.popLast() {
@@ -32,9 +33,9 @@ public func topK(_ k: Int, files s: Snapshot, under root: UInt32) -> [UInt32] {
         // (a partial answer must never be mistaken for the real one).
         if Task.isCancelled { return [] }
         if s.isDirectory(i) {
-            stack.append(contentsOf: s.children(i))
+            stack.append(contentsOf: source.children(i))
         } else {
-            heap.offer(BoundedHeap.Entry(allocated: s.allocated(i), node: i))
+            heap.offer(BoundedHeap.Entry(allocated: source.allocated(i), node: i))
         }
     }
     return heap.entries.sorted { BoundedHeap.better($0, $1) }.map(\.node)

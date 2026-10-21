@@ -331,42 +331,44 @@ final class RenderSnapshotTests: XCTestCase {
         var checkedColours = 0
         for (modeName, mode) in modes {
             for dark in [false, true] {
-                let palette = Palette.colours(mode, dark: dark)
-                var tiles: [Tile] = []
-                for i in 0..<palette.count {
-                    let rect = CGRect(x: (i % 6) * 20, y: (i / 6) * 20, width: 20, height: 20)
-                    let flags = i == Palette.statusIndex ? Tile.Flag.permDenied : 0
-                    tiles.append(Tile(rect: rect, node: UInt32(i), depth: 0, flags: flags))
-                }
-                XCTAssertTrue(tiles.contains { $0.isPermissionDenied }, "precondition: a permDenied tile")
-                let colourOf: (Tile) -> UInt16 = {
-                    $0.isPermissionDenied ? UInt16(Palette.statusIndex) : UInt16($0.node)
-                }
-                let size = CGSize(width: 120, height: CGFloat((palette.count + 5) / 6 * 20))
-                for scale: CGFloat in [1, 2] {
-                    metal.clearColour = Palette.surface(dark: dark)
-                    metal.update(tiles: tiles, colourOf: colourOf, palette: palette)
-                    let m = Raster(metal.renderOffscreen(size: size, scale: scale))
-                    let c = Raster(render(tiles, palette, colourOf, dark: dark, size: size, scale: scale))
-                    XCTAssertEqual(m.width, c.width)
-                    XCTAssertEqual(m.height, c.height)
-                    var bad = Set<String>()
-                    for t in tiles {
-                        // Probe every pixel of the tile, which covers fill and border.
-                        let x0 = Int(t.rect.minX * scale), y0 = Int(t.rect.minY * scale)
-                        for y in y0..<(y0 + Int(20 * scale)) {
-                            for x in x0..<(x0 + Int(20 * scale)) where m.rgba(x, y) != c.rgba(x, y) {
-                                bad.insert("\(modeName)\(dark ? "-dark" : "") index \(t.node): "
-                                    + "Metal \(m.rgba(x, y)) CG \(c.rgba(x, y))")
+                for staged in [false, true] {
+                    let palette = Palette.colours(mode, dark: dark)
+                    var tiles: [Tile] = []
+                    for i in 0..<palette.count {
+                        let rect = CGRect(x: (i % 6) * 20, y: (i / 6) * 20, width: 20, height: 20)
+                        let flags = i == Palette.statusIndex ? Tile.Flag.permDenied : 0
+                        tiles.append(Tile(rect: rect, node: UInt32(i), depth: 0, flags: flags | (staged ? Tile.Flag.staged : 0)))
+                    }
+                    XCTAssertTrue(tiles.contains { $0.isPermissionDenied }, "precondition: a permDenied tile")
+                    let colourOf: (Tile) -> UInt16 = {
+                        $0.isPermissionDenied ? UInt16(Palette.statusIndex) : UInt16($0.node)
+                    }
+                    let size = CGSize(width: 120, height: CGFloat((palette.count + 5) / 6 * 20))
+                    for scale: CGFloat in [1, 2] {
+                        metal.clearColour = Palette.surface(dark: dark)
+                        metal.update(tiles: tiles, colourOf: colourOf, palette: palette)
+                        let m = Raster(metal.renderOffscreen(size: size, scale: scale))
+                        let c = Raster(render(tiles, palette, colourOf, dark: dark, size: size, scale: scale))
+                        XCTAssertEqual(m.width, c.width)
+                        XCTAssertEqual(m.height, c.height)
+                        var bad = Set<String>()
+                        for t in tiles {
+                            // Probe every pixel of the tile, which covers fill and border.
+                            let x0 = Int(t.rect.minX * scale), y0 = Int(t.rect.minY * scale)
+                            for y in y0..<(y0 + Int(20 * scale)) {
+                                for x in x0..<(x0 + Int(20 * scale)) where m.rgba(x, y) != c.rgba(x, y) {
+                                    bad.insert("\(modeName)\(dark ? "-dark" : "") index \(t.node): "
+                                        + "Metal \(m.rgba(x, y)) CG \(c.rgba(x, y))")
+                                }
                             }
                         }
+                        mismatches += bad.sorted().map { "\($0) @\(scale)x" }
+                        checkedColours += tiles.count
                     }
-                    mismatches += bad.sorted().map { "\($0) @\(scale)x" }
-                    checkedColours += tiles.count
                 }
             }
         }
-        XCTAssertGreaterThan(checkedColours, 60, "precondition: all palettes were compared")
+        XCTAssertGreaterThan(checkedColours, 120, "precondition: all palettes were compared")
         XCTAssertEqual(mismatches, [], "Metal and CoreGraphics bytes differ")
     }
 
@@ -387,6 +389,23 @@ final class RenderSnapshotTests: XCTestCase {
         XCTAssertEqual(calls, initial, "no name lookup or palette mapping on identical input or backing scale")
         view.set(tiles: tiles, palette: palette, colourOf: colour, dark: false, snapshot: t.snapshot, mode: .age(now: Date(timeIntervalSince1970: 100)))
         XCTAssertGreaterThan(calls, initial, "mode changes invalidate colours")
+    }
+
+    func test_staged_tiles_have_hatch_and_one_device_pixel_outline() throws {
+        let tile = Tile(rect: CGRect(x: 0, y: 0, width: 20, height: 20), node: 0, depth: 0, flags: Tile.Flag.staged)
+        XCTAssertNotEqual(tile.flags & Tile.Flag.staged, 0)
+        for dark in [false, true] {
+            for scale: CGFloat in [1, 2] {
+                let palette = Palette.colours(.depth, dark: dark)
+                let image = render([tile], palette, Self.depthIndex, dark: dark, size: tile.rect.size, scale: scale)
+                let raster = Raster(image)
+                let ink = palette[2].x * 0.2126 + palette[2].y * 0.7152 + palette[2].z * 0.0722 > 0.5 ? 0 : 255
+                XCTAssertEqual(raster.rgba(0, 10), [ink, ink, ink, 255], "outline")
+                XCTAssertEqual(raster.rgba(3, 5), [ink, ink, ink, 255], "diagonal hatch")
+                XCTAssertNotEqual(raster.rgba(1, 10), [ink, ink, ink, 255], "outline stays one device pixel")
+                try assertMatchesReference(image, named: "jetsam-staged-" + (dark ? "dark" : "light") + "-\(Int(scale))x")
+            }
+        }
     }
 
     // MARK: Fallback view caching

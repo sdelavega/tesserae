@@ -153,7 +153,7 @@ struct SquarifyScratch {
 /// The first index in `range` for which `isBelow` holds, given that it holds
 /// for a suffix of `range` (children are sorted descending).
 @inline(__always)
-private func firstBelow(_ range: Range<UInt32>, _ isBelow: (UInt32) -> Bool) -> UInt32 {
+private func firstBelow(_ range: Range<Int>, _ isBelow: (Int) -> Bool) -> Int {
     var lo = range.lowerBound
     var hi = range.upperBound
     while lo < hi {
@@ -179,11 +179,11 @@ private func layoutChildren(
 
     // Positive-size children are a prefix; zero-size ones are left out,
     // except that unreadable directories among them get placeholders.
-    let positiveEnd = total > 0 ? firstBelow(range) { src.allocated($0) == 0 } : range.lowerBound
-    let positiveCount = Int(positiveEnd - range.lowerBound)
+    let positiveEnd = total > 0 ? firstBelow(range.startIndex..<range.endIndex) { src.allocated(range[$0]) == 0 } : range.startIndex
+    let positiveCount = Int(positiveEnd - range.startIndex)
     scratch.denied.removeAll(keepingCapacity: true)
-    for c in positiveEnd..<range.upperBound where src.isPermissionDenied(c) {
-        scratch.denied.append(c)
+    for c in positiveEnd..<range.endIndex where src.isPermissionDenied(range[c]) {
+        scratch.denied.append(range[c])
     }
     let deniedCount = scratch.denied.count
     guard positiveCount > 0 || deniedCount > 0 else { return }
@@ -205,19 +205,19 @@ private func layoutChildren(
     var keepEnd = positiveEnd
     if positiveCount > 0 {
         let scale = (area - (DenialStrip(count: deniedTiles, in: rect, cell: cell)?.area ?? 0)) / Double(total)
-        keepEnd = firstBelow(range.lowerBound..<positiveEnd) { Double(src.allocated($0)) * scale < cull }
+        keepEnd = firstBelow(range.startIndex..<positiveEnd) { Double(src.allocated(range[$0])) * scale < cull }
     }
-    var needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
+    var needed = Int(keepEnd - range.startIndex) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
     if needed > remaining {
         // Collapse the placeholders, then cut the prefix shorter so it plus
         // the aggregate fit; a set that would keep no sized child is not
         // worth subdividing.
         deniedTiles = min(deniedTiles, 1)
-        needed = Int(keepEnd - range.lowerBound) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
+        needed = Int(keepEnd - range.startIndex) + (keepEnd < positiveEnd ? 1 : 0) + deniedTiles
         if needed > remaining {
             if positiveCount == 0 { return }
             guard remaining >= 2 + deniedTiles else { return }
-            keepEnd = range.lowerBound + UInt32(remaining - 1 - deniedTiles)
+            keepEnd = range.startIndex + (remaining - 1 - deniedTiles)
         }
     }
     // The strip runs along the shorter side at the leading edge (left of a
@@ -239,8 +239,8 @@ private func layoutChildren(
 
     var keptBytes: UInt64 = 0
     scratch.areas.removeAll(keepingCapacity: true)
-    for c in range.lowerBound..<keepEnd {
-        let s = src.allocated(c)
+    for c in range.startIndex..<keepEnd {
+        let s = src.allocated(range[c])
         keptBytes += s
         scratch.areas.append(Double(s))
     }
@@ -263,12 +263,12 @@ private func layoutChildren(
         scratch.rects.removeAll(keepingCapacity: true)
     }
 
-    let keptCount = Int(keepEnd - range.lowerBound)
+    let keptCount = Int(keepEnd - range.startIndex)
     let aggregateIndex = hasTail ? keptCount : -1
     let childDepth = depth == UInt8.max ? depth : depth + 1
     for (i, r) in scratch.rects.enumerated() {
         if i < keptCount {
-            let c = range.lowerBound + UInt32(i)
+            let c = range[range.startIndex + i]
             tiles.append(Tile(rect: r, node: c, depth: childDepth, parent: node))
             if src.isDirectory(c) && min(r.width, r.height) >= p.subdivideMin {
                 queue.append((c, r, childDepth))
@@ -277,7 +277,7 @@ private func layoutChildren(
             tiles.append(
                 Tile(
                     rect: r, node: Tile.noNode, depth: childDepth, flags: Tile.Flag.aggregated,
-                    aggregateCount: tailCount, aggregateBytes: tailBytes, parent: node))
+                    aggregateCount: UInt32(tailCount), aggregateBytes: tailBytes, parent: node))
         }
     }
     // Placeholders last: after every sized sibling, packed line by line from

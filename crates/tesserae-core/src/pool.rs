@@ -749,7 +749,11 @@ fn merge(into: &mut WalkStats, from: WalkStats) -> io::Result<()> {
         stalled_at,
         incomplete,
         started_at,
+        root_device,
     } = from;
+    if root_device != 0 {
+        into.root_device = root_device;
+    }
     // The earliest start any part of the walk recorded. Workers' own stats
     // carry the default (no cutoff), so this keeps the walk's.
     into.started_at = into.started_at.min(started_at);
@@ -1592,6 +1596,7 @@ mod tests {
             stalled_at: None,
             incomplete: None,
             started_at: 500,
+            root_device: 42,
         };
         merge(
             &mut into,
@@ -1618,6 +1623,7 @@ mod tests {
                 stalled_at: Some(Path::new("/s").to_path_buf()),
                 incomplete: Some(Incomplete::FdExhausted),
                 started_at: 300,
+                root_device: 0,
             },
         )
         .unwrap();
@@ -1638,6 +1644,7 @@ mod tests {
         );
         assert!(into.no_materialize_failed);
         assert_eq!(into.started_at, 300, "the earliest start");
+        assert_eq!(into.root_device, 42, "other workers have no root device");
         // A worker's own stats carry the default, which is no cutoff and
         // must not displace the walk's start.
         merge(&mut into, WalkStats::default()).unwrap();

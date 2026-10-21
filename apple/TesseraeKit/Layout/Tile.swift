@@ -25,8 +25,7 @@ public struct Tile: Equatable, Sendable {
     /// The layout sets `aggregated` (the tail aggregate, and the collapsed
     /// "N unreadable folders" placeholder) and `permDenied` (every
     /// placeholder, and an unreadable layout root). `selected` is set by the
-    /// renderer's caller from the selection (`applySelection`). `staged` is
-    /// reserved for Phase 3: nothing sets it yet.
+    /// renderer's caller from the selection (`applySelection`). `staged` follows Jetsam membership through the snapshot parent chain.
     public enum Flag {
         public static let selected: UInt8 = 1 << 0
         public static let staged: UInt8 = 1 << 1

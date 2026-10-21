@@ -183,10 +183,15 @@ public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
 /// their logical size summed from the snapshot); the collapsed
 /// permission-denied placeholder reports how many folders it stands for.
 /// Neither has a path or a date.
-public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot) -> InspectorInfo {
+public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot, overlay: SizeOverlay = SizeOverlay()) -> InspectorInfo {
     precondition(tiles.indices.contains(index), "inspect: tile \(index) outside the list")
     let t = tiles[index]
-    if t.node != Tile.noNode { return inspect(t.node, in: s) }
+    if t.node != Tile.noNode {
+        var info = inspect(t.node, in: s)
+        info.allocated = OverlaySource(s, overlay).allocated(t.node)
+        info.logical = OverlaySource(s, overlay).logical(t.node)
+        return info
+    }
     if t.isPermissionDenied {
         return InspectorInfo(
             subject: .unreadable(count: t.aggregateCount), allocated: 0, logical: 0, kind: .unreadable,
@@ -194,7 +199,7 @@ public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot) -
     }
     return InspectorInfo(
         subject: .aggregate(count: t.aggregateCount, bytes: t.aggregateBytes), allocated: t.aggregateBytes,
-        logical: aggregateLogical(index, tiles, s), kind: .aggregate, modified: nil)
+        logical: aggregateLogical(index, tiles, s, overlay), kind: .aggregate, modified: nil)
 }
 
 /// The logical bytes behind aggregate `tiles[index]`: its parent is the
@@ -206,16 +211,17 @@ public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot) -
 ///
 /// No depth arithmetic: `Tile.depth` saturates at 255, so "one level up"
 /// cannot be told from it (final review C1).
-private func aggregateLogical(_ index: Int, _ tiles: [Tile], _ s: Snapshot) -> UInt64 {
+private func aggregateLogical(_ index: Int, _ tiles: [Tile], _ s: Snapshot, _ overlay: SizeOverlay) -> UInt64 {
     let t = tiles[index]
     guard t.parent != Tile.noNode, Int(t.parent) < s.nodes.count else { return 0 }
-    let kids = s.children(t.parent)
-    var positiveEnd = kids.upperBound
-    while positiveEnd > kids.lowerBound && s.allocated(positiveEnd - 1) == 0 { positiveEnd -= 1 }
-    let count = min(UInt32(t.aggregateCount), positiveEnd - kids.lowerBound)
+    let source = OverlaySource(s, overlay)
+    let kids = source.children(t.parent)
+    var positiveEnd = kids.endIndex
+    while positiveEnd > kids.startIndex && source.allocated(kids[positiveEnd - 1]) == 0 { positiveEnd -= 1 }
+    let count = min(Int(t.aggregateCount), positiveEnd - kids.startIndex)
     var sum: UInt64 = 0
     for c in (positiveEnd - count)..<positiveEnd {
-        let (v, overflow) = sum.addingReportingOverflow(s.nodes[Int(c)].logical)
+        let (v, overflow) = sum.addingReportingOverflow(source.logical(kids[c]))
         sum = overflow ? UInt64.max : v
     }
     return sum

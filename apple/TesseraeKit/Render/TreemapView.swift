@@ -54,6 +54,7 @@ public struct TreemapView: NSViewRepresentable {
     public var onZoomChanged: ((Bool) -> Void)?
     public var onDroppedTiles: ((Int) -> Void)?
     public var navigator: Navigator?
+    public var onStage: (() -> Void)?
     public var onHover: ((Int?) -> Void)?
 
     public init(
@@ -61,7 +62,7 @@ public struct TreemapView: NSViewRepresentable {
         snapshot: Snapshot? = nil, mode: ColourMode? = nil,
         selection: Selection? = nil, onZoomChanged: ((Bool) -> Void)? = nil,
         onDroppedTiles: ((Int) -> Void)? = nil,
-        onHover: ((Int?) -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
+        onHover: ((Int?) -> Void)? = nil, onStage: (() -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
     ) {
         self.snapshot = snapshot
         self.mode = mode
@@ -72,6 +73,7 @@ public struct TreemapView: NSViewRepresentable {
         self.palette = palette
         self.dark = dark
         self.navigator = navigator
+        self.onStage = onStage
         self.onHover = onHover
         self.colourOf = colourOf
     }
@@ -79,6 +81,7 @@ public struct TreemapView: NSViewRepresentable {
     public func makeCoordinator() -> Coordinator { Coordinator() }
 
     public func makeNSView(context: Context) -> NSView {
+        context.coordinator.contextMenu.stage = onStage
         let interaction = context.coordinator.interaction
         interaction.selection = selection
         interaction.navigator = navigator
@@ -87,11 +90,13 @@ public struct TreemapView: NSViewRepresentable {
         guard let device = MTLCreateSystemDefaultDevice(), let renderer = TreemapRenderer(device: device) else {
             let fallback = FallbackView(frame: .zero)
             fallback.interaction = interaction
+            fallback.jetsamMenu = context.coordinator.contextMenu
             fallback.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark, snapshot: snapshot, mode: mode)
             return fallback
         }
         let view = InteractiveMTKView(frame: .zero, device: device)
         view.interaction = interaction
+        view.jetsamMenu = context.coordinator.contextMenu
         // The palette's sRGB-encoded values are written unconverted into a
         // non-sRGB drawable; the colorspace says how to read them.
         view.colorPixelFormat = TreemapRenderer.pixelFormat
@@ -107,6 +112,7 @@ public struct TreemapView: NSViewRepresentable {
 
     public func updateNSView(_ nsView: NSView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.contextMenu.stage = onStage
         coordinator.onZoomChanged = onZoomChanged
         coordinator.onDroppedTiles = onDroppedTiles
         coordinator.interaction.selection = selection
@@ -180,6 +186,11 @@ public struct TreemapView: NSViewRepresentable {
 
     final class InteractiveMTKView: MTKView {
         weak var interaction: TreemapInteraction?
+        var jetsamMenu: JetsamContextMenu?
+        override func menu(for event: NSEvent) -> NSMenu? {
+            guard interaction?.selectForContext(at: TreemapView.tilePoint(event, in: self)) == true else { return nil }
+            return jetsamMenu?.make()
+        }
 
         override init(frame: CGRect, device: MTLDevice?) {
             super.init(frame: frame, device: device)
@@ -226,6 +237,11 @@ public struct TreemapView: NSViewRepresentable {
         private var dark = false
         private var lastKey: Key?
         weak var interaction: TreemapInteraction?
+        var jetsamMenu: JetsamContextMenu?
+        override func menu(for event: NSEvent) -> NSMenu? {
+            guard interaction?.selectForContext(at: TreemapView.tilePoint(event, in: self)) == true else { return nil }
+            return jetsamMenu?.make()
+        }
         /// How many times the image has been rendered (for tests).
         private(set) var renderCount = 0
         /// Overrides the window's backing scale (for tests).
@@ -302,6 +318,7 @@ public struct TreemapView: NSViewRepresentable {
     public final class Coordinator: NSObject, MTKViewDelegate {
         var renderer: TreemapRenderer?
         let interaction = TreemapInteraction()
+        let contextMenu = JetsamContextMenu()
         private(set) var player = ZoomPlayer()
         var onZoomChanged: ((Bool) -> Void)?
         var onDroppedTiles: ((Int) -> Void)?

@@ -67,7 +67,7 @@ private let minKeptCharacters = 3
 ///   has placed so far; the caller discards that result.
 public func placeLabels(
     _ tiles: [Tile], in s: Snapshot, measure: (String) -> CGSize, max: Int = 400,
-    locale: Locale = .current
+    locale: Locale = .current, overlay: SizeOverlay = SizeOverlay()
 ) -> [PlacedLabel] {
     guard max > 0 else { return [] }
     let pad = labelPadding
@@ -89,7 +89,7 @@ public func placeLabels(
         let t = tiles[i]
         guard
             let parts = labelParts(
-                for: t, in: s, subdivided: subdivided, locale: locale)
+                for: t, in: s, subdivided: subdivided, locale: locale, overlay: overlay)
         else { continue }
         let room = CGSize(width: t.rect.width - 2 * pad, height: t.rect.height - 2 * pad)
         guard let (text, size) = fit(parts.words, suffix: parts.suffix, in: room, measure: measure) else { continue }
@@ -104,7 +104,7 @@ public func placeLabels(
 /// The truncatable words and the fixed tail of tile `t`'s label, or nil for a
 /// tile that gets none.
 private func labelParts(
-    for t: Tile, in s: Snapshot, subdivided: Set<UInt32>, locale: Locale
+    for t: Tile, in s: Snapshot, subdivided: Set<UInt32>, locale: Locale, overlay: SizeOverlay
 ) -> (words: String, suffix: String)? {
     if t.node == Tile.noNode {
         if t.isPermissionDenied {
@@ -116,7 +116,7 @@ private func labelParts(
     if t.isPermissionDenied { return nil }
     precondition(Int(t.node) < s.nodes.count, "placeLabels: tile node \(t.node) outside the snapshot")
     if subdivided.contains(t.node) { return nil }
-    return (s.displayName(t.node), "  " + displaySize(s.allocated(t.node), locale: locale))
+    return (s.displayName(t.node), "  " + displaySize(OverlaySource(s, overlay).allocated(t.node), locale: locale))
 }
 
 extension Snapshot {

@@ -20,6 +20,8 @@ import TesseraeKit
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
+    @StateObject private var jetsamUI = JetsamPresentation()
+    @State private var showJetsam = true
     /// The frame-gate runner exists only when `TESSERAE_FRAME_TIMING=1`.
     @State private var phaseGate: PhaseGateRunner? = FrameTimer.shared.isEnabled ? PhaseGateRunner() : nil
     @State private var showScanReport = false
@@ -36,13 +38,42 @@ struct ContentView: View {
             if model.colourChoice == 2 { focusControls }
             if let session = model.session {
                 HSplitView {
-                    SessionView(session: session, mode: model.colourMode, dark: dark, grantAccess: { model.sendOnboarding(.openSettings) })
+                    SessionView(session: session, mode: model.colourMode, dark: dark, grantAccess: { model.sendOnboarding(.openSettings) },
+                        stage: stage, stagingDisabled: model.stagingUnavailable || model.isScanning || model.jetsamBusy || jetsamUI.showingConfirmation,
+                        jetsamUI: jetsamUI, showJetsam: showJetsam, appModel: model)
                         .id(session.id)
                     if showScanReport { ScanReportView(report: session.scanReport) }
                 }
             } else {
-                welcome
+                HSplitView {
+                    welcome
+                    if showJetsam {
+                        ScrollView {
+                            RecentlyTrashedView(entries: jetsamUI.history, messages: jetsamUI.messages, restoring: jetsamUI.restoring, canRestore: model.canPutBack,
+                                restore: { entry in Task { await jetsamUI.restore(entry, model: model) } })
+                            JetsamStatusView(logFailed: jetsamUI.logFailed)
+                        }.frame(minWidth: 300, idealWidth: 350)
+                    }
+                }
             }
+        }
+        .onChange(of: model.session?.id) { _ in
+            if !jetsamUI.running { jetsamUI.showingConfirmation = false }
+        }
+        .focusedSceneValue(\.jetsamCommands, JetsamCommandsValue(
+            canStage: model.session != nil && !model.stagingUnavailable && !model.isScanning && !model.jetsamBusy && !jetsamUI.showingConfirmation,
+            canRemove: model.session != nil && !model.jetsamBusy && !jetsamUI.showingConfirmation,
+            stage: stage, remove: { if let session = model.session { session.jetsam.unstage(session.selection.nodes) } }))
+        .sheet(isPresented: $jetsamUI.showingConfirmation) {
+            Group {
+                if jetsamUI.running {
+                    TrashProgressView(done: jetsamUI.done, total: jetsamUI.confirmation.items.count)
+                } else {
+                    ConfirmTrashSheet(confirmation: $jetsamUI.confirmation,
+                        cancel: { jetsamUI.showingConfirmation = false },
+                        move: { Task { await jetsamUI.execute(model) } })
+                }
+            }.interactiveDismissDisabled(jetsamUI.running)
         }
         .frame(minWidth: 960, minHeight: 580)
         .onReceive(NotificationCenter.default.publisher(for: .init("TesseraeRunFrameGate"))) { _ in
@@ -63,8 +94,9 @@ struct ContentView: View {
             ToolbarItemGroup {
                 Button { model.scan(URL(fileURLWithPath: "/System/Volumes/Data")) } label: {
                     Label("Scan Data Volume", systemImage: "internaldrive")
-                }
-                Button { chooseFolder() } label: { Label("Scan Folder…", systemImage: "folder") }
+                }.disabled(jetsamUI.showingConfirmation)
+                Button { chooseFolder() } label: { Label("Scan Folder…", systemImage: "folder") }.disabled(jetsamUI.showingConfirmation)
+                Button("Jetsam") { showJetsam.toggle() }
                 if model.session != nil {
                     Button { showScanReport.toggle() } label: { Label("Scan report", systemImage: "doc.text.magnifyingglass") }
                         .help("Show or hide the scan report")
@@ -125,6 +157,12 @@ struct ContentView: View {
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func stage() {
+        guard !jetsamUI.showingConfirmation else { return }
+        model.stageSelection()
+        showJetsam = true
+    }
+
     private func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -149,6 +187,11 @@ private struct SessionView: View {
     var mode: ColourMode
     var dark: Bool
     var grantAccess: () -> Void
+    var stage: () -> Void
+    var stagingDisabled: Bool
+    @ObservedObject var jetsamUI: JetsamPresentation
+    var showJetsam: Bool
+    let appModel: AppModel
     @Environment(\.locale) private var locale
 
     var body: some View {
@@ -172,7 +215,7 @@ private struct SessionView: View {
                     }
                 }
                 Spacer()
-                Text(displaySize(session.root == Tile.noNode ? 0 : session.snapshot.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(.secondary)
+                Text(displaySize(session.root == Tile.noNode ? 0 : session.source.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(.secondary)
             }.padding(12)
             Divider()
             HSplitView {
@@ -192,6 +235,7 @@ private struct SessionView: View {
                                     onZoomChanged: { session.setZoomRunning($0, generation: generation) },
                                     onDroppedTiles: { session.droppedTileCount = $0 },
                                     onHover: { session.hover(tile: $0) },
+                                    onStage: stagingDisabled ? nil : stage,
                                     colourOf: { colourIndex(for: $0, in: session.snapshot, mode: mode) })
                                 LabelsOverlay(
                                     labels: session.labels, palette: Palette.colours(mode, dark: dark),
@@ -213,7 +257,7 @@ private struct SessionView: View {
                         .onChange(of: geometry.size) { session.resize(to: $0) }
                     }.frame(minHeight: 220)
                     Divider()
-                    TablePane(rows: session.table, selection: session.selection)
+                    TablePane(rows: session.table, selection: session.selection, stage: stage, stagingDisabled: stagingDisabled)
                         .frame(minHeight: 150, idealHeight: 220)
                 }.frame(minWidth: 600)
                 ScrollView {
@@ -222,9 +266,28 @@ private struct SessionView: View {
                             ReconciliationView(model: model, grantAccess: grantAccess).padding(16)
                             Divider()
                         }
-                        InspectorPane(model: session.inspectorModel)
+                        InspectorPane(model: session.inspectorModel, stage: stage, stagingDisabled: stagingDisabled, unavailable: appModel.stagingUnavailable,
+                            unavailableMessage: session.changedSinceScan ? JetsamCopy.changedSinceScan : JetsamCopy.unavailable)
+                        if appModel.stagingUnavailable { Text(session.changedSinceScan ? JetsamCopy.changedSinceScan : JetsamCopy.unavailable).padding(16) }
                     }
                 }.frame(width: 240)
+                if showJetsam {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            JetsamPane(jetsam: session.jetsam, unavailable: appModel.stagingUnavailable,
+                                unavailableMessage: session.changedSinceScan ? JetsamCopy.changedSinceScan : JetsamCopy.unavailable, preparing: appModel.isPreparingJetsam || session.isPreparingJetsam,
+                                busy: jetsamUI.showingConfirmation || appModel.isScanning || appModel.jetsamBusy, confirm: { jetsamUI.prepare(session.jetsam.items, model: appModel) })
+                            JetsamStatusView(rescanCount: session.needsRescan ? session.overlay.deleted.count : nil,
+                                logFailed: jetsamUI.logFailed)
+                            if let result = jetsamUI.result {
+                                TrashSummaryView(result: result, entries: jetsamUI.resultEntries, messages: jetsamUI.messages, restoring: jetsamUI.restoring, canRestore: appModel.canPutBack,
+                                    restore: { entry in Task { await jetsamUI.restore(entry, model: appModel) } })
+                            }
+                            RecentlyTrashedView(entries: jetsamUI.history, messages: jetsamUI.messages, restoring: jetsamUI.restoring, canRestore: appModel.canPutBack,
+                                restore: { entry in Task { await jetsamUI.restore(entry, model: appModel) } })
+                        }
+                    }.frame(minWidth: 300, idealWidth: 350)
+                }
             }
         }
     }
@@ -247,10 +310,16 @@ private struct SessionView: View {
 
 private struct InspectorPane: View {
     @ObservedObject var model: InspectorModel
+    var stage: () -> Void
+    var stagingDisabled: Bool
+    var unavailable: Bool
+    var unavailableMessage = JetsamCopy.unavailable
     @Environment(\.locale) private var locale
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Inspector").font(.headline)
+            Button("Add to Jetsam", action: stage).disabled(stagingDisabled)
+                .help(unavailable ? unavailableMessage : "Stage the selected items (⌘⌫)")
             if let info = model.info {
                 Text(info.displayTitle).font(.callout).lineLimit(1).truncationMode(.middle)
                     .help(info.displayTitle).textSelection(.enabled)
@@ -278,12 +347,14 @@ private struct InspectorPane: View {
 private struct TablePane: View {
     @ObservedObject var rows: FileTableRows
     let selection: Selection
+    var stage: () -> Void
+    var stagingDisabled: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Largest 1,000 files in this folder · column sorts apply to this list")
                 .font(.caption).foregroundStyle(.secondary).padding(8)
             if let content = rows.content {
-                FileTableView(snapshot: content.snapshot, rows: content.rows, selection: selection) { key, ascending in
+                FileTableView(snapshot: content.snapshot, rows: content.rows, selection: selection, onStage: stagingDisabled ? nil : stage) { key, ascending in
                     Task { await rows.sort(by: key, ascending: ascending) }
                 }
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
@@ -293,4 +364,17 @@ private struct TablePane: View {
 
 private func colour(_ value: SIMD4<Float>) -> Color {
     Color(.sRGB, red: Double(value.x), green: Double(value.y), blue: Double(value.z), opacity: Double(value.w))
+}
+
+private struct JetsamPane: View {
+    @ObservedObject var jetsam: Jetsam
+    var unavailable: Bool
+    var unavailableMessage = JetsamCopy.unavailable
+    var preparing: Bool
+    var busy: Bool
+    var confirm: () -> Void
+    var body: some View {
+        JetsamView(items: jetsam.items, unavailable: unavailable, unavailableMessage: unavailableMessage, preparing: preparing, busy: busy,
+            remove: { jetsam.unstage([$0]) }, confirm: confirm)
+    }
 }

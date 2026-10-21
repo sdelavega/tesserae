@@ -108,6 +108,14 @@ final class TreemapInteraction {
     }
 
     /// The button went down at `p`.
+    func selectForContext(at point: CGPoint) -> Bool {
+        guard let index = hitTester.tile(at: point, in: tiles) else { return false }
+        let node = tiles[index].node
+        guard node != Tile.noNode else { return false }
+        if selection?.nodes.contains(node) != true { selection?.nodes = [node] }
+        return true
+    }
+
     func press(at p: CGPoint) {
         pressed = hitTester.tile(at: p, in: tiles)
     }

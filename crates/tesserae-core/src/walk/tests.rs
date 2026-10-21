@@ -1229,6 +1229,8 @@ fn dataless_hardlink_duplicate_does_not_double_count_logical_bytes() {
     let e = crate::parse::entries(&buf, 1).next().unwrap().unwrap();
     assert_eq!(e.flags, 0x40000000);
     assert_eq!(e.obj_type, ObjType::Reg);
+    assert_ne!(e.file_id, 0, "precondition: real bulk identity");
+    let expected_id = e.file_id;
     let inodes = InodeSet::new(1);
     let budget = NodeBudget::new(u64::MAX);
     let halt = Halt::new();
@@ -1285,6 +1287,7 @@ fn dataless_hardlink_duplicate_does_not_double_count_logical_bytes() {
     let (arena, stats) = w.finish();
     let snapshot = crate::freeze::freeze(vec![arena], stats);
     assert_eq!(snapshot.nodes.len(), 3, "precondition: no hidden children");
+    assert_eq!(snapshot.file_ids, vec![0, expected_id, expected_id]);
     let frozen = snapshot
         .nodes
         .iter()
@@ -1312,6 +1315,8 @@ fn dataless_root_is_admitted_without_open_in_serial_and_pool_even_if_policy_fail
             st.st_mode = libc::S_IFDIR;
             st.st_flags = 0x40000000;
             st.st_mtime = 123;
+            st.st_ino = 456;
+            st.st_dev = 789;
             Ok(st)
         }
         fn open_dir_at(&self, _: RawFd, _: &CStr) -> Result<OwnedFd, c_int> {
@@ -1347,6 +1352,8 @@ fn dataless_root_is_admitted_without_open_in_serial_and_pool_even_if_policy_fail
                 crate::arena::FLAG_DATALESS | FLAG_PERM_DENIED
             );
             assert_eq!(node.modified, 123);
+            assert_eq!(node.file_id, 456);
+            assert_eq!(stats.root_device, 789);
             assert_eq!((node.logical, node.allocated), (0, 0));
             assert_eq!(
                 (stats.dirs, stats.files, stats.dataless.directories),
@@ -1358,6 +1365,60 @@ fn dataless_root_is_admitted_without_open_in_serial_and_pool_even_if_policy_fail
             assert_eq!(stats.no_materialize_failed, failed);
             assert!(stats.started_at > 0);
             assert_eq!(stats.incomplete, None);
+        }
+    }
+}
+
+#[test]
+fn file_ids_match_lstat_for_every_node() {
+    use std::os::unix::fs::MetadataExt;
+    let fx = Fixture::new().unwrap();
+    fx.file("file", 17).unwrap();
+    fx.dir("dir").unwrap();
+    fx.dir("locked").unwrap();
+    fx.chmod("locked", 0o000).unwrap();
+    fx.symlink("file", "symlink").unwrap();
+    fx.hardlink("file", "hardlink").unwrap();
+    let root = fs::symlink_metadata(fx.path()).unwrap();
+    assert_ne!(root.ino(), 0);
+    for (parallel, skip_root) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut options = opts(fx.path());
+        options.skip = vec![if skip_root {
+            fx.path().to_path_buf()
+        } else {
+            fx.path().join("dir")
+        }];
+        let (arenas, stats) = if parallel {
+            crate::pool::walk(&options).unwrap()
+        } else {
+            let (arena, stats) = walk_serial(&options).unwrap();
+            (vec![arena], stats)
+        };
+        assert_eq!(stats.incomplete, None);
+        assert_eq!(stats.unreadable.len(), usize::from(!skip_root));
+        assert_eq!(stats.root_device, root.dev() as i32);
+        let s = crate::freeze::freeze(arenas, stats);
+        assert_eq!(s.nodes.len(), if skip_root { 1 } else { 6 });
+        assert_eq!(s.file_ids.len(), s.nodes.len());
+        let mut links = Vec::new();
+        for (i, node) in s.nodes.iter().enumerate() {
+            let name =
+                &s.names[node.name_off as usize..node.name_off as usize + node.name_len as usize];
+            let path = if i == 0 {
+                fx.path().to_path_buf()
+            } else {
+                fx.path().join(std::ffi::OsStr::from_bytes(name))
+            };
+            let meta = fs::symlink_metadata(path).unwrap();
+            assert_ne!(meta.ino(), 0);
+            assert_eq!(s.file_ids[i], meta.ino());
+            if name == b"file" || name == b"hardlink" {
+                links.push(s.file_ids[i]);
+            }
+        }
+        assert_eq!(links.len(), if skip_root { 0 } else { 2 });
+        if !skip_root {
+            assert_eq!(links[0], links[1]);
         }
     }
 }

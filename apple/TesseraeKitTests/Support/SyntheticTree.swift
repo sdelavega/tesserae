@@ -94,8 +94,8 @@ struct SyntheticTree: TreeSource {
         }
     }
 
-    func children(_ i: UInt32) -> Range<UInt32> {
-        starts[Int(i)]..<(starts[Int(i)] + counts[Int(i)])
+    func children(_ i: UInt32) -> ChildList {
+        ChildList(starts[Int(i)]..<(starts[Int(i)] + counts[Int(i)]))
     }
 
     func allocated(_ i: UInt32) -> UInt64 { sizes[Int(i)] }

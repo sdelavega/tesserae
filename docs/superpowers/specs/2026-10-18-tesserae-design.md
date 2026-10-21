@@ -251,7 +251,17 @@ pub struct TessNode {
 }
 ```
 
-48 bytes aligned. 1–3M files costs 48–144 MB; 10M files costs 480 MB.
+48 bytes aligned. Each snapshot also stores an 8-byte file ID per node in a
+parallel side array, permuted with the nodes at freeze; zero means unavailable.
+The node plus identity arrays cost 56–168 MB for 1–3M nodes and 560 MB for
+10M nodes, excluding names and other snapshot storage. The scan root's
+`st_dev` is recorded once in `TessScanStats.root_device`; Swift reads identity
+through `Snapshot.fileID(_:)` and `rootDevice`. Walk nodes retain their own
+IDs until freeze finishes, so peak RSS includes both copies. Phase 4 measured
+54,736,000 retained identity bytes for 6,842,000 nodes and a peak RSS increase
+of 108,298,240 bytes (103.28 MiB). An in-place side-array permutation is deferred
+unless peak memory becomes a user problem (see `docs/benchmarks.md`, Phase 4
+per-node identity).
 
 **`modified`** was added in Phase 2 for the treemap's Age colour mode and the
 inspector, growing the node from 40 to 48 bytes; it is appended after
@@ -825,9 +835,9 @@ alignment), matched field for field by a test that reads it back through a
 compute kernel. The border is one *device* pixel wide and is the fill's RGB
 times 0.7. Palette values are sRGB-encoded and written **unconverted** into a
 `bgra8Unorm` target (so a stored byte is the palette's hex value), and the
-view's colour space tells the compositor how to read them. The shader does not
-read `flags`: the selection outline and the lock badges are drawn by the app
-as overlays (below). If an instance buffer cannot be allocated, the budget is
+view's colour space tells the compositor how to read them. The shader reads
+`flags` only for the Phase 4 staged hatch; the selection outline and the lock
+badges are drawn by the app as overlays (below). If an instance buffer cannot be allocated, the budget is
 halved and the tiles past it, the deepest, are not drawn; the renderer counts
 them (`droppedTileCount`) and the window shows a banner, so a clamped render is
 never silent.
@@ -902,7 +912,8 @@ Two binding obligations:
   not merely a convenience.
 - Identity is never colour-alone: the focus legend is always present (with
   VoiceOver labels). The 45°/135° line texture is **not built in Phase 2**:
-  nothing draws it, since the shader does not read `flags` yet. It remains the
+  the shader reads `flags` for the Phase 4 staged hatch, while this separate
+  accessibility texture remains unbuilt. It remains the
   specified answer for the accessibility setting, print and `forced-colors`,
   and Phase 2 relies on the legend, the labels and the file table.
 
@@ -1013,6 +1024,10 @@ On a navigation, the table's work (like the labels') starts once motion has
 settled.
 
 ### Window and session
+
+Tesserae has one window, one `ContentView` and one `AppModel`, using a SwiftUI
+`Window` scene (macOS 13+). There is no New Window command. Scanning replaces
+the session in that window.
 
 The window is a toolbar (Scan Data Volume, Scan Folder…, Cancel, the colour
 picker), a scan progress view (counts and entries per second, never a
@@ -1188,99 +1203,259 @@ it and offer nothing destructive as a fallback.
 
 ### The guard list
 
-**Policy layer** — paths refused on principle:
+The pure policy and physics layers return `Verdict.ok`, `.warn(Reason)` or
+`.denied(Reason)`. `allVerdicts` evaluates every applicable rule, ordered with
+denials before warnings; `combinedVerdict` returns the strongest. Staging
+keeps that verdict **and every warning**, so an app-container warning cannot
+hide a cloud-only or hard-link warning.
 
-| Denied | Why |
+| Reason | As-built rule |
 |---|---|
-| `/System`, `/bin`, `/sbin`, `/Library/Apple` | OS integrity |
-| `/usr` except `/usr/local` | OS integrity |
-| `/private/var/db`, `/cores`, `/private/var/vm` | system state, swap |
-| `/private/var/folders` | every app's `$TMPDIR`; removal breaks running apps confusingly |
-| `.Trashes`, `.Spotlight-V100`, `.fseventsd` | system-managed |
-| `Backups.backupdb` | needs `tmutil delete`; Finder-style removal corrupts it |
-| volume root and its first-level children | nothing good comes of this |
-| anything on a different volume than the scan root | no cross-volume surprises |
-| the running app bundle or any ancestor | self-deletion |
+| `nonCanonicalPath` | Deny empty or relative paths and any `.` or `..` component; never resolve these lexically across symlinks. |
+| `osIntegrity` | Deny `/System`, `/bin`, `/sbin`, `/Library/Apple`, and `/usr` except `/usr/local`, including descendants. |
+| `systemState` | Deny `/private/var/db`, `/cores`, `/private/var/vm` and descendants. |
+| `appTemporaryFiles` | Deny `/private/var/folders` and descendants. |
+| `alreadyInTrash` | Deny any `.Trash` or `.Trashes` component anywhere, including iCloud Drive; “Already in the Trash — empty it from Finder.” |
+| `systemManaged` | Deny `.Trashes`, `.Spotlight-V100`, `.fseventsd` components. |
+| `timeMachineBackup` | Deny `Backups.backupdb` components. |
+| `userAccountCore` | Deny the home directory itself and `~/Library` itself. |
+| `volumeRootOrTopLevel` | Deny the volume mount point and its immediate children, **not** the scan folder and its children. |
+| `otherVolume` | Deny an observed device different from the snapshot root device. |
+| `selfOrAncestorOfApp` | Deny the running app bundle, anything inside it, and its ancestors. |
+| `restricted` | Deny observed `SF_RESTRICTED` (SIP). |
+| `immutable` | Deny observed `UF_IMMUTABLE` or `SF_IMMUTABLE`. |
+| `symlinkInPath` | Deny a symlink item or symlinked ancestry found by identity verification. |
+| `appContainer` | Warn for `~/Library/Containers`, `~/Library/Group Containers`, their descendants and ancestors that are not otherwise denied. Removing a container resets an app, including sandboxed documents. |
+| `cloudOnly` | Warn for observed `SF_DATALESS`: removal affects iCloud on every device and frees no local space. |
+| `otherHardLinks` | Warn for a non-directory with observed link count > 1; space is freed only when every link is gone. |
+| `changedSinceScan` | Staging denies gone, unreadable, replaced, different-device or changed-type identities. |
+| `noRecordedIdentity` | Staging denies a missing/zero snapshot file ID. |
+| `containsUnknownSize` | Warn if a staged directory has unreadable, requested-skip or dataless descendants; retain the known part plus unknown content. |
+| `containsCloudOnly` | Warn if a staged directory contains cloud-only descendants; removal affects iCloud on every device. |
+| `containsHardLinks` | Warn for snapshot `HARDLINK_DUP` descendants or non-directory descendants observed with live link count > 1 at execution; unreviewed warnings refuse the move. Reclaim remains an upper bound. |
 
-**Warn, don't deny:** `~/Library/Containers` and `~/Library/Group
-Containers`. Removing a container resets an app *including the documents of
-sandboxed apps* — user data loss, but a legitimate informed choice. Hard
-warning, explicit per-item confirmation, never silent.
-
-**Physics layer** — what the OS itself refuses: check `st_flags` for
-`SF_RESTRICTED` (SIP; unmodifiable even by root) and
-`UF_IMMUTABLE`/`SF_IMMUTABLE`. The flag check catches what the path list
-forgot; the path list expresses policy the flags don't.
+Policy matching folds ASCII component case conservatively. It normalises
+`/System/Volumes/Data/...` to its firmlinked `/...` spelling **for policy
+comparison**, including the mount point, home and app paths. Thus Data-volume
+`Users` is still top-level, `private/var/db` is still denied, and ordinary Data
+files are not all rejected by `/System`. Raw bytes remain intact for filesystem
+operations. `GuardContext` holds canonical `scanRoot`, kernel-derived
+`volumeRoot` (`statfs.f_mntonname`), root device, app bundle and both the given and `realpath`-resolved home
+spellings. Every home rule matches either spelling. Action paths are never
+resolved to bypass identity checks. The caller
+builds it once per session off the main actor; context fields are trusted caller
+inputs. If it cannot be built, staging is disabled with an explicit rescan message.
+A foreign-volume path is always refused by the device check even when policy
+alone has no matching denial.
 
 ### Time-of-check to time-of-use
 
-Immediately before each operation:
+`ProductionFileStat` uses raw path bytes with `fstatat(AT_FDCWD, ...,
+AT_SYMLINK_NOFOLLOW)`. Immediately before each move:
 
-1. **Re-stat and compare identity** — inode and device against the
-   snapshot's record. Mismatch skips the item and reports it.
-2. **Reject symlinked ancestry** — `lstat` up the parent chain and refuse
-   any path with a symlink component.
-3. **Re-run both guard layers** on the resolved path.
+1. Re-stat the item and inspect every proper ancestor, refusing symlink ancestry
+   (including the `/var` symlink); no ancestor traversal is hidden in a lossy URL.
+2. Compare symlink status, device, file ID and directory type with the snapshot.
+   ENOENT/ENOTDIR means gone; other stat failures remain `unreadable(errno)`.
+3. Take the guard observation and recheck identity against it too, failing closed
+   if this second stat witnesses replacement. Re-run policy and physics.
+4. Require consent for the complete frozen reviewed warning set. Every current
+   warning must belong to that set; a new or replacement warning produces
+   `notConfirmed(newReason)`, including warnings hidden beneath a stronger one.
+   Refuse a URL that changes the original raw bytes.
 
 `trashItem` takes a URL, not a directory fd, so Foundation offers no way to
-make this atomic. **This is a correctness guard against ordinary
-filesystem churn, not a security boundary against a local attacker** — and
-the threat model (your own Mac, your own files) does not require one.
+make this atomic. **This is a correctness guard against ordinary filesystem
+churn, not a security boundary against a local attacker.**
 
 ### Staging
 
-```swift
-struct JetsamItem {
-    let nodeIndex: UInt32
-    let path: URL
-    let recordedInode: UInt64
-    let recordedDevice: dev_t
-    let recordedSize: UInt64
-    let isDirectory: Bool
-    var verdict: Verdict
-}
+`JetsamItem` stores `nodeIndex`, raw `path: Data`, `recorded: Recorded`
+(file ID, device and directory type), `recordedSize: UInt64?`, strongest
+`verdict`, frozen `warnings: [Reason]`, `hasUnknownContent` and descendant
+node references with snapshot ownership, plus `overlayRevision` and `sessionID`.
+An entirely unknown item's size is nil, never zero. A mixed
+directory retains its known allocated bytes and separately counts its unknown
+content in confirmation, audit and results. A fresh dataless observation also
+makes the staged size unknown. Ancestor staging keeps the union of dropped
+descendants' warnings. Staging uses the session's `OverlaySource`: removed
+subtrees and their bytes are excluded, so later batches do not count them again.
 
-enum Verdict { case ok, warn(Reason), denied(Reason) }
-```
+Preparation runs on a background actor. The main actor captures the immutable
+snapshot and overlay revision, shows **“Preparing…”**, and disables Move to Trash
+until
+the generation-checked result is published. Cancellation, rescan or session
+replacement discards an unfinished result. Publication requires the same session,
+preparation generation and overlay revision. Descendants retain compact node
+indices and snapshot ownership; full descendant paths are constructed only on
+the execution actor. Denied directories never incur the subtree walk.
 
-- Staging a directory stages **one item**, recursively — not its contents.
-- **Ancestry dedup:** staging `~/foo` then `~/foo/bar` drops the
-  descendant, or the total double-counts and the second operation fails.
-- Staged verdicts are UI hints; **execution verdicts decide.**
+Every actual overlay removal or restoration advances a monotonically increasing
+revision, including zero-byte membership changes. A rescan creates a new session
+identity. Prepared items and the confirmation freeze both session and revision;
+the sheet executes its frozen items, never substitutes the latest staged list.
+Any overlay change invalidates an open review and re-prepares the remaining
+staged items (conservatively rebuilding all, including affected ancestors).
+Newly included warnings start unchecked in a fresh review. The executor refuses
+an item from another session or revision as **“changed since review”**, without
+a Trash call, even if its path and file identity still match.
+
+One process-wide `JetsamCoordinator`, shared by every `AppModel`, holds a permit
+from scan start, preparation, restore or execution through its main-actor
+publication/overlay update. Awaiting the permit suspends without
+blocking the main actor. A restore already in flight therefore cannot change
+membership behind a preparation or an executing review. Stage requests queued
+behind a restore capture the updated overlay after acquiring the permit.
+Move to Trash and new reviews are unavailable while preparation, restoration or
+execution is pending. Restore applies its overlay inverse only to the captured
+session when a rescan replaces the visible one; it also invalidates affected
+sessions through the process-wide publication check below.
+
+- Staging a directory stages one item recursively, not its contents.
+- Ancestry dedup removes descendants when their ancestor is staged; an
+  incremental index set avoids rebuilding a set for every staged node.
+- Denied items stay listed but contribute neither bytes nor unknown-size counts.
+- Staged verdicts are hints; execution verdicts decide. The confirmation's
+  reviewed verdicts also prevent a subsequently cleared warning from granting
+  consent the user withheld, or a previously denied item from executing.
+- Selection and the Add to Jetsam command only stage. They never move anything.
 
 ### Execution
 
-A serial background queue — deletion throughput is not worth risking
-ordering bugs for, and serial keeps the audit log coherent.
+`Executor` is an actor with no suspension inside its per-item loop: batches
+are sequential, including audit appends and progress callbacks.
 
-1. Confirmation sheet: count, total, every `.warn` item with its reason.
-2. Per item: re-verify identity → re-run guards → `trashItem` → record
-   `resultingItemURL`.
-3. **One failure never aborts the batch.** Record, continue, report.
-4. Apply size deltas to the overlay, propagating up parent chains.
-5. Summary: trashed / skipped / failed with reasons, plus the reclaim
-   affordance.
+1. Confirmation shows count, known bytes, unknown count, **every warning row and
+   all its warning texts**, and every denied item under “Will be skipped”.
+   Warning items each require an initially unchecked confirmation covering all
+   their displayed warnings. Cancel is the default action. The shipped sheet
+   scrolls with unlimited, vertically expanding warning text.
+2. Re-verify identity, re-run guards, call the production Trasher's single
+   `FileManager.trashItem` call, record its returned destination.
+3. One failure never aborts the batch. Record skipped, not-confirmed,
+   identity-changed, failed (errno), and trashed outcomes. There is no destructive
+   fallback for an unavailable Trash.
+4. Apply removals to the session overlay in a single main-actor transaction.
+5. Summarise outcomes and show “X moved to Trash — empty Trash to reclaim it”,
+   with a separate unknown-size count. **Reclaimable bytes exclude unknown
+   sizes, observed hard-linked files and observed cloud-only items**, regardless
+   of which reason won verdict precedence. Execution checks recorded descendant
+   identities, live link counts and dataless/unreadable facts in one pass, refuses
+   newly applicable warnings,
+   and excludes freshly observed shared or unverified file content from reclaim.
+   Guard/refusal paths do not pay a separate descendant reclaim-stat pass.
+   Directory confirmation and reclaim read **“Up to X”**: links outside the
+   subtree cannot be established from snapshot duplicate flags alone, and
+   recursive content can change since the scan. Known bytes and unknown content
+   remain separate. Offer Open Trash, never Empty Trash.
+
+The snapshot stays immutable. `SizeOverlay` tracks deleted nodes and ancestor
+allocated and logical size deltas (including node and aggregate inspectors); descendant counts also capture zero-byte removals. `OverlaySource`
+and the table hide deleted subtrees. `TreeSource.children` returns `ChildList`:
+unaffected parents retain the contiguous-range fast path; affected parents
+filter deleted children and sort by adjusted size (node index breaks ties).
+Successful Put Back inverses the overlay; a rescan replaces it. More than 10,000
+deleted entries or a root delta above 10% prompts “Sizes include N trashed items;
+rescan for exact figures”, with singular agreement for one item. The status view
+emits no view or layout padding when neither rescan nor log-failure copy applies.
 
 ### Undo, in two layers
 
-**In-app Put Back** from the recorded `resultingItemURL`. **Finder's
-Trash** as the backstop — it works if Tesserae crashes or is uninstalled.
-The safety net must not depend on this code being correct.
+**In-app Put Back** uses the returned `trashURL`. It requires the logged volume
+UUID, device, file ID and directory type to match the current Trash item; legacy
+entries or filesystems without a verifiable UUID are refused with “can't verify
+this volume”. Both source and destination proper ancestors are inspected using
+raw bytes and fail closed on symlinks or unreadable ancestry. The original path
+must be free and its immediate parent must exist as a directory.
+`ProductionMover` uses only `renamex_np(..., RENAME_EXCL)`. ENOTSUP or EINVAL
+produces **“Put Back isn't available on this volume — use Finder's Put Back”**;
+the item stays in Trash. There is no non-atomic rename fallback, copying or
+deletion. exFAT via macOS FSKit lacks RENAME_EXCL (measured 2026-10-20).
+The earlier successful exFAT fallback recheck is superseded by this refusal
+(Ruling F-C1). Validation, move and audit append run on a serial background actor;
+the main actor publishes results and updates the captured session's overlay.
+Put Back is disabled while this model's scan is queued, running or preparing
+facts, and when no session exists for the entry's volume. Independently of the
+single-window UI, restore is also refused while any live registered model is
+scanning a root that contains the original path. After acquiring the shared
+coordinator permit, the model re-checks scan state, captured session identity
+and scan generation; refusal reads **“Put Back is unavailable while scanning —
+try again when the scan finishes, or use Finder”**. Starting a scan also acquires
+that permit, waiting for in-flight restore or execution and its publication
+before snapshot capture begins. Duplicate restores remain disabled during the
+await. An entry without the active session's Trash-to-node mapping still defers
+to Finder with **“This item belongs to an earlier scan. Use Finder's Put Back,
+then rescan.”**
+
+As a defensive publication check, the coordinator keeps a weak registry of live
+`AppModel`s and broadcasts every successful Put Back's original path as raw
+bytes before releasing the permit. Every registered model whose session's scan
+root contains that path but whose snapshot lacks its node (or recorded identity)
+marks the session `changedSinceScan`. A model with an affected queued or running
+scan, including facts preparation, also retains an invalidation flag for that
+scan; its resulting session is published already `changedSinceScan`. Starting a
+fresh scan resets the flag. These checks apply across models independently of
+the single-window UI. Staging is disabled with
+**“Files changed since this scan — rescan to stage items”**, open confirmation
+is invalidated, and execution of previously reviewed items is refused before
+Trash. Re-preparing an ancestor from the incomplete snapshot cannot repair
+missing membership; a fresh scan is required.
+
+A successful `putBack` is logged and inverses the overlay. A missing/invalid
+`trashURL` is `.failed("missing or invalid trashURL")`; only ENOENT/ENOTDIR is
+`trashItemGone`. Occupied, missing-parent and changed-identity cases are distinct.
+Exclusive rename protects an unrelated arriving destination; Foundation's
+validation/action race on the selected source and ancestor paths remains.
+
+**Finder's Trash** remains the backstop if Tesserae crashes or is uninstalled.
+Recently trashed history loads at launch and after every batch/Put Back in a
+detached utility task; publication is on the main actor under a generation guard,
+so an old load cannot replace newer history. Returned destinations also remain
+available for Put Back in the current result when audit appending fails.
 
 ### Audit log
 
-Append-only JSONL at
-`~/Library/Application Support/Tesserae/jettison.log`, size-rotated:
+`Executor` accepts `AuditSink: Sendable` (`append(LogEntry) -> Bool`);
+`JettisonLog` supplies the production append-only JSONL store at
+`~/Library/Application Support/Tesserae/jettison.log`:
 
 ```json
 {"ts":"2026-10-18T14:22:03Z","action":"trash","path":"…","inode":918273,
- "bytes":4194304,"trashURL":"…","result":"ok"}
+ "device":16777234,"volumeUUID":"…","isDirectory":false,
+ "bytes":4194304,"hasUnknownContent":false,"trashURL":"file:///…","result":"ok"}
 ```
 
-It powers Put Back across launches, and when someone reports that the app
-ate their project, both parties need to know what happened. For a tool
-granted Full Disk Access, that record separates a diagnosable bug from an
-unfalsifiable accusation.
+Each entry has exactly one path representation: UTF-8 `path` or base64 raw bytes
+in `pathB64`. Identity includes `device`, optional `volumeUUID` from
+`volumeUUIDStringKey`, and `isDirectory`; `hasUnknownContent` preserves partial
+directory totals. `bytes` is optional for wholly unknown sizes. Every executor outcome gets
+one entry; successful Put Back adds `action: "putBack"`. History reads across
+rotation and excludes restored volume/device identities. All wrappers for a
+canonical directory share a process-wide coordinator and failure state. An
+exclusive `flock` on `jettison.lock` covers each complete rotate/open/write or
+read/decode transaction, including across processes;
+new files use 0600 and the directory 0700. An existing looser directory is
+re-tightened to 0700 best-effort. The default 5 MiB rotation keeps `.1` through
+`.3` **by rename only**, replacing the oldest archive without a separate delete.
+A failed append sets `lastWriteFailed`, does not stop the batch, and shows
+“The Tesserae log couldn't be written; trashing still worked.” A hung local log
+write can still stall a batch; a write deadline is deferred unless observed.
+
+The production source check rejects destructive verbs and unknown regular-file
+types, while allowing read-only `tmutil listlocalsnapshots`; it bans snapshot
+deletion/thinning, `removeItem`, `unlink` and `rmdir`. Deletion test suites also
+reject unwrapped `moveItem` calls; fixture moves use the contained mover. Tests reaching real Trash
+use independent containment on disposable disk images. The coordinator's opt-in
+live XCTest additionally requires a regular marker and a root at least two
+components below its mount; it records failures and Put Back results in JSON,
+never deletes its run directory, and fails on containment breach or a lost item.
+Coordinator live checks completed on 2026-10-20: exFAT Trash succeeded and
+SMB Trash failed without a fallback. The later exFAT Put Back success used the
+now-removed unsafe rename fallback and is superseded: exFAT Put Back is refused
+in-app under F-C1. The coordinator alone re-runs live checks after this fix.
+The full gate also retains the read-only diskutil comparison: up to three
+back-to-back paired samples, accepting any pair within the unchanged 8 MiB
+bound to reduce inter-read skew (Ruling T5-2).
 
 ---
 
@@ -2010,7 +2185,7 @@ machines that need a disk visualizer.
 |---|---|
 | Cold-cache scan is too slow for the stateless design | **Settled on the measured machine in Phase 3** (§13 item 6, Ruling T12-1): five post-purge runs, cold median/worst 3.49/3.98 s per 1M entries against §1's ≈5 s; §3 is settled. Residual: one Apple M5, session drift, and full APFS metadata-cache eviction after purge is not established. Stream progress for large or slower volumes. |
 | Unchecked offset in the bulk parser | Bounds-check against entry and buffer length; fuzz, ASAN, Miri. Accepted residual: a segfault takes the app down. |
-| Deletion bug destroys user data | Trash-only; two guard layers; identity re-verification; audit log; independent test containment; no cleanup presets in 1.0. |
+| Deletion bug destroys user data | Phase 4 guard-list, identity/TOCTOU, consent, subtree uncertainty, two-batch accounting, cross-store audit, background Put Back and contained disk-image suites run under the full gate (counts in `docs/benchmarks.md`). Trash-only; every warning shown and reviewed; persisted volume/device/file/type identity and fail-closed ancestry; atomic exclusive Put Back, with no unsupported-filesystem fallback. No cleanup presets in 1.0. Coordinator live checks completed 2026-10-20: exFAT Trash succeeded, SMB Trash refused. The successful exFAT fallback recheck is superseded by F-C1: in-app Put Back is now refused there; coordinator rechecks after this fix. Residual: Foundation selected-source/ancestor check/action races; recursive contents can change since scan; directory reclaim is “up to”; missing volume UUID prevents in-app restore; local log writes/locks have no deadline but run off-main. |
 | Snapshot use-after-release | Immutability plus ARC ownership plus a Debug liveness assertion on every access, and index checks that trap in every build. One stated code rule. Phase 2 also replaces the whole UI session on a rescan, so no stale index survives. |
 | Zoom is not fluid on a million-node tree | Phase 2 passed on 2026-10-19, but the Phase 3 same-day A/B rerun (Ruling T11-G1) has **no Phase 3 regression versus control; neither build meets the unchanged 0-gap bar today**. Misses are one-vblank presentation delays with draw/encode/GPU on time, attributed to this machine's compositor today; relayout passes 100 ms. Revisit if Phase 3 gaps exceed control. Residual: environmental noise could hide a regression; 120 Hz ProMotion and Intel remain unmeasured, and workloads differ/drift. See [benchmarks](../../benchmarks.md#phase-3-frame-gate-rerun). |
 | `diskutil` plist schema drifts across macOS releases | Parse defensively; missing key means unknown, never error; degrades one UI line. |

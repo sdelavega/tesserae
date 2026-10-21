@@ -48,13 +48,14 @@ struct TesseraeApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("Tesserae", id: "main") {
             if accessReport != nil {
                 ProgressView("Writing access report…").padding()
             } else {
                 ContentView()
             }
         }
+        .commands { JetsamCommands() }
         #if DEBUG
         .commands {
             CommandMenu("Diagnostics") {

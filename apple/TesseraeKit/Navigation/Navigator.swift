@@ -43,6 +43,7 @@ public struct BreadcrumbItem: Equatable, Hashable, Sendable {
 ///   both ends; at the snapshot's root there are no siblings.
 @MainActor
 public final class Navigator: ObservableObject {
+    public private(set) var overlay = SizeOverlay()
     public let snapshot: Snapshot
     @Published public private(set) var root: UInt32
 
@@ -101,16 +102,23 @@ public final class Navigator: ObservableObject {
 
     public func sibling(_ step: Int) {
         guard step != 0, let p = parent(root) else { return }
-        let siblings = snapshot.children(p).filter(isNavigable)
+        let siblings = OverlaySource(snapshot, overlay).children(p).filter(isNavigable)
         guard let here = siblings.firstIndex(of: root) else { return }
         let (sum, overflow) = here.addingReportingOverflow(step)
         let target = overflow ? (step > 0 ? siblings.count - 1 : 0) : min(max(sum, 0), siblings.count - 1)
         root = siblings[target]
     }
 
+    func updateOverlay(_ overlay: SizeOverlay) {
+        self.overlay = overlay
+        var next = root
+        while next != snapshot.root, overlay.isDeleted(next, in: snapshot), let p = parent(next) { next = p }
+        if next != root { root = next }
+    }
+
     /// A directory with something to lay out: readable.
     private func isNavigable(_ node: UInt32) -> Bool {
-        snapshot.isDirectory(node) && !snapshot.isPermissionDenied(node)
+        !overlay.isDeleted(node, in: snapshot) && snapshot.isDirectory(node) && !snapshot.isPermissionDenied(node)
     }
 
     private func parent(_ node: UInt32) -> UInt32? {

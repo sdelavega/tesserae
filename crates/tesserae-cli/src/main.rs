@@ -568,10 +568,12 @@ mod tests {
             stalled_at: Some("/v/hung".into()),
             incomplete: Some(Incomplete::Stalled),
             started_at: 1_700_000_000,
+            root_device: 0,
         };
         Report {
             path: "/v".into(),
             snapshot: Snapshot {
+                file_ids: Vec::new(),
                 nodes: Vec::new(),
                 names: Vec::new(),
                 root: NODE_NONE,

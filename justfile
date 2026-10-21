@@ -18,10 +18,11 @@ default:
 # Every check CI runs, in CI's order.
 gate: no-home-paths lint test header ship-lib deny ffi app-test
 
-# Reject personal home paths in every tracked text file (including this recipe).
-# Split the pattern literal so the check does not match its own definition.
+# Reject the running user's home path in every tracked text file. Matching
+# $HOME exactly (not any "/Users/") lets docs discuss macOS paths such as
+# /System/Volumes/Data/Users/… while still catching a leaked home directory.
 no-home-paths:
-    @status=0; git grep -n -I -e '/''Users/' -- . || status=$?; test "$status" -eq 1
+    @status=0; git grep -n -I -F -e "$HOME/" -- . || status=$?; test "$status" -eq 1
 
 # The disk-image integration tests attach and detach real images with hdiutil.
 # `setrlimit` is process-wide, so the descriptor-limit test is `#[ignore]`d in

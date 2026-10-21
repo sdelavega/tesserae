@@ -142,7 +142,7 @@ abi! {
         skip_count = 32, "u64", "uint64_t",
         skip = 40, "*const *const i8", "const char *const *",
     }
-    TessScanStats: 120, 8 {
+    TessScanStats: 128, 8 {
         incomplete = 0, "u32", "uint32_t",
         files = 8, "u64", "uint64_t",
         dirs = 16, "u64", "uint64_t",
@@ -158,6 +158,7 @@ abi! {
         dataless_logical_bytes = 96, "u64", "uint64_t",
         no_materialize_failed = 104, "u32", "uint32_t",
         started_at = 112, "i64", "int64_t",
+        root_device = 120, "i32", "int32_t",
     }
 }
 
@@ -209,6 +210,7 @@ uint64_t (*p_unreadable_count)(const TessSnapshot *) = tess_snapshot_unreadable_
 uint64_t (*p_skipped_count)(const TessSnapshot *) = tess_snapshot_skipped_count;
 const uint8_t *(*p_unreadable_path)(const TessSnapshot *, uint64_t, uint64_t *) = tess_snapshot_unreadable;
 const uint8_t *(*p_skipped_path)(const TessSnapshot *, uint64_t, uint64_t *, uint32_t *) = tess_snapshot_skipped;
+bool (*p_file_id)(const TessSnapshot *, uint32_t, uint64_t *) = tess_snapshot_file_id;
 void (*p_release)(TessSnapshot *) = tess_snapshot_release;
 ";
 
@@ -306,8 +308,8 @@ fn the_header_has_the_layout_constants_and_signatures_in_the_abi_table() {
     );
     assert_eq!(
         PROTOTYPES.lines().count(),
-        16,
-        "all sixteen functions are checked"
+        17,
+        "all seventeen functions are checked"
     );
     assert!(
         source.contains("offsetof(TessNode, modified) == 40"),

@@ -107,6 +107,11 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(app.onboarding.access, .unknown)
         XCTAssertFalse(app.onboarding.isPresented)
         XCTAssertEqual(store.choice, .limited)
+        XCTAssertTrue(app.isScanning, "pending request is queued for the operation permit")
+        for _ in 0..<1000 {
+            if coordinator.state != .idle { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
         XCTAssertNotEqual(coordinator.state, .idle, "pending request starts once a choice is made")
         let relaunched = AppModel(coordinator: ScanCoordinator(), accessLoader: { .unknown }, onboardingStore: store)
         await relaunched.waitForAccess()

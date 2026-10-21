@@ -104,6 +104,7 @@ fn arenas() -> Vec<Arena> {
                 logical: size,
                 allocated: size,
                 modified: 0,
+                file_id: 0,
             })
             .unwrap()
     };

@@ -273,6 +273,8 @@ typedef struct {
   uint32_t no_materialize_failed;
   // Scan start in whole seconds since the Unix epoch, used by Age mode.
   int64_t started_at;
+  // Device of the scan root (st_dev), recorded once at scan start.
+  int32_t root_device;
 } TessScanStats;
 
 
@@ -280,6 +282,12 @@ typedef struct {
 // Engine package version as a static NUL-terminated UTF-8 string.
 // Never free the returned pointer.
 const char *tess_engine_version(void);
+
+// File ID of a node, from the side array parallel to the nodes.
+// Returns false with *out zeroed for a null snapshot, bad index or zero ID.
+// # Safety
+// snapshot must be null or live; out must be null or writable for one u64.
+bool tess_snapshot_file_id(const TessSnapshot *snapshot, uint32_t index, uint64_t *out);
 
 // Number of borrowed unreadable paths. Null snapshot returns zero.
 // # Safety

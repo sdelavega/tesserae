@@ -34,6 +34,7 @@ public final class FileTableModel: @unchecked Sendable {
     public static let defaultLimit = 1000
 
     public let snapshot: Snapshot
+    public let overlay: SizeOverlay
     public let scope: UInt32
     public let limit: Int
 
@@ -46,12 +47,13 @@ public final class FileTableModel: @unchecked Sendable {
 
     /// The table for the subtree of `scope` (the current navigation root):
     /// its `limit` largest files.
-    public convenience init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit) {
-        self.init(snapshot: snapshot, scope: scope, limit: limit, onSort: nil)
+    public convenience init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit, overlay: SizeOverlay = SizeOverlay()) {
+        self.init(snapshot: snapshot, scope: scope, limit: limit, onSort: nil, overlay: overlay)
     }
 
-    init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit, onSort: (@Sendable (Bool) -> Void)?) {
+    init(snapshot: Snapshot, scope: UInt32, limit: Int = FileTableModel.defaultLimit, onSort: (@Sendable (Bool) -> Void)?, overlay: SizeOverlay = SizeOverlay()) {
         precondition(Int(scope) < snapshot.nodes.count, "FileTableModel: scope outside the snapshot")
+        self.overlay = overlay
         self.snapshot = snapshot
         self.scope = scope
         self.limit = limit
@@ -66,7 +68,7 @@ public final class FileTableModel: @unchecked Sendable {
             return c
         }
         lock.unlock()
-        let rows = topK(limit, files: snapshot, under: scope)
+        let rows = topK(limit, files: snapshot, under: scope, overlay: overlay)
         if Task.isCancelled { return [] }  // partial: do not cache
         lock.lock()
         cached = rows
@@ -103,7 +105,7 @@ public final class FileTableModel: @unchecked Sendable {
         let order: (Int, Int) -> Int  // <0: a before b, ascending
         switch key {
         case .allocated:
-            let k = rows.map { s.allocated($0) }
+            let k = rows.map { OverlaySource(s, overlay).allocated($0) }
             order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }
         case .logical:
             let k = rows.map { s.nodes[Int($0)].logical }

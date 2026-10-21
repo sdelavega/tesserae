@@ -26,6 +26,8 @@ import Foundation
 ///   8-bit sRGB image (each byte is the palette's hex value).
 /// * **Border** is one *device* pixel wide, inside the rect, coloured the
 ///   fill's RGB times `TreemapRenderer.borderShade`, rounded as the GPU's unorm store does (see `quantised`).
+/// * **Staged** tiles have a contrasting one-device-pixel outline and diagonal
+///   hatch pixels where the framebuffer x + y is a multiple of eight.
 /// * **Order** is array order (painter's order), under `clearColour`.
 ///
 /// **Rasterisation rule.** Like the GPU, a device pixel belongs to a tile when
@@ -101,11 +103,21 @@ public struct CGTreemapRenderer {
             let innerX = Self.span(Self.firstPixel(x0 + 0.5), Self.lastPixel(x1 - 1.5) + 1, width)
             let innerY = Self.span(Self.firstPixel(y0 + 0.5), Self.lastPixel(y1 - 1.5) + 1, height)
             let c = colours[idx]
-            set(Self.quantised(c, TreemapRenderer.borderShade))
+            let staged = tile.flags & Tile.Flag.staged != 0
+            let ink: Float = c.x * 0.2126 + c.y * 0.7152 + c.z * 0.0722 > 0.5 ? 0 : 1
+            set(staged ? SIMD4(ink, ink, ink, c.w) : Self.quantised(c, TreemapRenderer.borderShade))
             fill(outerX, outerY)
             if !innerX.isEmpty && !innerY.isEmpty {
                 set(Self.quantised(c, 1))
                 fill(innerX.clamped(to: outerX), innerY.clamped(to: outerY))
+                if staged {
+                    set(SIMD4(ink, ink, ink, c.w))
+                    let xRange = innerX.clamped(to: outerX)
+                    for y in innerY.clamped(to: outerY) {
+                        let first = xRange.lowerBound + (8 - (xRange.lowerBound + y) % 8) % 8
+                        for x in stride(from: first, to: xRange.upperBound, by: 8) { fill(x..<(x + 1), y..<(y + 1)) }
+                    }
+                }
             }
         }
         guard let image = ctx.makeImage() else { preconditionFailure("cannot read back the bitmap") }

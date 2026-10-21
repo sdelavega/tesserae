@@ -148,9 +148,9 @@ pub fn freeze(arenas: Vec<Arena>, stats: WalkStats) -> Snapshot {
 
 /// [`freeze`], with allocation failure reported instead of fatal.
 ///
-/// Every allocation (about 48 bytes per node for the snapshot, and roughly as
-/// much again for working arrays while the arenas are still alive, so around
-/// 2.4 GB at the 25M-node budget) goes through `try_reserve_exact`.
+/// Every allocation, including the 48-byte nodes and 8-byte identity side
+/// array, goes through `try_reserve_exact`. Working arrays coexist with the
+/// arenas until freeze finishes, so peak usage exceeds the final snapshot.
 /// `tests/freeze_oom.rs` fails each allocation in turn to hold that to account.
 ///
 /// # Errors
@@ -191,6 +191,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
     if n == 0 {
         return Ok(Snapshot {
             nodes: Vec::new(),
+            file_ids: Vec::new(),
             names: Vec::new(),
             root: NODE_NONE,
             stats,
@@ -342,6 +343,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
 
     let mut names: Vec<u8> = reserved(name_bytes)?;
     let mut nodes: Vec<TessNode> = reserved(n)?;
+    let mut file_ids: Vec<u64> = reserved(n)?;
     for (i, &v) in layout.iter().enumerate() {
         let v = v as usize;
         let name = name_of(v);
@@ -354,6 +356,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
             ObjType::Lnk => flags |= FLAG_SYMLINK,
             ObjType::Reg | ObjType::Other => {}
         }
+        file_ids.push(src[v].file_id);
         nodes.push(TessNode {
             name_off,
             // `NameRef::len` is a u16, so this is the same width.
@@ -377,6 +380,7 @@ pub fn try_freeze(arenas: Vec<Arena>, stats: WalkStats) -> Result<Snapshot, Free
     }
     Ok(Snapshot {
         nodes,
+        file_ids,
         names,
         root: 0,
         stats,
@@ -514,8 +518,25 @@ mod tests {
                 logical,
                 allocated,
                 modified,
+                file_id: 0,
             })
             .expect("node fits")
+    }
+
+    #[test]
+    fn file_ids_survive_freeze_reordering() {
+        let mut a = Arena::new(0, u64::MAX);
+        let root = dir(&mut a, ScanId::NONE, b"root");
+        let small = file(&mut a, root, b"small", 1, 1);
+        let big = file(&mut a, root, b"big", 99, 99);
+        for (id, value) in [(root, 101), (small, 202), (big, 303)] {
+            a.get_mut(id).unwrap().file_id = value;
+        }
+        let s = freeze(vec![a], WalkStats::default());
+        assert_eq!(s.nodes.len(), 3);
+        assert_eq!(name_of(&s, &s.nodes[1]), b"big");
+        assert_eq!(name_of(&s, &s.nodes[2]), b"small");
+        assert_eq!(s.file_ids, vec![101, 303, 202]);
     }
 
     fn dir(arena: &mut Arena, parent: ScanId, name: &[u8]) -> ScanId {
@@ -1052,6 +1073,7 @@ mod tests {
             stalled_at: Some(PathBuf::from("/stuck")),
             incomplete: Some(crate::walk::Incomplete::MalformedBatch),
             started_at: 1_700_000_000,
+            root_device: 42,
         };
         let want = format!("{stats:?}");
         let s = freeze(vec![empty_arena_with_root()], stats);

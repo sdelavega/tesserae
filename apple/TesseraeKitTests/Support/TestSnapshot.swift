@@ -33,6 +33,8 @@ final class TestSnapshot {
         var children: [Spec]?
         var denied = false
         var dataless = false
+        var hardlinkDuplicate = false
+        var skippedByRequest = false
         /// The name's bytes when they are not `name`'s UTF-8 (`name` is then
         /// only the lookup key).
         var rawName: [UInt8]? = nil
@@ -65,7 +67,7 @@ final class TestSnapshot {
     /// Node index by name (names must be unique for this to be useful).
     let index: [String: UInt32]
 
-    init(_ root: Spec, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [Snapshot.RequestedSkip] = [], stalledAt: Data? = nil) {
+    init(_ root: Spec, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [Snapshot.RequestedSkip] = [], stalledAt: Data? = nil, fileIDs: Bool = false) {
         var out: [TessNode] = []
         var bytes: [UInt8] = []
         var byName: [String: UInt32] = [:]
@@ -80,7 +82,9 @@ final class TestSnapshot {
             n.logical = s.logical
             n.modified = s.modified
             if s.children != nil { n.flags |= UInt16(TESS_FLAG_DIR) }
+            if s.hardlinkDuplicate { n.flags |= UInt16(TESS_FLAG_HARDLINK_DUP) }
             if s.dataless { n.flags |= UInt16(TESS_FLAG_DATALESS) }
+            if s.skippedByRequest { n.flags |= UInt16(TESS_FLAG_SKIPPED_REQUEST) }
             if s.denied { n.flags |= UInt16(TESS_FLAG_PERM_DENIED) }
             return n
         }
@@ -111,7 +115,7 @@ final class TestSnapshot {
         names.initialize(from: bytes, count: bytes.count)
         snapshot = Snapshot(
             testingNodes: UnsafeBufferPointer(start: nodes, count: out.count),
-            names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0, stats: stats, unreadable: unreadable, skipped: skipped, stalledAt: stalledAt)
+            names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0, stats: stats, unreadable: unreadable, skipped: skipped, stalledAt: stalledAt, fileIDs: fileIDs ? out.indices.map { UInt64($0 + 1) } : [])
         index = byName
     }
 
@@ -123,5 +127,16 @@ final class TestSnapshot {
     deinit {
         nodes.deallocate()
         names.deallocate()
+    }
+}
+
+// Small semantic fixtures can stage synchronously. Production staging always
+// uses AppModel's coordinator and background preparation actor.
+extension Jetsam {
+    @MainActor
+    func stage(_ nodes: [UInt32], in snapshot: Snapshot, context: GuardContext, stat: FileStat,
+               overlay: SizeOverlay = SizeOverlay()) {
+        publish(Self.prepare(nodes, in: snapshot, context: context, stat: stat,
+            overlay: overlay, existing: items, sessionID: sessionID))
     }
 }

@@ -140,6 +140,7 @@ impl SkipSet {
         let mut arena = Arena::new(0, u64::MAX);
         let mut stats = WalkStats {
             started_at,
+            root_device: metadata.st_dev,
             skipped_by_request: self.missing.clone(),
             ..WalkStats::default()
         };
@@ -164,6 +165,7 @@ impl SkipSet {
                     logical: 0,
                     allocated: 0,
                     modified: metadata.st_mtime,
+                    file_id: metadata.st_ino,
                 })
                 .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
             stats.dirs = 1;

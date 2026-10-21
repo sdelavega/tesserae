@@ -255,6 +255,8 @@ pub struct TessScanStats {
     pub no_materialize_failed: u32,
     /// Scan start in whole seconds since the Unix epoch, used by Age mode.
     pub started_at: i64,
+    /// Device of the scan root (st_dev), recorded once at scan start.
+    pub root_device: i32,
 }
 
 /// Engine package version as a static NUL-terminated UTF-8 string.
@@ -270,6 +272,32 @@ pub const TESS_SKIP_OTHER_VOLUME: u32 = 3;
 pub const TESS_SKIP_NON_LOCAL_MOUNT: u32 = 4;
 /// A cloud-only directory; its contents were not downloaded.
 pub const TESS_SKIP_DATALESS_DIRECTORY: u32 = 5;
+
+/// File ID of a node, from the side array parallel to the nodes.
+/// Returns false with *out zeroed for a null snapshot, bad index or zero ID.
+/// # Safety
+/// snapshot must be null or live; out must be null or writable for one u64.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_snapshot_file_id(
+    snapshot: *const TessSnapshot,
+    index: u32,
+    out: *mut u64,
+) -> bool {
+    guarded(false, || unsafe {
+        let Some(out) = out.as_mut() else {
+            return false;
+        };
+        *out = 0;
+        let Some(snapshot) = snapshot.as_ref() else {
+            return false;
+        };
+        let Some(&id) = snapshot.0.file_ids.get(index as usize) else {
+            return false;
+        };
+        *out = id;
+        id != 0
+    })
+}
 
 /// Number of borrowed unreadable paths. Null snapshot returns zero.
 /// # Safety
@@ -814,6 +842,7 @@ fn scan_stats(walk: &WalkStats) -> TessScanStats {
         dataless_logical_bytes: walk.dataless.logical_bytes,
         no_materialize_failed: u32::from(walk.no_materialize_failed),
         started_at: walk.started_at,
+        root_device: walk.root_device,
     }
 }
 
@@ -986,6 +1015,7 @@ mod tests {
             dataless_logical_bytes: u64::from_ne_bytes([GARBAGE; 8]),
             no_materialize_failed: u32::from_ne_bytes([GARBAGE; 4]),
             started_at: i64::from_ne_bytes([GARBAGE; 8]),
+            root_device: i32::from_ne_bytes([GARBAGE; 4]),
         };
         // SAFETY: `out` is a live struct; `snapshot` is live or null.
         unsafe { tess_snapshot_stats(snapshot, &mut out) };
@@ -1476,6 +1506,7 @@ mod tests {
             stalled_at: None,
             incomplete: Some(Incomplete::Stalled),
             started_at: 9,
+            root_device: 42,
         };
         assert_eq!(
             scan_stats(&walk),
@@ -1495,6 +1526,7 @@ mod tests {
                 dataless_logical_bytes: 13,
                 no_materialize_failed: 1,
                 started_at: 9,
+                root_device: 42,
             }
         );
     }
@@ -1591,6 +1623,7 @@ mod tests {
         let path: &[u8] = b"/Volumes/hung/\xff\x00tail";
         let snapshot = Box::into_raw(Box::new(TessSnapshot(Snapshot {
             nodes: Vec::new(),
+            file_ids: Vec::new(),
             names: Vec::new(),
             root: TESS_NODE_NONE,
             stats: WalkStats {
@@ -1693,6 +1726,7 @@ mod tests {
         let raw = PathBuf::from(OsStr::from_bytes(b"/zero/unreadable\xff\n"));
         let snapshot = Box::into_raw(Box::new(TessSnapshot(Snapshot {
             nodes: Vec::new(),
+            file_ids: Vec::new(),
             names: Vec::new(),
             root: TESS_NODE_NONE,
             stats: WalkStats {
@@ -1775,5 +1809,38 @@ mod tests {
             assert_eq!(tess_snapshot_unreadable_count(ptr::null()), 0);
         }
         release(snapshot);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn file_id_rejects_null_out_of_range_and_zero() {
+        let snapshot = TessSnapshot(Snapshot {
+            nodes: Vec::new(),
+            names: Vec::new(),
+            file_ids: vec![77, 0],
+            root: TESS_NODE_NONE,
+            stats: WalkStats::default(),
+        });
+        // SAFETY: every non-null pointer is live for the call.
+        unsafe {
+            let mut out = 999;
+            assert!(tess_snapshot_file_id(&snapshot, 0, &mut out));
+            assert_eq!(out, 77);
+            for (snap, i) in [
+                (ptr::null(), 0),
+                (&snapshot as *const _, 2),
+                (&snapshot as *const _, u32::MAX),
+                (&snapshot as *const _, 1),
+            ] {
+                out = 999;
+                assert!(!tess_snapshot_file_id(snap, i, &mut out));
+                assert_eq!(out, 0);
+            }
+            assert!(!tess_snapshot_file_id(&snapshot, 0, ptr::null_mut()));
+        }
     }
 }

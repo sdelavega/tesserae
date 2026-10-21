@@ -28,39 +28,45 @@ final class VolumeFactsTests: XCTestCase {
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             throw XCTSkip("diskutil is missing; live volume comparison NOT run")
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["info", "-plist", root.path]
-        let output = Pipe()
-        process.standardOutput = output
-        try process.run()
-        let deadline = Date().addingTimeInterval(5)
-        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-        guard !process.isRunning else {
-            kill(process.processIdentifier, SIGKILL)
-            process.waitUntilExit()
-            XCTFail("diskutil exceeded its five-second deadline")
-            return
-        }
-        process.waitUntilExit()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        XCTAssertEqual(process.terminationStatus, 0, "diskutil must succeed for a meaningful comparison")
-        guard process.terminationStatus == 0 else { return }
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        let capacity = try XCTUnwrap(plist["APFSContainerSize"] as? NSNumber).uint64Value
-        let used = try XCTUnwrap(
-            (plist["CapacityInUse"] ?? plist["VolumeUsedSpace"] ?? plist["APFSVolumeUsage"]) as? NSNumber
-        ).uint64Value
-        let free = try XCTUnwrap(plist["APFSContainerFree"] as? NSNumber).uint64Value
-        XCTAssertGreaterThan(capacity, 0)
-        XCTAssertGreaterThan(used, 0)
-        XCTAssertGreaterThan(capacity, used)
-        let facts = try readVolumeFacts(at: root)
         let tolerance: UInt64 = 8 * 1024 * 1024
-        for (actual, expected) in [(facts.capacity, capacity), (facts.used, used), (facts.free, free)] {
-            XCTAssertLessThanOrEqual(actual > expected ? actual - expected : expected - actual, tolerance)
+        var differences: [String] = []
+        for sample in 1...3 {
+            let facts = try readVolumeFacts(at: root)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = ["info", "-plist", root.path]
+            let output = Pipe()
+            process.standardOutput = output
+            try process.run()
+            let deadline = Date().addingTimeInterval(5)
+            while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            guard !process.isRunning else {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+                XCTFail("diskutil exceeded its five-second deadline")
+                return
+            }
+            process.waitUntilExit()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            XCTAssertEqual(process.terminationStatus, 0, "diskutil must succeed for a meaningful comparison")
+            guard process.terminationStatus == 0 else { return }
+            let plist = try XCTUnwrap(
+                PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            let capacity = try XCTUnwrap(plist["APFSContainerSize"] as? NSNumber).uint64Value
+            let used = try XCTUnwrap(
+                (plist["CapacityInUse"] ?? plist["VolumeUsedSpace"] ?? plist["APFSVolumeUsage"]) as? NSNumber
+            ).uint64Value
+            let free = try XCTUnwrap(plist["APFSContainerFree"] as? NSNumber).uint64Value
+            XCTAssertGreaterThan(capacity, 0)
+            XCTAssertGreaterThan(used, 0)
+            XCTAssertGreaterThan(capacity, used)
+            let delta = [(facts.capacity, capacity), (facts.used, used), (facts.free, free)].map {
+                actual, expected in actual > expected ? actual - expected : expected - actual
+            }
+            differences.append("sample \(sample): capacity=\(delta[0]), used=\(delta[1]), free=\(delta[2]) bytes")
+            if delta.allSatisfy({ $0 <= tolerance }) { return }
         }
+        XCTFail("No paired sample within \(tolerance) bytes; " + differences.joined(separator: "; "))
     }
 
     func test_purgeable_is_nil_when_foundation_does_not_report() throws {

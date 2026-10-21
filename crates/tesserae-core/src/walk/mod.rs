@@ -397,6 +397,8 @@ pub struct WalkStats {
     /// to `i64::MAX`, which is no cutoff at all, for stats that did not come
     /// from a walk.
     pub started_at: i64,
+    /// Device of the scan root from its admission metadata.
+    pub root_device: i32,
 }
 
 impl Default for WalkStats {
@@ -417,6 +419,7 @@ impl Default for WalkStats {
             stalled_at: None,
             incomplete: None,
             started_at: i64::MAX,
+            root_device: 0,
         }
     }
 }

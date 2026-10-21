@@ -39,6 +39,14 @@ public final class AppSession: ObservableObject, Identifiable {
     public let snapshot: Snapshot
     public let navigator: Navigator
     public let selection = Selection()
+    @Published public private(set) var isPreparingJetsam = false
+    @Published public private(set) var changedSinceScan = false
+    public let jetsam: Jetsam
+    @Published public private(set) var overlay = SizeOverlay()
+    public var source: OverlaySource { OverlaySource(snapshot, overlay) }
+    public var needsRescan: Bool { overlay.needsRescan(rootAllocated: snapshot.allocated(snapshot.root)) }
+    private var trashedNodes: [String: UInt32] = [:]
+    public let guardContext: GuardContext?
     public let table = FileTableRows()
     public struct OverlayTile: Identifiable {
         public let id: Int
@@ -86,12 +94,14 @@ public final class AppSession: ObservableObject, Identifiable {
     /// thread-safe (`LabelStyle.measure` is). Tests substitute a probe.
     var labelMeasure: @Sendable (String) -> CGSize = LabelStyle.measure
 
-    init(snapshot: Snapshot, reconciliation: ReconciliationViewModel? = nil, access: AccessState = .unknown, scanTime: Date = Date()) {
+    init(snapshot: Snapshot, reconciliation: ReconciliationViewModel? = nil, access: AccessState = .unknown, scanTime: Date = Date(), guardContext: GuardContext? = nil) {
         scanReport = ScanReport(snapshot: snapshot, caveats: reconciliation?.caveats ?? [], access: access,
             scanTime: scanTime, appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—",
             engineVersion: engineVersion + " (ABI \(abiVersion))")
         self.reconciliation = reconciliation
         self.snapshot = snapshot
+        jetsam = Jetsam(sessionID: id)
+        self.guardContext = guardContext
         navigator = Navigator(snapshot: snapshot)
         root = snapshot.root
         navigator.$root.dropFirst().sink { [weak self] root in
@@ -109,6 +119,12 @@ public final class AppSession: ObservableObject, Identifiable {
             applySelection(&next, nodes)
             self.tiles = next
         }.store(in: &observers)
+        jetsam.$items.sink { [weak self] items in
+            guard let self else { return }
+            var next = self.tiles
+            applyStaging(&next, in: self.snapshot, staged: Set(items.map(\.nodeIndex)))
+            self.tiles = next
+        }.store(in: &observers)
         requestTable()
     }
 
@@ -118,13 +134,120 @@ public final class AppSession: ObservableObject, Identifiable {
     }
 
     public var isEmpty: Bool {
-        snapshot.root == Tile.noNode || (snapshot.allocated(root) == 0 && !snapshot.isPermissionDenied(root))
+        snapshot.root == Tile.noNode || (source.allocated(root) == 0 && !snapshot.isPermissionDenied(root))
     }
 
     public var banner: String? {
+        if changedSinceScan { return JetsamCopy.changedSinceScan }
         let path = snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }
-        return ScanBanner.text(for: snapshot.stats, stalledAt: path,
+        let scan = ScanBanner.text(for: snapshot.stats, stalledAt: path,
             volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath)
+        guard needsRescan else { return scan }
+        let prompt = JetsamCopy.rescan(overlay.deleted.count)
+        return scan.map { $0 + " " + prompt } ?? prompt
+    }
+
+    public func execute(using executor: Executor, confirmedWarnings: Set<UInt32>,
+                        progress: (@Sendable (Int, Int) -> Void)? = nil,
+                        reviewedVerdicts: [UInt32: Verdict]? = nil, reviewedWarnings: [UInt32: Set<Reason>]? = nil,
+                        reviewedItems: [JetsamItem]? = nil, stagingStat: any FileStat = ProductionFileStat()) async -> ExecutionResult {
+        let items = reviewedItems ?? jetsam.items
+        await JetsamCoordinator.shared.acquire()
+        defer { JetsamCoordinator.shared.release() }
+        guard !changedSinceScan else {
+            return ExecutionResult(outcomes: items.map { ($0, .skipped(.changedSinceScan)) },
+                reclaimableBytes: 0, unknownSizeTrashed: 0)
+        }
+        let revision = overlay.revision
+        let result = await executor.run(items, confirmedWarnings: confirmedWarnings, progress: progress,
+            reviewedVerdicts: reviewedVerdicts, reviewedWarnings: reviewedWarnings,
+            currentRevision: revision, currentSessionID: id)
+        for (item, outcome) in result.outcomes {
+            if case .trashed(let url) = outcome {
+                overlay.remove(item.nodeIndex, in: snapshot)
+                trashedNodes[url.absoluteString] = item.nodeIndex
+            }
+        }
+        jetsam.unstage(Set(result.outcomes.compactMap { item, outcome in
+            if case .trashed = outcome { return item.id }; return nil
+        }))
+        if overlay.revision != revision { await reprepareStaged(stat: stagingStat) }
+        refreshOverlay()
+        return result
+    }
+
+    private func reprepareStaged(stat: any FileStat) async {
+        guard let context = guardContext, !jetsam.items.isEmpty else { return }
+        isPreparingJetsam = true
+        defer { isPreparingJetsam = false }
+        let prepared = await PutBackExecutor.shared.prepare(jetsam.items.map(\.nodeIndex),
+            snapshot: snapshot, context: context, stat: stat, overlay: overlay, existing: [], sessionID: id)
+        jetsam.publish(prepared)
+    }
+
+    public func putBack(_ entry: LogEntry, stat: any FileStat, mover: any Mover,
+                        log: any AuditSink = JettisonLog()) async -> PutBackResult {
+        await JetsamCoordinator.shared.acquire()
+        defer { JetsamCoordinator.shared.release() }
+        return await putBackUnderPermit(entry, stat: stat, mover: mover, log: log)
+    }
+
+    fileprivate func putBackUnderPermit(_ entry: LogEntry, stat: any FileStat, mover: any Mover,
+                                       log: any AuditSink) async -> PutBackResult {
+        // History outside this session has no snapshot/overlay membership to
+        // restore safely. Finder followed by a rescan rebuilds those facts.
+        guard let key = entry.trashURL, trashedNodes[key] != nil else {
+            return .failed("This item belongs to an earlier scan. Use Finder's Put Back, then rescan.")
+        }
+        guard let path = entry.path.map({ Data($0.utf8) }) ?? entry.pathB64.flatMap({ Data(base64Encoded: $0) }) else {
+            return .failed("Invalid original path")
+        }
+        guard !JetsamCoordinator.shared.isScanning(containing: path) else { return .failed(JetsamCopy.putBackWhileScanning) }
+        let result = await PutBackExecutor.shared.restore(entry, stat: stat, mover: mover, log: log)
+        if result == .restored, let url = entry.trashURL, let node = trashedNodes.removeValue(forKey: url) {
+            overlay.restore(node, in: snapshot)
+            await reprepareStaged(stat: stat)
+            refreshOverlay()
+        }
+        if result == .restored { JetsamCoordinator.shared.recordRestoration(path, fileID: entry.inode) }
+        return result
+    }
+
+    func recordRestoration(_ entry: LogEntry) {
+        guard let path = entry.path.map({ Data($0.utf8) }) ?? entry.pathB64.flatMap({ Data(base64Encoded: $0) }) else { return }
+        recordRestoration(path, fileID: entry.inode)
+    }
+
+    func markChangedSinceScan() {
+        changedSinceScan = true
+        jetsam.clear()
+    }
+
+    func recordRestoration(_ path: Data, fileID: UInt64) {
+        guard snapshot.root != Tile.noNode else { return }
+        let rootPath = snapshot.rawPath(snapshot.root)
+        let prefix = rootPath == Data([0x2f]) ? rootPath : rootPath + Data([0x2f])
+        guard pathIsWithin(path, root: rootPath) else { return }
+        var node: UInt32? = snapshot.root
+        if path != rootPath {
+            for component in path.dropFirst(prefix.count).split(separator: 0x2f) {
+                node = node.flatMap { parent in
+                    snapshot.children(parent).first { snapshot.nameBytes($0) == Data(component) }
+                }
+                if node == nil { break }
+            }
+        }
+        guard let node, snapshot.fileID(node) == fileID else {
+            markChangedSinceScan()
+            return
+        }
+    }
+
+    private func refreshOverlay() {
+        // No suspension: invalidate stale rows and layout in the same actor turn.
+        requestTable()
+        navigator.updateOverlay(overlay)
+        relayout()
     }
 
     public func resize(to size: CGSize) {
@@ -146,9 +269,10 @@ public final class AppSession: ObservableObject, Identifiable {
         let preparation = FrameTimer.shared.begin("prepare")
         defer { FrameTimer.shared.end(preparation) }
         let layout = FrameTimer.shared.begin("layout")
-        var next = squarify(snapshot, root: root, in: CGRect(origin: .zero, size: size))
+        var next = squarify(source, root: root, in: CGRect(origin: .zero, size: size))
         FrameTimer.shared.end(layout)
         applySelection(&next, selection.nodes)
+        applyStaging(&next, in: snapshot, staged: jetsam.stagedNodes)
         // An empty layout shows the empty state instead of a treemap, so
         // nothing animated before it, and nothing will report after it: the
         // view that shows the next layout is new, and its first update sees
@@ -189,12 +313,12 @@ public final class AppSession: ObservableObject, Identifiable {
             labelTask = nil
             return
         }
-        let tiles = self.tiles, snapshot = self.snapshot, measure = labelMeasure
+        let tiles = self.tiles, snapshot = self.snapshot, measure = labelMeasure, overlay = self.overlay
         let generation = layoutGeneration
         let work = Task.detached(priority: .userInitiated) { () -> [PlacedLabel]? in
             let timing = FrameTimer.shared.begin("labels", tiles: tiles.count)
             defer { FrameTimer.shared.end(timing) }
-            let placed = placeLabels(tiles, in: snapshot, measure: measure)
+            let placed = placeLabels(tiles, in: snapshot, measure: measure, overlay: overlay)
             return Task.isCancelled ? nil : placed
         }
         labelTask = Task { [weak self] in
@@ -214,7 +338,7 @@ public final class AppSession: ObservableObject, Identifiable {
 
     public func hover(tile: Int?) {
         guard let tile, tiles.indices.contains(tile) else { inspectorModel.info = nil; return }
-        inspectorModel.info = inspect(tileAt: tile, in: tiles, snapshot: snapshot)
+        inspectorModel.info = inspect(tileAt: tile, in: tiles, snapshot: snapshot, overlay: overlay)
     }
 
     public func go(to node: UInt32) {
@@ -234,13 +358,19 @@ public final class AppSession: ObservableObject, Identifiable {
     public func loadTable() async {
         guard !Task.isCancelled else { return }
         guard root != Tile.noNode else { return }
-        await table.load(FileTableModel(snapshot: snapshot, scope: root))
+        await table.load(FileTableModel(snapshot: snapshot, scope: root, overlay: overlay))
     }
 }
 
 @MainActor
 public final class AppModel: ObservableObject {
-    @Published public private(set) var session: AppSession?
+    @Published public private(set) var isExecutingJetsam = false
+    public var jetsamBusy: Bool { isPreparingJetsam || isExecutingJetsam || !restoresInFlight.isEmpty }
+    @Published public private(set) var restoresInFlight: Set<String> = []
+    @Published public private(set) var stagingUnavailable = false
+    @Published public private(set) var session: AppSession? {
+        didSet { stagingUnavailable = session != nil && (session?.guardContext == nil || session?.changedSinceScan == true) }
+    }
     @Published public private(set) var scanState: ScanState = .idle
     @Published public var colourChoice = 0
     @Published public private(set) var focusKinds: [FileKind] = []
@@ -259,11 +389,18 @@ public final class AppModel: ObservableObject {
     private let coordinator: ScanCoordinator
     private var observers: Set<AnyCancellable> = []
     private var factsTask: Task<Void, Never>?
-    private var factsWork: Task<(ReconciliationViewModel, AccessState), Never>?
+    private var factsWork: Task<(ReconciliationViewModel, AccessState, GuardContext?), Never>?
     private var scanStartedAt = Date()
+    private var scanGeneration: UInt64 = 0
+    private var scanRoot: Data?
+    private var scanChangedSinceScan = false
+    @Published public private(set) var scanPending = false
+    private var scanStartTask: Task<Void, Never>?
     private var accessWork: Task<AccessState, Never>?
     private let accessLoader: @Sendable () -> AccessState
     private var factsGeneration = 0
+    private let stagingStat: FileStat
+    private let contextLoader: @Sendable (Snapshot) -> GuardContext?
     private let factsLoader: @Sendable (URL, ScanFacts) -> ReconciliationViewModel
 
     public convenience init() { self.init(coordinator: ScanCoordinator()) }
@@ -275,6 +412,8 @@ public final class AppModel: ObservableObject {
          relaunch: @escaping () async throws -> Void = AppModel.openNewInstance,
          terminate: @escaping () -> Void = { NSApp.terminate(nil) },
          homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
+         stagingStat: FileStat = ProductionFileStat(),
+         contextLoader: @escaping @Sendable (Snapshot) -> GuardContext? = AppModel.loadGuardContext,
          factsLoader: @escaping @Sendable (URL, ScanFacts) -> ReconciliationViewModel = ReconciliationViewModel.load) {
         self.homeDirectory = homeDirectory
         self.onboardingStore = onboardingStore
@@ -284,6 +423,8 @@ public final class AppModel: ObservableObject {
         self.terminate = terminate
         self.accessLoader = accessLoader
         self.factsLoader = factsLoader
+        self.contextLoader = contextLoader
+        self.stagingStat = stagingStat
         self.coordinator = coordinator
         coordinator.$snapshot.sink { [weak self] snapshot in
             self?.prepareSnapshot(snapshot)
@@ -297,10 +438,13 @@ public final class AppModel: ObservableObject {
         }.store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.refreshAccess() }.store(in: &observers)
+        JetsamCoordinator.shared.register(self)
         refreshAccess()
     }
 
     deinit {
+        scanStartTask?.cancel()
+        stagingTask?.cancel()
         factsTask?.cancel()
         factsWork?.cancel()
         accessWork?.cancel()
@@ -374,7 +518,95 @@ public final class AppModel: ObservableObject {
         _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
     }
 
+    nonisolated static func loadGuardContext(_ snapshot: Snapshot) -> GuardContext? {
+        guard snapshot.root != Tile.noNode else { return nil }
+        let scanRoot = snapshot.rawPath(snapshot.root)
+        guard let volume = try? volumeRoot(of: scanRoot) else { return nil }
+        let home = URL(fileURLWithPath: NSHomeDirectory()).withUnsafeFileSystemRepresentation {
+            Data(bytes: $0!, count: strlen($0!))
+        }
+        return GuardContext(scanRoot: scanRoot, volumeRoot: volume, scanRootDevice: snapshot.rootDevice,
+                            appBundle: Bundle.main.bundleURL.resolvingSymlinksInPath(), home: home)
+    }
+
+    @Published public private(set) var isPreparingJetsam = false
+    private var stagingGeneration: UInt64 = 0
+    private var stagingTask: Task<Void, Never>?
+
+    public func cancelStaging() {
+        stagingGeneration &+= 1
+        stagingTask?.cancel()
+        isPreparingJetsam = false
+    }
+
+    func waitForStaging() async { await stagingTask?.value }
+
+    public func stageSelection() {
+        guard !isScanning, let session, !session.changedSinceScan, let context = session.guardContext else { return }
+        cancelStaging()
+        let generation = stagingGeneration
+        let nodes = session.selection.nodes.sorted(), stat = stagingStat
+        isPreparingJetsam = true
+        stagingTask = Task { [weak self] in
+            await JetsamCoordinator.shared.acquire()
+            defer { JetsamCoordinator.shared.release() }
+            guard let self else { return }
+            defer { if generation == self.stagingGeneration { self.isPreparingJetsam = false } }
+            guard !Task.isCancelled, !self.isScanning, !session.changedSinceScan,
+                  generation == self.stagingGeneration, self.session === session else { return }
+            let snapshot = session.snapshot, overlay = session.overlay, existing = session.jetsam.items
+            let prepared = await PutBackExecutor.shared.prepare(nodes, snapshot: snapshot, context: context,
+                stat: stat, overlay: overlay, existing: existing, sessionID: session.id)
+            guard !Task.isCancelled, generation == self.stagingGeneration,
+                  self.session === session, !self.isScanning, !session.changedSinceScan,
+                  session.overlay.revision == overlay.revision else { return }
+            session.jetsam.publish(prepared)
+        }
+    }
+
+    public func executeJetsam(confirmedWarnings: Set<UInt32>, trasher: any Trasher = ProductionTrasher(),
+                              stat: any FileStat = ProductionFileStat(), log: any AuditSink = JettisonLog(),
+                              progress: (@Sendable (Int, Int) -> Void)? = nil,
+                              reviewedVerdicts: [UInt32: Verdict]? = nil, reviewedWarnings: [UInt32: Set<Reason>]? = nil,
+                              reviewedItems: [JetsamItem]? = nil) async -> ExecutionResult? {
+        guard !jetsamBusy, !isScanning, let session, !session.changedSinceScan,
+              let context = session.guardContext else { return nil }
+        isExecutingJetsam = true
+        defer { isExecutingJetsam = false }
+        return await session.execute(using: Executor(trasher: trasher, stat: stat, log: log, context: context),
+            confirmedWarnings: confirmedWarnings, progress: progress, reviewedVerdicts: reviewedVerdicts,
+            reviewedWarnings: reviewedWarnings, reviewedItems: reviewedItems, stagingStat: stagingStat)
+    }
+
+    public func putBack(_ entry: LogEntry, stat: any FileStat = ProductionFileStat(),
+                        mover: any Mover = ProductionMover(), log: any AuditSink = JettisonLog()) async -> PutBackResult {
+        let key = entry.trashURL ?? ""
+        guard restoresInFlight.insert(key).inserted else { return .failed("Put Back is already in progress.") }
+        defer { restoresInFlight.remove(key) }
+        let captured = session, generation = scanGeneration
+        await JetsamCoordinator.shared.acquire()
+        defer { JetsamCoordinator.shared.release() }
+        guard !isScanning, generation == scanGeneration, let captured, session === captured,
+              entry.device == captured.snapshot.rootDevice else { return .failed(JetsamCopy.putBackWhileScanning) }
+        return await captured.putBackUnderPermit(entry, stat: stat, mover: mover, log: log)
+    }
+
+    func isScanning(containing path: Data) -> Bool {
+        isScanning && scanRoot.map { pathIsWithin(path, root: $0) } == true
+    }
+
+    func recordRestoration(_ path: Data, fileID: UInt64) {
+        if isScanning(containing: path) { scanChangedSinceScan = true }
+        session?.recordRestoration(path, fileID: fileID)
+        if session?.changedSinceScan == true {
+            cancelStaging()
+            stagingUnavailable = true
+        }
+    }
+
     func prepareSnapshot(_ snapshot: Snapshot?) {
+        cancelStaging()
+        session?.jetsam.clear()
         factsTask?.cancel()
         factsWork?.cancel()
         factsWork = nil
@@ -382,10 +614,12 @@ public final class AppModel: ObservableObject {
         factsGeneration += 1
         let generation = factsGeneration
         guard let snapshot else { session = nil; return }
+        scanRoot = snapshot.rawPath(snapshot.root)
         let path = String(decoding: snapshot.rawPath(snapshot.root), as: UTF8.self)
         let root = URL(fileURLWithPath: path)
         let access = accessWork
         let loader = factsLoader
+        let loadContext = contextLoader
         let scanTime = scanStartedAt
         let limited = coordinator.scanMode == .limited
         let work = Task.detached(priority: .userInitiated) {
@@ -396,13 +630,15 @@ public final class AppModel: ObservableObject {
                     stalledAt: snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }),
                 limited: limited, datalessItems: snapshot.datalessItems, access: state,
                 datalessLogicalBytes: snapshot.datalessLogicalBytes, noMaterializeFailed: snapshot.noMaterializeFailed)
-            return (loader(root, scan), state)
+            return (loader(root, scan), state, loadContext(snapshot))
         }
         factsWork = work
         factsTask = Task { [weak self] in
-            let (model, state) = await work.value
+            let (model, state, context) = await work.value
             guard let self, !Task.isCancelled, generation == self.factsGeneration else { return }
-            self.session = AppSession(snapshot: snapshot, reconciliation: model, access: state, scanTime: scanTime)
+            let session = AppSession(snapshot: snapshot, reconciliation: model, access: state, scanTime: scanTime, guardContext: context)
+            if self.scanChangedSinceScan { session.markChangedSinceScan() }
+            self.session = session
             self.factsTask = nil
             self.factsWork = nil
             self.scanState = self.coordinator.state
@@ -412,7 +648,11 @@ public final class AppModel: ObservableObject {
     func waitForFacts() async { await factsTask?.value }
 
     func replaceSnapshot(_ snapshot: Snapshot?) {
-        session = snapshot.map { AppSession(snapshot: $0) }
+        scanGeneration &+= 1
+        scanChangedSinceScan = false
+        cancelStaging()
+        session?.jetsam.clear()
+        session = snapshot.map { AppSession(snapshot: $0, guardContext: contextLoader($0)) }
     }
 
     public func scan(_ url: URL) {
@@ -425,15 +665,45 @@ public final class AppModel: ObservableObject {
     }
 
     private func startScan(_ url: URL) {
-        scanStartedAt = Date()
+        scanRoot = url.withUnsafeFileSystemRepresentation { p in p.map { Data(bytes: $0, count: strlen($0)) } }
+        scanChangedSinceScan = false
+        cancelStaging()
+        session?.jetsam.clear()
+        scanGeneration &+= 1
+        let generation = scanGeneration
+        scanStartTask?.cancel()
+        scanPending = true
         let mode = scanMode
         let skip = mode == .limited ? ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
             .map { homeDirectory.appendingPathComponent($0) } : []
-        coordinator.start(root: url, mode: mode, skip: skip)
+        scanStartTask = Task { [weak self] in
+            await JetsamCoordinator.shared.acquire()
+            defer { JetsamCoordinator.shared.release() }
+            guard let self, !Task.isCancelled, generation == self.scanGeneration else { return }
+            self.scanStartedAt = Date()
+            self.scanPending = false
+            self.coordinator.start(root: url, mode: mode, skip: skip)
+            self.scanStartTask = nil
+        }
     }
 
-    public func cancel() { coordinator.cancel() }
-    public var isScanning: Bool { if case .scanning = scanState { return true }; return false }
+    public func cancel() {
+        scanGeneration &+= 1
+        scanStartTask?.cancel()
+        scanStartTask = nil
+        scanPending = false
+        coordinator.cancel()
+    }
+    public var isScanning: Bool {
+        if scanPending || factsTask != nil { return true }
+        if case .scanning = scanState { return true }
+        return false
+    }
+    public func canPutBack(_ entry: LogEntry) -> Bool {
+        guard !isScanning, session != nil, entry.device == session?.snapshot.rootDevice,
+              let path = entry.path.map({ Data($0.utf8) }) ?? entry.pathB64.flatMap({ Data(base64Encoded: $0) }) else { return false }
+        return !JetsamCoordinator.shared.isScanning(containing: path)
+    }
     public var colourMode: ColourMode {
         switch colourChoice {
         case 1: return .age(now: Date(timeIntervalSince1970: Double(session?.snapshot.stats.started_at ?? 0)))

@@ -894,3 +894,145 @@ metadata caches are fully flushed is not established. These are five
 post-purge runs on one machine, not a guarantee for every cold-cache state.
 Source: the reconciliation `progress.md` “Task 12 cold run” entries,
 “Task 12 SUMMARY” and Ruling T12-1, checked against the ten local raw outputs.
+
+## Phase 4 per-node identity
+
+Measured 2026-10-20 on the same machine, before and after Task 1, using:
+
+```sh
+/usr/bin/time -l ./target/release/tesserae-cli scan /System/Volumes/Data
+```
+
+The baseline used the existing release CLI. The after run used
+`PATH="$HOME/.cargo/bin:$PATH" RUSTUP_TOOLCHAIN=stable cargo build --release -p tesserae-cli`.
+Both scans completed with 261 unreadable directories and zero lost entries.
+No cache purge was performed. Raw outputs are local scratch at
+`.superpowers/sdd/2026-10-20-tesserae-phase-4-jetsam/task-1-{before,after}.log`.
+
+| Build | Nodes (dirs + files) | Walk s | Freeze s | Maximum resident set size (bytes) |
+|---|---:|---:|---:|---:|
+| Before | 6,845,613 | 22.333 | 0.721 | 1,363,329,024 |
+| After | 6,842,000 | 25.233 | 0.703 | 1,471,627,264 |
+
+Peak RSS increased by **108,298,240 bytes (103.28 MiB)**. The immutable
+snapshot adds exactly 8 bytes per node for the IDs (54,736,000 bytes for the
+after tree), while `TessNode` remains 48 bytes. Walk nodes also gain 8 bytes
+and coexist with the snapshot during freeze; both copies account for about
+109.5 MB at this scale. This is a peak-memory measurement, not a measurement
+of the snapshot alone. Allocator behaviour and the live tree's 3,613-node
+change limit an exact byte-for-byte comparison.
+
+The transient file-ID copy could be removed by keeping walk IDs in a contiguous per-arena array that freeze permutes in place and moves into the snapshot; this is deferred unless peak memory becomes a user problem.
+
+## Phase 4 gate
+
+2026-10-20, `phase-4-jetsam`, macOS 27.2 / Apple silicon. Run:
+`RUSTUP_TOOLCHAIN=stable just gate`. The full gate passes: formatting, clippy,
+Rust tests, generated header, shipped-library checks, licences, universal FFI
+build and Xcode tests. Rust: 252 passing executions including the isolated
+file-descriptor-limit test; two manual large-volume integration tests remain
+ignored. Swift: 320 tests, zero failures, four intentional skips (three existing
+real-snapshot measurements and the coordinator-only live Trash check).
+
+| Phase 4 suite | Tests passed |
+|---|---:|
+| Guard list (`GuardTests`) | 22 |
+| TOCTOU (`IdentityTests`) | 7 |
+| Staging (`JetsamTests`) | 8 |
+| Executor (`ExecutorTests`) | 14 |
+| Audit log (`JettisonLogTests`) | 3 |
+| Put Back (`PutBackTests`) | 15 |
+| Overlay (`SizeOverlayTests`) | 8 |
+| Snapshot identity (`SnapshotIdentityTests`) | 1 |
+| Jetsam view model / snapshots | 8 / 3 |
+| AppModel disk-image end to end | 1 |
+| Live-harness safety on disposable images | 2 |
+
+The end-to-end test scans a disposable APFS image through AppModel, stages ok,
+hard-link warning, system-managed denial and unknown-size items, executes real
+contained Trash, checks overlay/log/summary, and restores one item's original
+path and file ID through rename-exclusive Put Back. The unknown directory is
+unreadable during scanning and made accessible before execution; its immutable
+snapshot size stays unknown. The harness's shared path also passes with real
+Trash and simulated EOPNOTSUPP on disposable images. Root-validation failures,
+full scrolling warning-row text, plural copy, empty status layout and stale
+history publication have regression and mutation checks. Only affected
+pane/confirmation/summary snapshot references were re-recorded; clean snapshot
+comparisons pass. All test disk images were detached after the run.
+
+Live trash checks (2026-10-20, coordinator):
+
+- exFAT via macOS FSKit, `/Volumes/USB321FD/tesserae-test/live-check`:
+  both items trashed successfully to `/Volumes/USB321FD/.Trashes/501/`.
+  Before this fix, Put Back failed for both with ENOTSUP ("Operation not supported")
+  because RENAME_EXCL was unsupported; both items remained in Trash, nothing lost.
+  After the fix (8be298d: fall back to `rename(2)` on ENOTSUP when the destination
+  is absent and on the same device), a re-run trashed both items and put both back
+  at their original paths with their file IDs; nothing lost. **This fallback
+  result is superseded by F-C1 below: exFAT Put Back is now refused in-app.**
+- SMB (`smbfs`), `/Volumes/hdd-raid-0/tesserae-test/live-check`:
+  trashItem refused both items, errno 5, "the volume “hdd-raid-0” doesn't have one".
+  Both files were untouched; no fallback or Put Back was attempted.
+
+The coordinator uses `LiveTrashCheckTests` with the two `TEST_RUNNER_` environment
+variables forwarding `TESSERAE_LIVE_TRASH_ROOT` and `TESSERAE_LIVE_TRASH_OUT`.
+A root must contain a regular `.tesserae-live-test` marker and be at least two
+components below its volume mount point; use `tesserae-test/live-check`, not just
+`tesserae-test`. The harness creates unique run directories, records outcomes,
+errnos, returned state and `statfs.f_fstypename` to JSON, treats unavailable Trash
+as a normal recorded failure, and leaves artifacts for coordinator cleanup.
+
+
+Phase 4 final-review correction (2026-10-20, F-C1): the earlier exFAT Put Back
+success after 8be298d used a non-atomic rename fallback and is superseded. That
+fallback has been removed: exFAT Put Back is now refused in-app with “Put Back
+isn't available on this volume — use Finder's Put Back”; the item remains in
+Trash. The coordinator re-runs live checks. This fix round did not access the
+user's volumes or iCloud Drive.
+
+
+The final fix gate passed on 2026-10-20: `just gate` completed with 252 Rust
+passed test executions (including the isolated descriptor-limit test), and 332
+Swift tests with four expected skips and zero failures. The Swift skips are
+three opt-in real-snapshot benchmarks and the coordinator-only live Trash
+check. The destructive source scan still finds exactly one production Trash
+call; the new deletion-suite move containment scan passes. Regression mutations
+for all code findings failed as expected and were restored before the gate.
+
+## Phase 4 second fix round: directory preparation (2026-10-20)
+
+Release measurement on Apple M5, 24 GiB RAM, macOS 27.2, Swift 6.4.2.
+Generated **1,000,000 real empty files in 1,000 directories** under the private
+temporary fixture `apple/build/fix2-million`; the Rust scanner produced
+**1,001,001 nodes**. No user volume, iCloud path or disk image was used.
+The fixture was removed after measurement.
+
+Final integration measurement (including the revision coordinator). The
+framework was built with Release `-O`, `ENABLE_TESTABILITY=YES` and no
+`DEBUG` define. A standalone `swiftc -O -swift-version 6` harness scanned that
+directory, constructed an AppModel, selected its root, called
+`stageSelection()`, and awaited staging publication. Assertions required an
+eligible root and all 1,001,000 descendants in the completed preparation.
+The timer covers preparation through main-actor publication, excluding scan.
+
+| Measurement | Result |
+|---|---:|
+| Preparation through publication | 14.983 ms |
+| Peak process RSS at publication (`getrusage`) | 204,029,952 bytes (194.58 MiB) |
+| Process RSS high-water mark before preparation | 197,279,744 bytes (188.14 MiB) |
+| Increase in RSS high-water mark | 6,750,208 bytes (6.44 MiB) |
+| Whole-process peak RSS (`/usr/bin/time -l`) | 204,079,104 bytes (194.62 MiB) |
+| Whole-process elapsed (including scan/startup) | 4.75 s |
+
+RSS is the whole scan/staging process, not an allocation attribution. The retained
+descendant payload is one UInt32 index per node (about 3.82 MiB per million),
+plus array capacity, the snapshot owner and captured overlay. No per-descendant
+path Data is retained. These are one-run warm local measurements, not latency
+guarantees for slow filesystems or execution's live restats.
+
+The regression separately stages a synthetic 1,000,000-descendant snapshot with
+a main-actor heartbeat and enforces a maximum 100 ms gap (7.603 ms observed
+in the full Debug gate). Restoring the original
+main-actor traversal made that test fail with a 2.614 s gap; forcing the new
+preparation onto main also failed. Cancellation/session replacement are held
+mid-preparation and must never publish stale items.

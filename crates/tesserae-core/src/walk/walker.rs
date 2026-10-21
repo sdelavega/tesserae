@@ -185,13 +185,14 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         // The root has no `getattrlistbulk` entry (nothing enumerated it), so
         // its own modification time comes from the descriptor already open.
         // Every other field is what a directory's entry would give it.
+        let metadata = own_metadata(root_fd.as_raw_fd());
         let root_entry = RawEntry {
             name: root_name,
             obj_type: ObjType::Dir,
-            file_id: 0,
-            dev_id: 0,
+            file_id: metadata.as_ref().map_or(0, |st| st.st_ino),
+            dev_id: metadata.as_ref().map_or(0, |st| st.st_dev),
             flags: 0,
-            modified: own_mtime(root_fd.as_raw_fd()),
+            modified: metadata.as_ref().map_or(0, |st| st.st_mtime),
             logical: 0,
             allocated: 0,
             link_count: 0,
@@ -205,6 +206,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
         self.guard(|w| {
             let root = {
                 let mut slot = w.lock()?;
+                slot.stats.root_device = metadata.as_ref().map_or(0, |st| st.st_dev);
                 let root = w.push(&mut slot, root_name, ScanId::NONE, Some(&root_entry))?;
                 if w.max_depth == 0 {
                     slot.stats.depth_capped += 1;
@@ -728,6 +730,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                     // A hardlink duplicate keeps its time: it is the same
                     // inode, and only its bytes are counted elsewhere.
                     modified: e.modified,
+                    file_id: e.file_id,
                 }
             }
             None => ScanNode {
@@ -738,6 +741,7 @@ impl<'a, O: DirOpener> Walker<'a, O> {
                 logical: 0,
                 allocated: 0,
                 modified: 0,
+                file_id: 0,
             },
         };
         if entry.is_some_and(|e| crate::dataless::is_dataless(e.flags)) {
@@ -849,17 +853,14 @@ impl<'a, O: DirOpener> Walker<'a, O> {
     }
 }
 
-/// The modification time, in seconds, of the object open as `fd`, or `0`
-/// when `fstat` fails. Zero is "unknown": a directory's time is rolled up as
-/// the latest of its own and its descendants', so an unknown root still
-/// reports the newest thing beneath it.
-fn own_mtime(fd: RawFd) -> i64 {
+/// Metadata for the already-open root, read once for identity and time.
+fn own_metadata(fd: RawFd) -> Option<libc::stat> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `st` is a valid out-pointer for one `stat`; `fstat` either
     // fills it and returns 0 or leaves it unread by us.
     if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
-        return 0;
+        return None;
     }
     // SAFETY: `fstat` returned 0, so it initialised `st`.
-    unsafe { st.assume_init() }.st_mtime
+    Some(unsafe { st.assume_init() })
 }

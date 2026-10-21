@@ -39,6 +39,7 @@ public final class Snapshot {
 
     /// nil only for snapshots built over caller-owned buffers by the test seam.
     private let handle: OpaquePointer?
+    private let testingFileIDs: [UInt64]
     private let _nodes: UnsafeBufferPointer<TessNode>
     private let _names: UnsafeRawBufferPointer
 
@@ -93,6 +94,7 @@ public final class Snapshot {
     /// Takes ownership of `handle`, a snapshot from `tess_scan_finish`.
     init(handle: OpaquePointer) {
         self.handle = handle
+        testingFileIDs = []
         var view = TessView()
         tess_snapshot_view(handle, &view)
         _nodes = UnsafeBufferPointer(start: view.nodes, count: Int(view.count))
@@ -149,8 +151,10 @@ public final class Snapshot {
 
     /// Test seam: a snapshot over caller-owned buffers (no Rust handle), so
     /// tests can present malformed nodes to the accessors' bounds checks.
-    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [RequestedSkip] = [], stalledAt: Data? = nil) {
+    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [RequestedSkip] = [], stalledAt: Data? = nil, fileIDs: [UInt64] = []) {
         handle = nil
+        precondition(fileIDs.isEmpty || fileIDs.count == nodes.count)
+        testingFileIDs = fileIDs
         _nodes = nodes
         _names = names
         fileKinds = Self.classify(nodes: nodes, names: names)
@@ -185,6 +189,18 @@ public final class Snapshot {
         #else
         if let handle { tess_snapshot_release(handle) }
         #endif
+    }
+
+    public var rootDevice: Int32 { stats.root_device }
+
+    public func fileID(_ i: UInt32) -> UInt64? {
+        _ = node(i)
+        guard let handle else {
+            let id = testingFileIDs.isEmpty ? 0 : testingFileIDs[Int(i)]
+            return id == 0 ? nil : id
+        }
+        var id: UInt64 = 0
+        return tess_snapshot_file_id(handle, i, &id) ? id : nil
     }
 
     public var datalessFiles: UInt64 { stats.dataless_files }
@@ -250,13 +266,13 @@ public final class Snapshot {
     }
 
     /// The children of node `i`, contiguous in `nodes`; empty for a leaf.
-    public func children(_ i: UInt32) -> Range<UInt32> {
+    public func children(_ i: UInt32) -> ChildList {
         let n = node(i)
-        guard n.child_count > 0 else { return 0..<0 }
+        guard n.child_count > 0 else { return ChildList(0..<0) }
         precondition(
             Int(n.child_start) + Int(n.child_count) <= nodes.count,
             "Snapshot children range out of range")
-        return n.child_start..<(n.child_start + n.child_count)
+        return ChildList(n.child_start..<(n.child_start + n.child_count))
     }
 
     /// Node `i`, its parent, and so on up to the root, which comes last.

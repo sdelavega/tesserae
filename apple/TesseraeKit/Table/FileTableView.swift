@@ -29,16 +29,18 @@ public struct FileTableView: NSViewRepresentable {
     public var rows: [UInt32]
     public var selection: Selection
     public var onSort: ((SortKey, Bool) -> Void)?
+    public var onStage: (() -> Void)?
     public var locale: Locale
 
     public init(
-        snapshot: Snapshot, rows: [UInt32], selection: Selection, locale: Locale = .current,
+        snapshot: Snapshot, rows: [UInt32], selection: Selection, locale: Locale = .current, onStage: (() -> Void)? = nil,
         onSort: ((SortKey, Bool) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.rows = rows
         self.selection = selection
         self.locale = locale
+        self.onStage = onStage
         self.onSort = onSort
     }
 
@@ -48,6 +50,7 @@ public struct FileTableView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> NSScrollView {
         let c = context.coordinator
+        c.contextMenu.stage = onStage
         c.onSort = onSort
         let scroll = NSScrollView()
         scroll.documentView = c.makeTableView()
@@ -58,6 +61,7 @@ public struct FileTableView: NSViewRepresentable {
 
     public func updateNSView(_ scroll: NSScrollView, context: Context) {
         let c = context.coordinator
+        c.contextMenu.stage = onStage
         c.onSort = onSort
         c.update(snapshot: snapshot, rows: rows)
     }
@@ -80,6 +84,7 @@ public struct FileTableView: NSViewRepresentable {
         let selection: Selection
         let locale: Locale
         var onSort: ((SortKey, Bool) -> Void)?
+        let contextMenu = JetsamContextMenu()
         private(set) weak var table: NSTableView?
         private var cancellable: AnyCancellable?
         /// True while this side is writing the table's selection, so the
@@ -96,7 +101,16 @@ public struct FileTableView: NSViewRepresentable {
 
         /// The table, wired to this coordinator and to `selection`.
         public func makeTableView() -> NSTableView {
-            let t = NSTableView()
+            let t = JetsamTableView()
+            t.jetsamMenu = contextMenu
+            t.prepareContext = { [weak self, weak t] event in
+                guard let self, let t else { return false }
+                let row = t.row(at: t.convert(event.locationInWindow, from: nil))
+                guard self.rows.indices.contains(row) else { return false }
+                let node = self.rows[row]
+                if !self.selection.nodes.contains(node) { self.selection.nodes = [node] }
+                return true
+            }
             for col in Coordinator.columns {
                 let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
                 c.title = col.title
@@ -218,5 +232,14 @@ public struct FileTableView: NSViewRepresentable {
             else { return }
             onSort?(col.key, d.ascending)
         }
+    }
+}
+
+private final class JetsamTableView: NSTableView {
+    var jetsamMenu: JetsamContextMenu?
+    var prepareContext: ((NSEvent) -> Bool)?
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard prepareContext?(event) == true else { return nil }
+        return jetsamMenu?.make()
     }
 }

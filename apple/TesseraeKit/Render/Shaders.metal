@@ -52,6 +52,7 @@ struct TileVertexOut {
     float2 localPixels;              // offset from the rect's top-left, device pixels
     float2 sizePixels [[flat]];      // the rect's size, device pixels
     ushort colorIdx [[flat]];
+    uchar flags [[flat]];
 };
 
 // Four vertices per instance as a triangle strip: (0,0) (1,0) (0,1) (1,1).
@@ -70,6 +71,7 @@ vertex TileVertexOut tile_vertex(uint vid [[vertex_id]],
     out.localPixels = corner * rect.zw * u.scale;
     out.sizePixels = rect.zw * u.scale;
     out.colorIdx = t.colorIdx;
+    out.flags = t.flags;
     return out;
 }
 
@@ -82,7 +84,16 @@ fragment float4 tile_fragment(TileVertexOut in [[stage_in]],
     const float4 fill = palette[in.colorIdx];
     const float2 edge = min(in.localPixels, in.sizePixels - in.localPixels);
     const bool border = min(edge.x, edge.y) < kBorderWidthPixels;
-    const float3 rgb = border ? fill.rgb * kBorderShade : fill.rgb;
+    float3 rgb = border ? fill.rgb * kBorderShade : fill.rgb;
+    // Bit 1 is Tile.Flag.staged. Coordinates and spacing are device pixels.
+    if ((in.flags & 2) != 0) {
+        const uint2 pixel = uint2(in.position.xy);
+        const bool hatch = ((pixel.x + pixel.y) % 8) == 0;
+        if (border || hatch) {
+            const float ink = dot(fill.rgb, float3(0.2126, 0.7152, 0.0722)) > 0.5 ? 0.0 : 1.0;
+            rgb = float3(ink);
+        }
+    }
     return float4(rgb, fill.a * u.alpha);
 }
 

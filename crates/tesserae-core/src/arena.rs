@@ -144,6 +144,8 @@ pub struct ScanNode {
     /// A directory's is its own here; [`crate::freeze`] rolls the newest
     /// descendant's up into it.
     pub modified: i64,
+    /// The entry's own FILEID, including hardlink duplicates and unknown-size nodes.
+    pub file_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +338,7 @@ mod tests {
             logical,
             allocated: logical,
             modified: 0,
+            file_id: 0,
         }
     }
 
@@ -589,9 +592,9 @@ mod tests {
     }
 
     #[test]
-    fn scan_node_is_48_bytes() {
-        // The sizing in the design (65_536 nodes is about 3.1 MB) assumes it.
-        assert_eq!(std::mem::size_of::<ScanNode>(), 48);
+    fn scan_node_is_56_bytes_with_identity() {
+        // The walk retains an ID; the separate frozen TessNode stays 48 bytes.
+        assert_eq!(std::mem::size_of::<ScanNode>(), 56);
     }
 
     #[test]

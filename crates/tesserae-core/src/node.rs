@@ -124,6 +124,8 @@ pub struct TessNode {
 pub struct Snapshot {
     /// Every node, root first. Siblings are contiguous.
     pub nodes: Vec<TessNode>,
+    /// FILEID for each node at the same index; zero means unavailable.
+    pub file_ids: Vec<u64>,
     /// All names, concatenated with no separators. Addressed by
     /// [`TessNode::name_off`] and [`TessNode::name_len`]. Arbitrary bytes:
     /// file names on macOS are not guaranteed to be UTF-8.
