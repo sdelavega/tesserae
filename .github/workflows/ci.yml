@@ -16,7 +16,7 @@ jobs:
   rust:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # rust-toolchain.toml pins the exact toolchain, its components and its
       # targets. Install them in a step of their own rather than relying on
@@ -125,7 +125,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Xcode in use
         run: |
@@ -200,7 +200,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # rust-toolchain.toml pins stable 1.99.1; the fuzz scripts ask for the
       # nightly named in scripts/nightly-toolchain with an explicit `+toolchain`.
