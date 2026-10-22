@@ -81,7 +81,7 @@ apple/TesseraeKit/Reclaim/Identity.swift	5449	2026-10-22T10:23:21-04:00
 apple/TesseraeKit/Reclaim/OpenFiles.swift	4452	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Reclaim/PutBack.swift	9339	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Reclaim/Reclaim.swift	11554	2026-10-22T08:21:01-04:00
-apple/TesseraeKit/Reclaim/ReclaimAction.swift	9779	2026-10-22T10:23:21-04:00
+apple/TesseraeKit/Reclaim/ReclaimAction.swift	12311	2026-10-22T11:07:47-04:00
 apple/TesseraeKit/Reclaim/ReclaimLog.swift	6887	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Reclaim/ReclaimViewModel.swift	49127	2026-10-22T10:23:21-04:00
 apple/TesseraeKit/Reclaim/SizeOverlay.swift	7345	2026-10-22T08:21:01-04:00
@@ -142,7 +142,7 @@ apple/TesseraeKitTests/MetalRendererTests.swift	15574	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/NavigatorTests.swift	21197	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/OnboardingTests.swift	20962	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/PutBackTests.swift	13547	2026-10-22T08:21:01-04:00
-apple/TesseraeKitTests/ReclaimActionTests.swift	16694	2026-10-22T10:23:21-04:00
+apple/TesseraeKitTests/ReclaimActionTests.swift	23815	2026-10-22T11:07:47-04:00
 apple/TesseraeKitTests/ReclaimLogTests.swift	9618	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ReclaimSnapshotTests.swift	16557	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ReclaimTests.swift	19801	2026-10-22T08:21:01-04:00
