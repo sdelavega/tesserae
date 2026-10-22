@@ -25,7 +25,7 @@ cask "tesserae" do
   homepage "https://github.com/sdelavega/tesserae"
 
   auto_updates true
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Tesserae.app"
 

@@ -345,7 +345,7 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(self.git("--git-dir", str(self.origin), "show", "gh-pages:appcast.xml"), (self.repo / "dist/appcast.xml").read_text().strip())
         cask = (self.tap / "Casks/tesserae.rb").read_text()
-        for value in (self.sha, 'version "0.1.0"', 'auto_updates true', 'depends_on macos: ">= :ventura"', '~/Library/Caches/com.sdelavega.Tesserae', '~/Library/Saved Application State/com.sdelavega.Tesserae.savedState', URL):
+        for value in (self.sha, 'version "0.1.0"', 'auto_updates true', 'depends_on macos: :ventura', '~/Library/Caches/com.sdelavega.Tesserae', '~/Library/Saved Application State/com.sdelavega.Tesserae.savedState', URL):
             self.assertIn(value, cask)
         self.assertEqual(self.git("for-each-ref", "--format=%(refname)", "refs/heads/tesserae-pages-*"), "")
         self.assertNotIn("git checkout --orphan", calls)
