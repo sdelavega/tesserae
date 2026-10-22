@@ -409,7 +409,7 @@ struct SessionView: View {
     private var deniedBadges: some View {
         ForEach(session.deniedTiles) { item in
             let tile = item.tile
-            let badge = FolderBadge(snapshot: session.snapshot, node: tile.node)
+            let badge = FolderBadge(snapshot: session.snapshot, tile: tile, locale: locale)
             Image(systemName: badge.symbol)
                 .font(.system(size: min(11, max(3, min(tile.rect.width, tile.rect.height) - 1))))
                 .foregroundStyle(LabelStyle.inkColour(over: Palette.colours(mode, dark: dark)[Palette.statusIndex]))

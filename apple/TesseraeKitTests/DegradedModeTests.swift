@@ -241,14 +241,88 @@ final class DegradedModeTests: XCTestCase {
         model.stop()
     }
 
+    func test_unreadable_aggregate_badge_names_count_without_a_snapshot_node() throws {
+        let tree = TestSnapshot(.dir("/Fixture", [.file("file", 100)]))
+        let tile = Tile(rect: CGRect(x: 0, y: 0, width: 4, height: 4), node: Tile.noNode, depth: 1,
+            flags: Tile.Flag.permDenied | Tile.Flag.aggregated, aggregateCount: 20)
+        XCTAssertTrue(tile.isAggregate && tile.isPermissionDenied)
+        XCTAssertEqual(tile.node, Tile.noNode, "precondition: aggregate has no snapshot node")
+        let badge = FolderBadge(snapshot: tree.snapshot, tile: tile, locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(badge.symbol, "lock.fill")
+        XCTAssertEqual(badge.label, "20 unreadable folders")
+        for (locale, count, expected) in [("en_US", UInt32(1), "1 unreadable folder"),
+            ("en_US", 2, "2 unreadable folders"), ("fr_FR", 0, "0 unreadable folders"),
+            ("ru_RU", 21, "21 unreadable folders"), ("pl_PL", 2, "2 unreadable folders")] {
+            var variant = tile
+            variant.aggregateCount = count
+            let badge = FolderBadge(snapshot: tree.snapshot, tile: variant, locale: Locale(identifier: locale))
+            XCTAssertEqual(badge.symbol, "lock.fill")
+            XCTAssertEqual(badge.label, expected)
+        }
+    }
+
+    func test_session_builds_every_denied_badge_with_collapsed_unreadable_children() throws {
+        let tree = TestSnapshot(.dir("/Fixture", [.dir("folder",
+            [.file("file", 100)] + (0..<20).map { .denied("private-\($0)") })]))
+        let session = AppSession(snapshot: tree.snapshot)
+        session.resize(to: CGSize(width: 800, height: 600))
+        let aggregate = try XCTUnwrap(session.deniedTiles.first { $0.tile.isAggregate })
+        XCTAssertEqual(aggregate.tile.node, Tile.noNode)
+        XCTAssertEqual(aggregate.tile.aggregateCount, 20)
+        XCTAssertFalse(session.deniedTiles.isEmpty)
+        for item in session.deniedTiles {
+            let badge = FolderBadge(snapshot: session.snapshot, tile: item.tile, locale: Locale(identifier: "en_US"))
+            XCTAssertEqual(badge.symbol, "lock.fill")
+            XCTAssertEqual(badge.label, "20 unreadable folders")
+        }
+    }
+
+    func test_real_apfs_scan_builds_every_badge_for_twenty_unreadable_folders() async throws {
+        let fixture = DiskImageFixture()
+        try fixture.setUp()
+        defer { XCTAssertNoThrow(try fixture.tearDown()) }
+        let folder = fixture.root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data(repeating: 0x41, count: 4096).write(to: folder.appendingPathComponent("file"))
+        let denied = (0..<20).map { folder.appendingPathComponent("private-\($0)") }
+        defer { for url in denied { XCTAssertEqual(chmod(url.path, 0o700), 0) } }
+        for url in denied {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+            XCTAssertEqual(chmod(url.path, 0), 0)
+        }
+        let coordinator = ScanCoordinator(progressInterval: 0.001)
+        coordinator.start(root: folder)
+        defer { coordinator.cancel() }
+        for _ in 0..<6000 {
+            if coordinator.state == .finished { break }
+            if case .failed = coordinator.state { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(coordinator.state, .finished)
+        let snapshot = try XCTUnwrap(coordinator.snapshot)
+        let unreadable = snapshot.nodes.indices.filter { snapshot.isPermissionDenied(UInt32($0)) }
+        XCTAssertEqual(unreadable.count, 20, "precondition: the real engine observed chmod-000 directories")
+        XCTAssertEqual(Set(unreadable.map { snapshot.rawPath(UInt32($0)) }), Set(denied.map { Data($0.path.utf8) }))
+        let session = AppSession(snapshot: snapshot)
+        session.resize(to: CGSize(width: 800, height: 600))
+        let aggregate = try XCTUnwrap(session.deniedTiles.first { $0.tile.isAggregate })
+        XCTAssertEqual(aggregate.tile.node, Tile.noNode)
+        XCTAssertEqual(aggregate.tile.aggregateCount, 20)
+        for item in session.deniedTiles {
+            let badge = FolderBadge(snapshot: snapshot, tile: item.tile, locale: Locale(identifier: "en_US"))
+            XCTAssertEqual(badge.symbol, "lock.fill")
+            XCTAssertEqual(badge.label, "20 unreadable folders")
+        }
+    }
+
     func test_cloud_only_folder_badge_is_distinct_from_permissions() throws {
         var cloud = TestSnapshot.Spec.denied("cloud")
         cloud.dataless = true
         let tree = TestSnapshot(.dir("/Fixture", [cloud, .denied("private")]))
         XCTAssertTrue(tree.snapshot.isDataless(tree["cloud"]), "precondition: dataless flag reaches the snapshot")
         XCTAssertFalse(tree.snapshot.isDataless(tree["private"]))
-        let badge = FolderBadge(snapshot: tree.snapshot, node: tree["cloud"])
-        let denied = FolderBadge(snapshot: tree.snapshot, node: tree["private"])
+        let badge = FolderBadge(snapshot: tree.snapshot, tile: Tile(rect: .zero, node: tree["cloud"], depth: 1, flags: Tile.Flag.permDenied))
+        let denied = FolderBadge(snapshot: tree.snapshot, tile: Tile(rect: .zero, node: tree["private"], depth: 1, flags: Tile.Flag.permDenied))
         XCTAssertEqual(badge.label, "Cloud-only folder")
         XCTAssertEqual(badge.symbol, "icloud")
         XCTAssertEqual(denied.label, "Unreadable folder")

@@ -145,7 +145,7 @@ public struct InspectorInfo: Equatable {
     }
 
     /// "N unreadable folders".
-    static func unreadableWords(count n: UInt32, locale: Locale) -> String {
+    public static func unreadableWords(count n: UInt32, locale: Locale) -> String {
         String(
             localized: "inspector.unreadable.folders.v2",
             defaultValue: "\(n) unreadable folders",

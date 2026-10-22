@@ -109,8 +109,13 @@ struct FolderBadge {
     let symbol: String
     let label: String
 
-    init(snapshot: Snapshot, node: UInt32) {
-        let cloud = snapshot.isDataless(node)
+    init(snapshot: Snapshot, tile: Tile, locale: Locale = .current) {
+        if tile.node == Tile.noNode || tile.isAggregate {
+            symbol = "lock.fill"
+            label = InspectorInfo.unreadableWords(count: tile.aggregateCount, locale: locale)
+            return
+        }
+        let cloud = snapshot.isDataless(tile.node)
         symbol = cloud ? "icloud" : "lock.fill"
         label = cloud ? String(
             localized: "scanStatusViews.cloud.only.folder",
