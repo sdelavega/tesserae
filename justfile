@@ -143,6 +143,7 @@ release-test:
     /bin/bash --noprofile --norc scripts/tests/release_test.sh
     python3 -I scripts/tests/publish_test.py
     python3 -I scripts/tests/release_workflow_test.py
+    python3 -I scripts/tests/release_input_test.py
 
 # Regenerate the macOS app icon and local review previews.
 icon:

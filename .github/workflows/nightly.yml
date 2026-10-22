@@ -27,7 +27,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       # Miri is nightly-only and ships as a component; it needs rust-src to
       # build its own sysroot. If a given nightly lacks the miri component this
@@ -44,7 +44,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install pinned nightly
         run: rustup toolchain install "$(cat scripts/nightly-toolchain)" --profile minimal
@@ -58,14 +58,14 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install pinned nightly
         run: rustup toolchain install "$(cat scripts/nightly-toolchain)" --profile minimal
 
       - name: Cache cargo-fuzz
         id: cargo-fuzz-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-0.13.2-${{ runner.os }}-${{ runner.arch }}
@@ -79,7 +79,7 @@ jobs:
 
       - name: Upload crash reproducers
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts

@@ -46,12 +46,16 @@ fail() { echo "$*" >&2; exit 1; }
 VERSION=$1; shift
 [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'VERSION must be x.y.z'
 MODE=
-for flag in "$@"; do
-    case "$flag" in
-        --publish|--ci-publish) [[ -z $MODE ]] || fail 'Choose one publishing mode'; MODE=$flag ;;
+PREBUILT=
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --publish|--ci-publish) [[ -z $MODE ]] || fail 'Choose one publishing mode'; MODE=$1 ;;
+        --prebuilt) [[ $# -ge 2 && -z $PREBUILT ]] || fail 'One prebuilt input path required'; PREBUILT=$2; shift ;;
         *) fail 'Unknown release option' ;;
     esac
+    shift
 done
+[[ -z $PREBUILT || $MODE == --ci-publish ]] || fail 'Prebuilt input requires CI publishing mode'
 # Consume CI's private pipe before any build/preflight tool can read stdin.
 # Unset first so even an inherited variable of this name cannot stay exported.
 unset SPARKLE_STDIN_KEY
@@ -153,25 +157,50 @@ IDENTITY
     local notary_args=(--keychain-profile "$NOTARY_PROFILE")
     if [[ -n ${NOTARY_KEYCHAIN:-} ]]; then notary_args+=(--keychain "$NOTARY_KEYCHAIN"); fi
     tool "$XCRUN" notarytool history "${notary_args[@]}" > /dev/null
-    tool "$JUST" gate
-    tool "$JUST" ffi
     BUILD_VERSION=$(tool "$BASH_TOOL" "$ROOT/scripts/bundle-version.sh" "$VERSION")
-    tool "$XCODEBUILD" archive -project apple/Tesserae.xcodeproj -scheme Tesserae \
-        -configuration Release -destination 'generic/platform=macOS' \
-        -archivePath "$WORK/Tesserae.xcarchive" -derivedDataPath apple/build/DerivedData \
-        'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO "CURRENT_PROJECT_VERSION=$BUILD_VERSION" "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='
-    tool "$PYTHON" - "$WORK/ExportOptions.plist" "$DEVELOPMENT_TEAM" "$CODE_SIGN_IDENTITY" <<'EXPORT'
+    if [[ -n $PREBUILT ]]; then
+        tool "$PYTHON" -I scripts/verify-release-input.py "$PREBUILT" "$VERSION" "$(tool "$GIT" rev-parse HEAD)"
+        tool /usr/bin/ditto "$PREBUILT/Tesserae.app" "$WORK/export/Tesserae.app"
+    else
+        tool "$JUST" gate
+        tool "$JUST" ffi
+        tool "$XCODEBUILD" archive -project apple/Tesserae.xcodeproj -scheme Tesserae \
+            -configuration Release -destination 'generic/platform=macOS' \
+            -archivePath "$WORK/Tesserae.xcarchive" -derivedDataPath apple/build/DerivedData \
+            'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO "CURRENT_PROJECT_VERSION=$BUILD_VERSION" "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='
+        tool "$PYTHON" - "$WORK/ExportOptions.plist" "$DEVELOPMENT_TEAM" "$CODE_SIGN_IDENTITY" <<'EXPORT'
 import plistlib, sys
 with open(sys.argv[1], "wb") as out:
     plistlib.dump(dict(method="developer-id", signingStyle="manual", teamID=sys.argv[2], signingCertificate=sys.argv[3]), out)
 EXPORT
-    tool "$XCODEBUILD" -exportArchive -archivePath "$WORK/Tesserae.xcarchive" \
-        -exportPath "$WORK/export" -exportOptionsPlist "$WORK/ExportOptions.plist"
+        tool "$XCODEBUILD" -exportArchive -archivePath "$WORK/Tesserae.xcarchive" \
+            -exportPath "$WORK/export" -exportOptionsPlist "$WORK/ExportOptions.plist"
+    fi
     APP="$WORK/export/Tesserae.app"
     [[ -d $APP/Contents/Frameworks/TesseraeKit.framework && -d $APP/Contents/Frameworks/Sparkle.framework ]] || fail 'Export is missing required frameworks'
     [[ -f $APP/Contents/Helpers/applesauce ]] || fail 'Export is missing applesauce'
-    tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP/Contents/Helpers/applesauce"
-    tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP"
+    if [[ -n $PREBUILT ]]; then
+        tool "$PYTHON" -I - "$APP" > "$WORK/signing-order" <<'ORDER'
+import pathlib, sys
+app = pathlib.Path(sys.argv[1])
+magic = {bytes.fromhex(h) for h in ("cafebabe", "bebafeca", "feedface", "cefaedfe", "feedfacf", "cffaedfe")}
+paths = [path for path in app.rglob("*") if not path.is_symlink()]
+for path in paths:
+    if path.is_file():
+        with path.open("rb") as stream:
+            if stream.read(4) in magic:
+                print(path)
+for path in sorted((p for p in paths if p.is_dir() and p.suffix in {".framework", ".xpc", ".app"}), key=lambda p: len(p.parts), reverse=True):
+    print(path)
+print(app)
+ORDER
+        while IFS= read -r bundle; do
+            tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$bundle"
+        done < "$WORK/signing-order"
+    else
+        tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP/Contents/Helpers/applesauce"
+        tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP"
+    fi
     tool "$CODESIGN" --verify --deep --strict "$APP"
     tool "$BASH_TOOL" "$ROOT/scripts/check-shipped-app.sh" "$APP"
     tool "$CODESIGN" -d --entitlements :- "$APP" > "$WORK/entitlements.plist"
@@ -253,6 +282,12 @@ NOTARY_LOG
     tool "$CP" "$DMG" "dist/Tesserae-$VERSION.dmg"
     tool "$CP" "$WORK/SHA256SUMS" dist/SHA256SUMS
     local tools="$ROOT/apple/build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin"
+    if [[ -n $PREBUILT ]]; then
+        # appcast-check.sh uses the normal resolved-tools location too.
+        tool "$MKDIR" -p "$tools"
+        tool "$CP" "$PREBUILT/sparkle-tools/generate_appcast" "$tools/generate_appcast"
+        tool "$CP" "$PREBUILT/sparkle-tools/sign_update" "$tools/sign_update"
+    fi
     [[ -x $tools/generate_appcast && -x $tools/sign_update ]] || fail 'Resolved Sparkle tools are missing; resolve the pinned package first'
     [[ -f docs/releases/$VERSION.md ]] || fail 'Missing release notes'
     tool "$CP" "docs/releases/$VERSION.md" "dist/Tesserae-$VERSION.md"

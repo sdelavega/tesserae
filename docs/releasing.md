@@ -107,11 +107,25 @@ release. Never repair an artifact by editing its manifest.
 
 ## Tag workflow (inactive while private)
 
-`.github/workflows/release.yml` listens only to pushed `v*` tags. Its one job
-requires a public repository and runs on `macos-26`, explicitly selecting
-Xcode 26.6 and downloading MetalToolchain if necessary. It fetches full Git
-history and uses the pinned Rust targets and gate tools. `release.sh` runs
-`just gate` and `just ffi` before archiving.
+`.github/workflows/release.yml` listens only to pushed `v*` tags and requires a
+public repository. The `build` job has Contents read permission and receives no
+signing, notarization, Sparkle or tap secrets. It installs the pinned toolchain,
+runs the full gate and archives an unsigned universal app. It uploads a ZIP that
+preserves app symlinks, the source/version manifest, and the two pinned Sparkle
+signing tools.
+
+The separate `release` job uses no third-party actions and installs no tools. It
+checks out the tag with system Git and downloads only this run's artifact using
+system curl, checking the immutable artifact digest and archive paths. Before
+signing, repo scripts validate the manifest, update policy and Sparkle tool
+hashes against `scripts/sparkle-tools.sha256` from the trusted checkout. Updating
+Sparkle requires refreshing those hashes from its SPM-checksummed binary artifact.
+`release.sh --ci-publish --prebuilt apple/build/release-input` skips all builds,
+signs nested Mach-O binaries and bundles from inside out, and runs the same
+signature, notarization, appcast and publication checks as local releases.
+The job grants Contents write and Actions read; all other workflows/actions use
+least privilege. Every action is pinned to a full commit with its release version
+comment; Dependabot checks action updates weekly.
 
 Before the first CI release, the maintainer must separately make the intended
 repositories public, configure GitHub Pages to serve the `gh-pages` branch,
@@ -132,7 +146,7 @@ credentials or paste them into an issue, command argument, or chat.
 | `DEVELOPER_ID_P12_PASSWORD` | The export password you chose for that `.p12`; store it as a separate secret. |
 | `NOTARY_API_KEY_P8` | The contents of an App Store Connect team API private key (`.p8`) authorized for notarization. The maintainer creates and stores this outside agent sessions. CI writes it with mode 0600 under `$RUNNER_TEMP`, stores the `tesserae-ci` notary profile, and removes it immediately; `always()` cleanup also removes it on failure. |
 | `SPARKLE_ED_PRIVATE_KEY` | The base64 private key matching the app's existing `SUPublicEDKey`. In Keychain Access, the existing “Private key for signing Sparkle updates” item's password is this value (confirmed in pinned Sparkle's `generate_keys` source). The maintainer can reveal it locally, copy it directly into this secret, then clear the clipboard. Do not generate a new key or give an agent access to the private key. |
-| `TAP_PUSH_TOKEN` | Create a fine-grained GitHub personal access token owned by an account with access to `sdelavega/homebrew-tap`; restrict repository access to that tap and grant Contents read/write. Set an expiry and arrange rotation. The workflow's second checkout persists its credentials only for that clone and removes them in checkout's post-job cleanup. |
+| `TAP_PUSH_TOKEN` | Create a fine-grained GitHub personal access token owned by an account with access to `sdelavega/homebrew-tap`; restrict repository access to that tap and grant Contents read/write. Set an expiry and arrange rotation. The signing job writes separate mode-0600 credential files for the release repository and tap on its disposable runner. Each clone uses its own helper with credential.useHttpPath enabled, so tokens cannot cross repository paths. The source helper also authenticates Pages worktree pushes. Step-trap and always-run cleanup remove both files. |
 
 GitHub Actions supplies `GITHUB_TOKEN` automatically for each job; do not
 create a personal token for this name. It is passed as `GH_TOKEN` to
@@ -177,14 +191,14 @@ identity for both Pages and tap commits.
 
 The tap is checked out under ignored `apple/build/release-tap` and supplied via
 `TESSERAE_TAP_DIR`. CI invokes `scripts/release.sh "${GITHUB_REF_NAME#v}"
---ci-publish`. That mode requires `CI=true`, the tag on origin, and HEAD equal
+--ci-publish --prebuilt apple/build/release-input`. That mode requires `CI=true`, the tag on origin, and HEAD equal
 to the tag; it replaces only the typed confirmation. Manifest and Apple
 verification checks still apply.
 
 The final `always()` step deletes the temporary keychain, restores the prior
 keychain search list (including paths with spaces), and removes the `.p8`,
-decoded files and the generated local config. Failed jobs upload Xcode result bundles and
-build logs for diagnosis. Never enable shell tracing or dump the environment.
+decoded files and the generated local config. Failed build jobs upload Xcode result bundles and
+build logs for diagnosis. Signing jobs run no artifact-upload actions. Never enable shell tracing or dump the environment.
 The real signing/notarization/publication path must be exercised by the
 maintainer at the first authorized public release; fake-tool tests and YAML
 validation cannot establish service credentials, permissions or runner-image

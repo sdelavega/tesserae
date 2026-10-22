@@ -28,7 +28,7 @@ absent() { if grep -F -- "$2" "$1" >/dev/null; then fail "unexpected $2"; fi; }
 fixture() {
     CASE_ROOT="$TEMP/$1 space"
     mkdir -p "$CASE_ROOT/scripts" "$CASE_ROOT/apple/Tesserae.xcodeproj" "$CASE_ROOT/bin"
-    cp "$ROOT/scripts/"{release.sh,check-shipped-app.sh,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
+    cp "$ROOT/scripts/"{release.sh,check-shipped-app.sh,verify-release-input.py,sparkle-tools.sha256,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
     printf 'MARKETING_VERSION = 0.1.0;\n' > "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj"
     cat > "$CASE_ROOT/apple/Release.local.xcconfig" <<'CONFIG'
 // A shell expression here must remain inert.
@@ -41,7 +41,7 @@ CONFIG
 #!/usr/bin/env bash
 set -euo pipefail
 name=${0##*/}
-fake_root=$(python3 -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[1])' "$0")
+fake_root=$(python3 -I -c 'import pathlib,sys; print(next(p for p in pathlib.Path(sys.argv[1]).resolve().parents if (p / "fault").is_file()))' "$0")
 CALLS="$fake_root/calls"
 FAULT=$(cat "$fake_root/fault")
 CI=
@@ -411,4 +411,37 @@ ORDER
     contains "$CALLS" $'git\tshow-ref\t--verify\t--quiet\trefs/tags/v0.1.0'
     absent "$CALLS" push
     echo 'PASS publish integration + CI stdin + no --yes'
+fi
+
+if [[ -z ${ONLY_CASE:-} || $ONLY_CASE == prebuilt ]]; then
+    fixture prebuilt; touch "$CASE_ROOT/ci"
+    python3 -I - "$CASE_ROOT" <<'PREBUILT'
+import hashlib, json, pathlib, plistlib, shutil, sys
+root = pathlib.Path(sys.argv[1]); target = root / 'apple/build/release-input'
+app = target / 'Tesserae.app/Contents'
+for name in ('Frameworks/TesseraeKit.framework', 'Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc', 'Frameworks/Sparkle.framework/Versions/B/Updater.app', 'MacOS', 'Helpers'):
+    (app / name).mkdir(parents=True, exist_ok=True)
+for name in ('MacOS/Tesserae', 'Helpers/applesauce', 'Frameworks/TesseraeKit.framework/TesseraeKit'):
+    (app / name).write_bytes(bytes.fromhex('cffaedfe') + b'fixture binary')
+info = dict(CFBundleShortVersionString='0.1.0', CFBundleVersion='100', SUPublicEDKey='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', SUVerifyUpdateBeforeExtraction=True, SURequireSignedFeed=True)
+(app / 'Info.plist').write_bytes(plistlib.dumps(info))
+(target / 'build.json').write_text(json.dumps(dict(version='0.1.0', commit='abc')))
+(target / 'sparkle-tools').mkdir()
+pins = []
+for name in ('generate_appcast', 'sign_update'):
+    path = target / 'sparkle-tools' / name
+    shutil.copyfile(root / 'bin/fake', path); path.chmod(0o755)
+    pins.append(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name)
+(root / 'scripts/sparkle-tools.sha256').write_text('\n'.join(pins) + '\n')
+PREBUILT
+    status=0
+    printf 'fake-ci-stdin\n' | PATH="$CASE_ROOT/bin:$PATH" CI=true NOTARY_KEYCHAIN="$CASE_ROOT/ci.keychain-db" bash "$CASE_ROOT/scripts/release.sh" 0.1.0 --ci-publish --prebuilt apple/build/release-input > "$CASE_ROOT/output" 2>&1 || status=$?
+    [[ $status != 0 ]] || fail 'publish without tap accepted'
+    contains "$CASE_ROOT/output" 'TESSERAE_TAP_DIR'
+    [[ -s $CASE_ROOT/dist/MANIFEST ]] || fail 'prebuilt verification never completed'
+    absent "$CALLS" $'just\t'
+    absent "$CALLS" $'xcodebuild\t'
+    contains "$CALLS" $'codesign\t--force'
+    contains "$CALLS" FEED_CI_STDIN_OK
+    echo 'PASS prebuilt artifact signing without build tools'
 fi

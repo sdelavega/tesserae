@@ -19,6 +19,7 @@
 import base64
 import json
 import os
+import re
 import shutil
 import shlex
 from pathlib import Path
@@ -35,22 +36,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))",
             str(ROOT / ".github/workflows/release.yml")], text=True))
         self.steps = self.workflow["jobs"]["release"]["steps"]
+        self.build_steps = self.workflow["jobs"].get("build", {}).get("steps", [])
 
     def step(self, name):
-        return next(step for step in self.steps if step.get("name") == name)
+        return next(step for step in self.steps + self.build_steps if step.get("name") == name)
 
     def test_tag_only_public_guard_and_secret_scope(self):
         trigger = self.workflow.get("on", self.workflow.get("true"))
         self.assertEqual(trigger, {"push": {"tags": ["v*"]}})
-        self.assertEqual(self.workflow["permissions"], {"contents": "write"})
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
         self.assertEqual(self.workflow["concurrency"],
                          {"group": "release-publish", "cancel-in-progress": False})
-        self.assertEqual(list(self.workflow["jobs"]), ["release"])
+        self.assertEqual(list(self.workflow["jobs"]), ["build", "release"])
+        self.assertEqual(self.workflow["jobs"]["build"]["permissions"], {"contents": "read"})
+        self.assertEqual(self.workflow["jobs"]["release"]["permissions"], {"contents": "write", "actions": "read"})
+        self.assertEqual(self.workflow["jobs"]["release"]["needs"], "build")
         job = self.workflow["jobs"]["release"]
         self.assertEqual(job["runs-on"], "macos-26")
         self.assertEqual(job["if"], "github.event.repository.private == false")
         self.assertEqual(job["env"]["DEVELOPER_DIR"], "/Applications/Xcode_26.6.app/Contents/Developer")
-        self.assertEqual(self.steps[0]["with"]["fetch-depth"], 0)
+        self.assertEqual(self.build_steps[0]["with"]["fetch-depth"], 0)
         expected = {"DEVELOPER_ID_P12_BASE64", "DEVELOPER_ID_P12_PASSWORD", "NOTARY_API_KEY_P8", "SPARKLE_ED_PRIVATE_KEY", "TAP_PUSH_TOKEN", "GITHUB_TOKEN"}
         seen = set()
         import re
@@ -61,9 +66,33 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 else:
                     self.assertNotIn("secrets.", json.dumps(value))
         self.assertEqual(seen, expected)
+        self.assertNotIn("secrets.", json.dumps(self.workflow["jobs"]["build"]))
+        self.assertFalse(any("uses" in step for step in self.steps))
         self.assertEqual(self.step("Clean up signing material")["if"], "always()")
         self.assertIn("MetalToolchain", self.step("Metal toolchain")["run"])
         self.assertEqual(self.step("Upload Xcode results")["if"], "failure()")
+
+    def test_all_actions_are_sha_pinned_with_version_comments(self):
+        count = 0
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            for line in path.read_text().splitlines():
+                if re.search(r"\buses:", line):
+                    count += 1
+                    self.assertRegex(line, r"uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertGreater(count, 15, "precondition: all workflow actions inspected")
+        config = subprocess.check_output(["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))",
+                                          str(ROOT / ".github/dependabot.yml")], text=True)
+        updates = json.loads(config)["updates"]
+        self.assertIn({"package-ecosystem": "github-actions", "directory": "/", "schedule": {"interval": "weekly"}}, updates)
+
+    def test_action_jobs_never_receive_signing_or_tap_secrets(self):
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = json.loads(subprocess.check_output(["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", str(path)], text=True))
+            for name, job in workflow["jobs"].items():
+                if any("uses" in step for step in job.get("steps", [])) or "uses" in job:
+                    self.assertNotRegex(json.dumps(job), r"secrets\.(?:DEVELOPER_ID_|NOTARY_|SPARKLE_|TAP_PUSH_TOKEN)")
+        self.assertNotRegex(json.dumps({key: value for key, value in self.workflow.items() if key != "jobs"}),
+                            r"secrets\.(?:DEVELOPER_ID_|NOTARY_|SPARKLE_|TAP_PUSH_TOKEN)")
 
     def test_tool_uses_fresh_environment_without_exported_functions(self):
         for inherited in (False, True):
@@ -137,7 +166,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                         '[[ ! ${BASH_ENV+x} && -z $(builtin compgen -A function) ]]\n' +
                                         "python3 -I -c " + shlex.quote(probe) + "\n" + command + "\n")
                 (root / name).chmod(0o755)
-            for name in ("publish_test.py", "release_workflow_test.py"):
+            for name in ("publish_test.py", "release_workflow_test.py", "release_input_test.py"):
                 (root / "scripts/tests" / name).write_text(probe + "\n")
             for recipe in ("release 'argument with spaces'", "release-test"):
                 result = run("exec just " + recipe, cwd=root)
@@ -196,7 +225,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 fake = root / "bin/fake"
                 fake.write_text(FAKE)
                 fake.chmod(0o755)
-                for name in ("security", "xcrun", "openssl", "base64", "rm"):
+                for name in ("security", "xcrun", "openssl", "base64", "rm", "git"):
                     (root / "bin" / name).symlink_to(fake)
                 (root / "scripts/release.sh").symlink_to(fake)
                 original = [str(root / "login with space.keychain-db"), str(root / "system.keychain")]
@@ -209,7 +238,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                    DEVELOPER_ID_P12_PASSWORD="fixture-p12-password", NOTARY_API_KEY_P8="fixture-api-private-key",
                                    NOTARY_KEY_ID="FIXTUREKEY", NOTARY_ISSUER_ID="fixture-issuer", ARBITRARY_UNRECOGNIZED_NAME="fixture-unknown-secret",
                                    DEVELOPMENT_TEAM="TESTTEAM", CODE_SIGN_IDENTITY="Developer ID Application: Fixture (TESTTEAM)",
-                                   SPARKLE_ED_PRIVATE_KEY="fixture-sparkle-key", GH_TOKEN="fixture-github-token",
+                                   SPARKLE_ED_PRIVATE_KEY="fixture-sparkle-key", GH_TOKEN="fixture-github-token", TAP_PUSH_TOKEN="fixture-tap-token",
                                    TESSERAE_TAP_DIR=str(root / "tap"), NOTARY_KEYCHAIN=str(root / "tesserae-ci.keychain-db"))
                 def run(name):
                     scoped = {k: environment[k] for k in ("PATH", "HOME", "RUNNER_TEMP", "GITHUB_WORKSPACE", "GITHUB_REF_NAME")}
@@ -232,17 +261,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertIn("NOTARY_PROFILE = tesserae-ci", text)
                     self.assertIn("DEVELOPMENT_TEAM = TESTTEAM", text)
                     self.assertIn(environment["CODE_SIGN_IDENTITY"], text)
-                    publish = run("Build, verify and publish")
+                    publish = run("Sign, verify and publish")
                     self.assertEqual(publish.returncode, 0, publish.stdout + publish.stderr)
                     output += publish.stdout + publish.stderr
                     self.assertIn("STDIN_OK", (root / "calls").read_text())
                 cleanup = run("Clean up signing material")
                 self.assertEqual(cleanup.returncode, 0, cleanup.stdout + cleanup.stderr)
                 self.assertEqual(json.loads(state.read_text()), original)
-                for name in ("developer-id.p12", "tesserae-ci.keychain-db", "tesserae-keychains.txt", "notary-api.p8", "apple/Release.local.xcconfig"):
+                for name in ("developer-id.p12", "tesserae-ci.keychain-db", "tesserae-keychains.txt", "notary-api.p8", "tap-credentials", "repository-credentials", "apple/Release.local.xcconfig"):
                     self.assertFalse((root / name).exists(), name)
                 output += cleanup.stdout + cleanup.stderr
-                for name in ("DEVELOPER_ID_P12_BASE64", "DEVELOPER_ID_P12_PASSWORD", "NOTARY_API_KEY_P8", "ARBITRARY_UNRECOGNIZED_NAME", "SPARKLE_ED_PRIVATE_KEY", "GH_TOKEN"):
+                for name in ("DEVELOPER_ID_P12_BASE64", "DEVELOPER_ID_P12_PASSWORD", "NOTARY_API_KEY_P8", "ARBITRARY_UNRECOGNIZED_NAME", "SPARKLE_ED_PRIVATE_KEY", "GH_TOKEN", "TAP_PUSH_TOKEN"):
                     self.assertNotIn(environment[name], output)
 
 
@@ -257,14 +286,27 @@ allowed = {"PATH", "HOME", "TMPDIR", "LANG", "USER", "DEVELOPER_DIR", "PWD", "SH
 if name == "release.sh":
     allowed.update({"GH_TOKEN", "CI", "GITHUB_REF_NAME", "TESSERAE_TAP_DIR", "NOTARY_KEYCHAIN"})
 assert all(k in allowed or k.startswith("LC_") for k in os.environ), "Unrelated child inherited variables"
-private_values = ["fixture-p12-password", "fixture-api-private-key", "fixture-sparkle-key", "fixture-github-token", "fixture-unknown-secret", "fixture-random-keychain-password"]
+private_values = ["fixture-p12-password", "fixture-api-private-key", "fixture-sparkle-key", "fixture-github-token", "fixture-unknown-secret", "fixture-random-keychain-password", "fixture-tap-token"]
 for value in private_values:
     for i, arg in enumerate(args):
         if value in arg:
             assert name == "security" and ((args[0] == "import" and i > 0 and args[i-1] == "-P" and value == "fixture-p12-password") or (args[0] in ("create-keychain", "unlock-keychain", "set-key-partition-list") and i > 0 and args[i-1] in ("-p", "-k") and value == "fixture-random-keychain-password")), "Secret in argv"
 with (root / "calls").open("a") as log:
     log.write(name + " " + (args[0] if args else "") + "\n")
-if name == "openssl":
+if name == "git":
+    if "clone" in args:
+        credential = root / "tap-credentials"
+        assert credential.stat().st_mode & 0o077 == 0
+        assert "fixture-tap-token" in credential.read_text()
+        repository = root / "repository-credentials"
+        assert repository.stat().st_mode & 0o077 == 0
+        assert "fixture-github-token" in repository.read_text()
+        assert "fixture-tap-token" not in repository.read_text()
+        assert "fixture-github-token" not in credential.read_text()
+        (root / args[-1]).mkdir(parents=True)
+    else:
+        assert "config" in args
+elif name == "openssl":
     assert args == ["rand", "-base64", "32"]
     print("fixture-random-keychain-password")
 elif name == "security":
@@ -307,7 +349,7 @@ elif name == "xcrun":
     assert key.read_text() == "fixture-api-private-key" and key.stat().st_mode & 0o077 == 0
     if fault == "notary": sys.exit(42)
 elif name == "release.sh":
-    assert args == ["0.1.0", "--ci-publish"]
+    assert args == ["0.1.0", "--ci-publish", "--prebuilt", "apple/build/release-input"]
     assert sys.stdin.read().strip() == "fixture-sparkle-key"
     assert os.environ["GH_TOKEN"] == "fixture-github-token"
     with (root / "calls").open("a") as log: log.write("STDIN_OK\n")

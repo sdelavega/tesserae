@@ -395,7 +395,7 @@ class PublishingTests(unittest.TestCase):
         workflow = json.loads(subprocess.check_output([
             "ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))",
             str(ROOT / ".github/workflows/release.yml")], text=True))
-        step = next(s for s in workflow["jobs"]["release"]["steps"] if s.get("name") == "Build, verify and publish")
+        step = next(s for s in workflow["jobs"]["release"]["steps"] if s.get("name") == "Sign, verify and publish")
         self.git("tag", "v0.1.0")
         self.git("push", "origin", "refs/tags/v0.1.0")
         for repo in (self.repo, self.tap):
@@ -408,19 +408,43 @@ class PublishingTests(unittest.TestCase):
                 del environment[key]
         environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(self.base / ".gitconfig"),
                            GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="user.useConfigOnly", GIT_CONFIG_VALUE_0="true",
-                           GITHUB_REF_NAME="v0.1.0", SPARKLE_ED_PRIVATE_KEY="fixture-sparkle-key")
+                           GITHUB_REF_NAME="v0.1.0", SPARKLE_ED_PRIVATE_KEY="fixture-sparkle-key",
+                           RUNNER_TEMP=str(self.base / "runner temp"), TAP_PUSH_TOKEN="fixture-tap-token",
+                           TESSERAE_TAP_DIR=str(self.repo / "apple/build/release-tap"))
+        (self.base / "runner temp").mkdir()
         # The workflow drives real temporary Git repositories through publish.sh;
         # the release entry stub replaces only build/sign/notarize work.
         entry = self.repo / "scripts/release.sh"
-        entry.write_text('#!/bin/bash\ncat >/dev/null\nexec bash scripts/publish.sh "$@"\n')
+        entry.write_text("#!/usr/bin/env python3\n" + r"""
+import os, pathlib, subprocess, sys
+assert sys.argv[1:] == ["0.1.0", "--ci-publish", "--prebuilt", "apple/build/release-input"]
+assert sys.stdin.read().strip() == "fixture-sparkle-key"
+root = pathlib.Path(__file__).resolve().parents[1]
+credentials_env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1")
+real_git = __REAL_GIT__
+for directory, path, expected, wrong in (
+        (root, "sdelavega/tesserae.git", "planted-gh-auth", "sdelavega/homebrew-tap.git"),
+        (pathlib.Path(os.environ["TESSERAE_TAP_DIR"]), "sdelavega/homebrew-tap.git", "fixture-tap-token", "sdelavega/tesserae.git")):
+    for requested, succeeds in ((path, True), (wrong, False)):
+        result = subprocess.run([real_git, "-c", "credential.interactive=false", "-c", "core.askPass=/usr/bin/false", "credential", "fill"],
+            cwd=directory, env=credentials_env, input="protocol=https\nhost=github.com\npath=" + requested + "\n\n", capture_output=True, text=True)
+        assert (result.returncode == 0) == succeeds, "Git credential repository scope mismatch"
+        if succeeds:
+            fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+            assert fields.get("password") == expected, "Wrong repository credential"
+os.execv("/bin/bash", ["/bin/bash", "scripts/publish.sh", *sys.argv[1:3]])
+""".replace("__REAL_GIT__", repr(self.env["REAL_GIT"])))
         entry.chmod(0o755)
         (self.base / "fault").write_text("")
         self.assertFalse((self.base / ".gitconfig").exists())
         result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
                                 cwd=self.repo, env=environment, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.base / "runner temp/tap-credentials").exists())
+        self.assertFalse((self.base / "runner temp/repository-credentials").exists())
+        self.assertNotIn("fixture-tap-token", result.stdout + result.stderr)
         for args in (("--git-dir", str(self.origin), "log", "-1", "--format=%an <%ae>", "gh-pages"),
-                     ("-C", str(self.tap), "log", "-1", "--format=%an <%ae>")):
+                     ("-C", str(self.repo / "apple/build/release-tap"), "log", "-1", "--format=%an <%ae>")):
             self.assertEqual(self.git(*args), "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>")
 
     def test_ci_requires_remote_tag_and_head(self):
@@ -499,6 +523,8 @@ fault = (base / "fault").read_text()
 if name == "git":
     # Every real git operation is confined to temporary fixture repositories.
     assert str(pathlib.Path.cwd()).startswith(str(base))
+    if "clone" in args and "https://github.com/sdelavega/homebrew-tap.git" in args:
+        args[args.index("https://github.com/sdelavega/homebrew-tap.git")] = str(base / "tap.git")
     if args == ["remote", "get-url", "origin"]:
         print("https://github.com/sdelavega/" + ("wrong" if fault == "tap-origin" else "homebrew-tap") + ".git")
     else:
