@@ -16,6 +16,7 @@
 
 
 import AppKit
+import SwiftUI
 import XCTest
 @testable import TesseraeKit
 
@@ -386,8 +387,49 @@ final class FolderTreeTests: XCTestCase {
             let outline = c.makeOutlineView()
             let required = outline.tableColumns.reduce(CGFloat(0)) { $0 + $1.minWidth } + CGFloat(outline.numberOfColumns) * outline.intercellSpacing.width
             XCTAssertEqual(outline.numberOfColumns, 6)
-            // The 730-point pane reserves at least 30 points for scroll-view chrome.
-            XCTAssertLessThanOrEqual(required, 700)
+            let view = FolderOutlineView(source: OverlaySource(t.snapshot, SizeOverlay()), root: 0,
+                selection: Selection(), navigator: Navigator(snapshot: t.snapshot), expansion: FolderExpansionState(), locale: locale)
+            let host = NSHostingView(rootView: view)
+            host.frame = CGRect(x: 0, y: 0, width: 620, height: 180)
+            host.layoutSubtreeIfNeeded()
+            func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }.first)
+            scroll.tile()
+            let document = try XCTUnwrap(scroll.documentView as? NSOutlineView)
+            XCTAssertEqual(document.numberOfColumns, 6)
+            XCTAssertGreaterThan(document.numberOfRows, 0)
+            XCTAssertEqual(document.tableColumns[0].width, 180)
+            XCTAssertEqual(document.tableColumns[1].width, 110)
+            XCTAssertGreaterThan(required, scroll.contentSize.width)
+            XCTAssertEqual(document.frame.width, required, accuracy: 1)
+            XCTAssertTrue(scroll.hasHorizontalScroller)
+            XCTAssertTrue(try XCTUnwrap(scroll.horizontalScroller).isEnabled)
+            let modified = document.rect(ofColumn: 5)
+            document.scrollToVisible(modified)
+            XCTAssertGreaterThan(scroll.contentView.bounds.minX, 0)
+            XCTAssertGreaterThanOrEqual(scroll.contentView.bounds.maxX, modified.maxX - 1)
+            XCTAssertLessThanOrEqual(scroll.contentView.bounds.minX, modified.minX)
+            let files = NSHostingView(rootView: FileTableView(snapshot: t.snapshot, rows: [t["compressed"]],
+                selection: Selection(), locale: locale))
+            files.frame = CGRect(x: 0, y: 0, width: 400, height: 180)
+            files.layoutSubtreeIfNeeded()
+            let fileScroll = try XCTUnwrap(descendants(files).compactMap { $0 as? NSScrollView }.first)
+            fileScroll.tile()
+            let fileTable = try XCTUnwrap(fileScroll.documentView as? NSTableView)
+            XCTAssertEqual(fileTable.numberOfRows, 1)
+            XCTAssertEqual(fileTable.numberOfColumns, 5)
+            let fileWidth = fileTable.tableColumns.reduce(CGFloat(0)) { $0 + $1.width }
+                + CGFloat(fileTable.numberOfColumns) * fileTable.intercellSpacing.width
+            XCTAssertEqual(fileTable.tableColumns[0].width, 180)
+            XCTAssertGreaterThan(fileWidth, fileScroll.contentSize.width)
+            XCTAssertEqual(fileTable.frame.width, fileWidth, accuracy: 1)
+            XCTAssertTrue(fileScroll.hasHorizontalScroller)
+            XCTAssertTrue(try XCTUnwrap(fileScroll.horizontalScroller).isEnabled)
+            let kind = fileTable.rect(ofColumn: 4)
+            fileTable.scrollToVisible(kind)
+            XCTAssertGreaterThan(fileScroll.contentView.bounds.minX, 0)
+            XCTAssertGreaterThanOrEqual(fileScroll.contentView.bounds.maxX, kind.maxX - 1)
+            XCTAssertLessThanOrEqual(fileScroll.contentView.bounds.minX, kind.minX)
             for column in outline.tableColumns.dropFirst() {
                 XCTAssertEqual(column.minWidth, column.maxWidth)
                 let textWidth = (column.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]).width

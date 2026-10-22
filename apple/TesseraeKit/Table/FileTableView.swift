@@ -57,7 +57,7 @@ public struct FileTableView: NSViewRepresentable {
         let scroll = FittingTableScrollView()
         scroll.documentView = c.makeTableView()
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
+        scroll.hasHorizontalScroller = true
         return scroll
     }
 
@@ -287,7 +287,7 @@ private final class ReclaimTableView: NSTableView {
 }
 
 
-/// Fit every column within the viewport, giving the remaining space to Name.
+/// Give Name spare viewport width; scroll when the columns exceed the viewport.
 private final class FittingTableScrollView: NSScrollView {
     override func tile() {
         super.tile()
@@ -297,7 +297,7 @@ private final class FittingTableScrollView: NSScrollView {
         let fixed = columns.dropFirst().reduce(CGFloat(0)) { $0 + $1.width }
         let spacing = table.intercellSpacing.width * CGFloat(columns.count)
         columns[0].width = max(180, contentSize.width - fixed - spacing)
-        table.setFrameSize(NSSize(width: contentSize.width, height: table.frame.height))
+        table.setFrameSize(NSSize(width: max(contentSize.width, fixed + spacing + columns[0].width), height: table.frame.height))
     }
 }
 

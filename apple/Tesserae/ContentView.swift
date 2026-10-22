@@ -19,7 +19,7 @@ import SwiftUI
 import TesseraeKit
 
 struct ContentView: View {
-    static let minimumContentSize = CGSize(width: 1520, height: 720)
+    static let minimumContentSize = CGSize(width: 1440, height: 720)
     @StateObject private var model = AppModel()
     @StateObject private var volumes = VolumeListModel()
     @StateObject private var reclaimUI = ReclaimPresentation()
@@ -368,7 +368,7 @@ struct SessionView: View {
                     Divider()
                     TablePane(session: session, rows: session.table, selection: session.selection, stage: stage, stagingDisabled: stagingDisabled)
                         .frame(minHeight: 150, idealHeight: 220)
-                }.frame(minWidth: 730, idealWidth: 760)
+                }.frame(minWidth: 620, idealWidth: 700)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if let model = session.reconciliation {

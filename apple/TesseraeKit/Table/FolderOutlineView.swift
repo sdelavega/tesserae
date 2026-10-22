@@ -46,7 +46,7 @@ public struct FolderOutlineView: NSViewRepresentable {
         let scroll = FittingOutlineScrollView()
         scroll.documentView = context.coordinator.makeOutlineView()
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
+        scroll.hasHorizontalScroller = true
         return scroll
     }
 

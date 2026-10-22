@@ -145,7 +145,7 @@ final class DegradedModeTests: XCTestCase {
         }
     }
 
-    func test_main_window_all_panes_fit_at_1520_by_900() async throws {
+    func test_main_window_all_panes_fit_at_1440_by_900() async throws {
         var stats = TessScanStats(); stats.files = 3; stats.dirs = 2
         let tree = TestSnapshot(.dir("/Fixture", [
             .dir("Projects", [.file("a-long-source-file-name.swift", 30_000_000_000), .file("archive.zip", 10_000_000_000)]),
@@ -174,13 +174,13 @@ final class DegradedModeTests: XCTestCase {
             .environment(\.colorScheme, .light).background(Color.white)
             .defaultAppStorage(defaults)
         let host = NSHostingView(rootView: AnyView(content))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1520, height: 900),
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         window.appearance = NSAppearance(named: .aqua)
         window.contentView = host
-        host.frame = CGRect(x: 0, y: 0, width: 1520, height: 900)
+        host.frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
         for _ in 0..<10 {
             host.layoutSubtreeIfNeeded()
             await session.waitForTable(); await session.waitForLabels()
@@ -192,8 +192,7 @@ final class DegradedModeTests: XCTestCase {
         let table = try XCTUnwrap(descendants(host).compactMap { $0 as? NSTableView }.first)
         let scroll = try XCTUnwrap(table.enclosingScrollView)
         XCTAssertEqual(table.numberOfColumns, 6)
-        XCTAssertLessThanOrEqual(table.rect(ofColumn: table.numberOfColumns - 1).maxX, scroll.contentSize.width + 1, "every column fits: \(table.tableColumns.map(\.width)), spacing=\(table.intercellSpacing)")
-        XCTAssertLessThanOrEqual(table.bounds.width, scroll.contentSize.width + 1, "no horizontal table overflow; columns: \(table.tableColumns.map(\.width))")
+        XCTAssertTrue(scroll.hasHorizontalScroller)
         XCTAssertEqual(scroll.contentView.bounds.minX, 0, accuracy: 0.5)
         XCTAssertGreaterThanOrEqual(table.tableColumns[0].width, 180, "Name stays readable")
         XCTAssertLessThanOrEqual(table.rect(ofColumn: 0).maxX, scroll.contentSize.width)
@@ -204,16 +203,16 @@ final class DegradedModeTests: XCTestCase {
         XCTAssertTrue(host.bounds.contains(frame), "Copy Diagnostics must be fully inside window: \(frame), \(host.bounds)")
         XCTAssertNotNil(session.reconciliation, "precondition: space breakdown visible")
         host.displayIfNeeded()
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1520, pixelsHigh: 900,
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1440, pixelsHigh: 900,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 1520 * 4, bitsPerPixel: 32))
+            colorSpaceName: .deviceRGB, bytesPerRow: 1440 * 4, bitsPerPixel: 32))
         bitmap.size = host.bounds.size
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let actual = try XCTUnwrap(bitmap.cgImage)
         let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("build/ui-fixes/main-window-all-panes.actual.png")
         try png(actual, output)
-        let reference = Self.references.appendingPathComponent("main-window-all-panes-1520x900.png")
+        let reference = Self.references.appendingPathComponent("main-window-all-panes-1440x900.png")
         if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1" { try png(actual, reference) }
         guard let source = CGImageSourceCreateWithURL(reference as CFURL, nil) else {
             XCTFail("Missing main-window reference; inspect " + output.path); return
@@ -221,13 +220,23 @@ final class DegradedModeTests: XCTestCase {
         let expected = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(actual.width, expected.width); XCTAssertEqual(actual.height, expected.height)
         XCTAssertEqual(try pixels(actual), try pixels(expected), "main-window snapshot changed")
-        XCTAssertEqual(ContentView.minimumContentSize, CGSize(width: 1520, height: 720))
-        window.setContentSize(ContentView.minimumContentSize)
+        XCTAssertEqual(ContentView.minimumContentSize, CGSize(width: 1440, height: 720))
+        window.setContentSize(CGSize(width: 1440, height: 720))
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(50))
         host.layoutSubtreeIfNeeded()
         XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame), "controls also fit at the window minimum")
-        XCTAssertLessThanOrEqual(table.rect(ofColumn: table.numberOfColumns - 1).maxX, scroll.contentSize.width + 1)
+        XCTAssertEqual(host.bounds.size, CGSize(width: 1440, height: 720))
+        let splits = descendants(host).compactMap { $0 as? NSSplitView }
+        XCTAssertFalse(splits.isEmpty, "precondition: real split panes")
+        for split in splits {
+            for pane in split.arrangedSubviews {
+                let rect = host.convert(pane.bounds, from: pane)
+                XCTAssertGreaterThan(rect.width, 100)
+                XCTAssertGreaterThan(rect.height, 100)
+                XCTAssertTrue(host.bounds.insetBy(dx: -1, dy: -1).contains(rect), "every pane visible: \(rect)")
+            }
+        }
         for identifier in ["en_US", "en_GB"] {
             for mode in ["folders", "largestFiles"] {
                 defaults.set(mode, forKey: "fileListMode")
@@ -240,8 +249,26 @@ final class DegradedModeTests: XCTestCase {
                 let viewport = try XCTUnwrap(current.enclosingScrollView)
                 XCTAssertEqual(current.numberOfColumns, mode == "folders" ? 6 : 5)
                 XCTAssertGreaterThan(current.numberOfRows, 0)
-                XCTAssertLessThanOrEqual(current.rect(ofColumn: current.numberOfColumns - 1).maxX, viewport.contentSize.width + 1,
-                    "\(identifier) \(mode): every column fits at minimum window width")
+                XCTAssertTrue(viewport.hasHorizontalScroller)
+                let total = current.tableColumns.reduce(CGFloat(0)) { $0 + $1.width }
+                    + CGFloat(current.numberOfColumns) * current.intercellSpacing.width
+                XCTAssertEqual(current.frame.width, total, accuracy: 1, "document covers every column")
+                if mode == "folders" {
+                    XCTAssertGreaterThan(total, viewport.contentSize.width, "precondition: folder columns overflow")
+                    XCTAssertTrue(try XCTUnwrap(viewport.horizontalScroller).isEnabled)
+                }
+                let last = current.rect(ofColumn: current.numberOfColumns - 1)
+                current.scrollToVisible(last)
+                viewport.reflectScrolledClipView(viewport.contentView)
+                if total > viewport.contentSize.width {
+                    XCTAssertGreaterThan(viewport.contentView.bounds.minX, 0, "horizontal scrolling moves the viewport")
+                }
+                XCTAssertGreaterThanOrEqual(viewport.contentView.bounds.maxX, last.maxX - 1)
+                XCTAssertLessThanOrEqual(viewport.contentView.bounds.minX, last.minX)
+                let modified = current.rect(ofColumn: try XCTUnwrap(current.tableColumns.firstIndex { $0.identifier.rawValue == "modified" }))
+                current.scrollToVisible(modified)
+                XCTAssertGreaterThanOrEqual(viewport.contentView.bounds.maxX, modified.maxX - 1, "Modified fully revealed")
+                XCTAssertLessThanOrEqual(viewport.contentView.bounds.minX, modified.minX)
                 XCTAssertGreaterThanOrEqual(current.tableColumns[0].width, 180)
                 XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame))
             }
