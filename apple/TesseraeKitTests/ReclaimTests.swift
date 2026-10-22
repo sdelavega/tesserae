@@ -314,6 +314,49 @@ final class ReclaimTests: XCTestCase {
         XCTAssertEqual(root.items.first?.verdict, .denied(.volumeRootOrTopLevel))
     }
 
+    func test_app_stages_selection_before_hover_and_after_pointer_leaves() async throws {
+        let t = fixture(), ctx = context(t.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), stagingStat: fake(t.snapshot), contextLoader: { _ in ctx })
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 800, height: 600))
+        let hovered = try XCTUnwrap(session.tiles.firstIndex { $0.node == t["parent"] })
+        let selected: Set<UInt32> = [t["parent-prefix"], t["raw"]]
+        session.selection.nodes = selected
+        session.hover(tile: hovered)
+        XCTAssertEqual(session.inspectorModel.info?.node, t["parent"])
+        XCTAssertFalse(selected.contains(t["parent"]))
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertEqual(session.reclaim.stagedNodes, selected)
+        XCTAssertTrue(session.reclaim.items.allSatisfy { $0.verdict == .ok })
+        session.reclaim.clear()
+        session.hover(tile: nil)
+        XCTAssertNil(session.inspectorModel.info)
+        XCTAssertEqual(session.selection.nodes, selected)
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertEqual(session.reclaim.stagedNodes, selected)
+    }
+
+    func test_app_stages_hovered_node_when_selection_is_empty() async throws {
+        let t = fixture(), ctx = context(t.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), stagingStat: fake(t.snapshot), contextLoader: { _ in ctx })
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 800, height: 600))
+        let hovered = try XCTUnwrap(session.tiles.firstIndex { $0.node == t["parent-prefix"] })
+        XCTAssertTrue(session.selection.nodes.isEmpty)
+        session.hover(tile: hovered)
+        XCTAssertEqual(session.inspectorModel.info?.node, t["parent-prefix"])
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertEqual(session.reclaim.stagedNodes, [t["parent-prefix"]])
+        XCTAssertEqual(session.reclaim.items.first?.verdict, .ok)
+        XCTAssertTrue(session.selection.nodes.isEmpty, "Hover fallback must preserve shared selection")
+        session.reclaim.clear()
+        session.hover(tile: nil)
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertTrue(session.reclaim.items.isEmpty)
+    }
+
     func test_app_stages_selection_flags_descendants_and_rescan_clears() async throws {
         let t = fixture()
         let ctx = context(t.snapshot)

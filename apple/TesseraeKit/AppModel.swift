@@ -684,7 +684,10 @@ public final class AppModel: ObservableObject {
         guard !isScanning, let session, !session.changedSinceScan, let context = session.guardContext else { return }
         cancelStaging()
         let generation = stagingGeneration
-        let nodes = session.selection.nodes.sorted(), stat = stagingStat
+        let nodes = session.selection.nodes.isEmpty
+            ? session.inspectorModel.info?.node.map { [$0] } ?? []
+            : session.selection.nodes.sorted()
+        let stat = stagingStat
         isPreparingReclaim = true
         stagingTask = Task { [weak self] in
             await ReclaimCoordinator.shared.acquire()
