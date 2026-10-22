@@ -21,6 +21,6 @@ CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
 ENABLE_HARDENED_RUNTIME = YES
 OTHER_CODE_SIGN_FLAGS = $(inherited) --timestamp
-// scripts/bundle-version.sh 0.1.0; release.sh passes the derivation on the command line.
-CURRENT_PROJECT_VERSION = 100
+// scripts/bundle-version.sh 0.1.1; release.sh passes the derivation on the command line.
+CURRENT_PROJECT_VERSION = 101
 #include? "Release.local.xcconfig"
