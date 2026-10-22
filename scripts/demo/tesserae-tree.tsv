@@ -10,8 +10,8 @@ Cargo.toml	336	2026-10-22T08:21:01-04:00
 LICENSE	35149	2026-10-18T14:14:12-04:00
 README.md	10679	2026-10-22T08:32:29-04:00
 apple/Release.local.xcconfig.example	1077	2026-10-22T08:21:01-04:00
-apple/Release.xcconfig	1115	2026-10-22T13:32:00-04:00
-apple/Tesserae.xcodeproj/project.pbxproj	87058	2026-10-22T13:32:00-04:00
+apple/Release.xcconfig	1115	2026-10-22T14:48:05-04:00
+apple/Tesserae.xcodeproj/project.pbxproj	87058	2026-10-22T14:48:05-04:00
 apple/Tesserae.xcodeproj/project.xcworkspace/contents.xcworkspacedata	135	2026-10-20T08:10:57-04:00
 apple/Tesserae.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved	388	2026-10-22T08:21:01-04:00
 apple/Tesserae.xcodeproj/xcshareddata/xcschemes/Tesserae.xcscheme	3358	2026-10-20T08:10:57-04:00
@@ -27,7 +27,7 @@ apple/Tesserae/Assets.xcassets/AppIcon.appiconset/icon-512.png	85842	2026-10-22T
 apple/Tesserae/Assets.xcassets/AppIcon.appiconset/icon-64.png	3384	2026-10-22T08:21:01-04:00
 apple/Tesserae/Assets.xcassets/Contents.json	63	2026-10-22T08:21:01-04:00
 apple/Tesserae/ConfirmReclaimSheet.swift	7039	2026-10-22T08:21:01-04:00
-apple/Tesserae/ContentView.swift	30253	2026-10-22T08:58:26-04:00
+apple/Tesserae/ContentView.swift	30264	2026-10-22T14:30:38-04:00
 apple/Tesserae/Info.plist	2355	2026-10-22T09:05:42-04:00
 apple/Tesserae/Licenses/GPL-3.txt	35149	2026-10-22T08:21:01-04:00
 apple/Tesserae/Licenses/Sparkle-LICENSE.txt	6154	2026-10-22T08:21:01-04:00
@@ -38,7 +38,7 @@ apple/Tesserae/OnboardingView.swift	9934	2026-10-22T08:21:01-04:00
 apple/Tesserae/ReclaimSummaryView.swift	3452	2026-10-22T08:21:01-04:00
 apple/Tesserae/ReclaimView.swift	23771	2026-10-22T13:18:24-04:00
 apple/Tesserae/ScanReportView.swift	4114	2026-10-22T08:21:01-04:00
-apple/Tesserae/ScanStatusViews.swift	4890	2026-10-22T08:21:01-04:00
+apple/Tesserae/ScanStatusViews.swift	5134	2026-10-22T14:30:38-04:00
 apple/Tesserae/StartView.swift	5057	2026-10-22T08:21:01-04:00
 apple/Tesserae/Tesserae.entitlements	404	2026-10-20T08:10:57-04:00
 apple/Tesserae/TesseraeApp.swift	4920	2026-10-22T08:58:26-04:00
@@ -51,11 +51,11 @@ apple/TesseraeKit/Colour/Palette.swift	6355	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Diagnostics/FrameTimer.swift	24673	2026-10-22T08:58:26-04:00
 apple/TesseraeKit/FFI/module.modulemap	1135	2026-10-20T08:10:57-04:00
 apple/TesseraeKit/Interaction/HitTester.swift	3786	2026-10-20T08:10:57-04:00
-apple/TesseraeKit/Interaction/Inspector.swift	12319	2026-10-22T08:21:01-04:00
+apple/TesseraeKit/Interaction/Inspector.swift	12326	2026-10-22T14:30:38-04:00
 apple/TesseraeKit/Interaction/TreemapInteraction.swift	8204	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/L10n.swift	1239	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Labels/HoverCallout.swift	4990	2026-10-22T08:21:01-04:00
-apple/TesseraeKit/Labels/LabelPlacer.swift	10022	2026-10-22T08:21:01-04:00
+apple/TesseraeKit/Labels/LabelPlacer.swift	10067	2026-10-22T14:40:50-04:00
 apple/TesseraeKit/Labels/LabelsOverlay.swift	8426	2026-10-20T08:10:57-04:00
 apple/TesseraeKit/Labels/RelativePath.swift	1734	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Layout/SquarifiedLayout.swift	18383	2026-10-22T08:21:01-04:00
@@ -119,7 +119,7 @@ apple/TesseraeKitTests/ColourTests.swift	11416	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/CommandRunnerTests.swift	5583	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/CompressEligibilityTests.swift	5883	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/CompressorTests.swift	27278	2026-10-22T10:23:21-04:00
-apple/TesseraeKitTests/DegradedModeTests.swift	26358	2026-10-22T10:23:21-04:00
+apple/TesseraeKitTests/DegradedModeTests.swift	30924	2026-10-22T14:30:38-04:00
 apple/TesseraeKitTests/EstimateTests.swift	4579	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ExecutorTests.swift	29617	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/FolderColourTests.swift	13906	2026-10-22T08:21:01-04:00
@@ -132,7 +132,7 @@ apple/TesseraeKitTests/HoverCalloutTests.swift	2814	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/IdentityTests.swift	8355	2026-10-22T10:23:21-04:00
 apple/TesseraeKitTests/InspectorTests.swift	10830	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/LabelTests.swift	35276	2026-10-22T08:21:01-04:00
-apple/TesseraeKitTests/LayoutHeaderTests.swift	4562	2026-10-22T08:21:01-04:00
+apple/TesseraeKitTests/LayoutHeaderTests.swift	5506	2026-10-22T14:40:50-04:00
 apple/TesseraeKitTests/LayoutTests.swift	44694	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/LinkTests.swift	1338	2026-10-20T08:10:57-04:00
 apple/TesseraeKitTests/LiveArchiveTests.swift	33396	2026-10-22T08:21:01-04:00
@@ -145,7 +145,7 @@ apple/TesseraeKitTests/PutBackTests.swift	13547	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ReclaimActionTests.swift	23815	2026-10-22T11:07:47-04:00
 apple/TesseraeKitTests/ReclaimLogTests.swift	9618	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ReclaimSnapshotTests.swift	17204	2026-10-22T13:18:24-04:00
-apple/TesseraeKitTests/ReclaimTests.swift	22219	2026-10-22T13:25:12-04:00
+apple/TesseraeKitTests/ReclaimTests.swift	26613	2026-10-22T14:40:50-04:00
 apple/TesseraeKitTests/ReclaimViewModelTests.swift	44012	2026-10-22T13:18:24-04:00
 apple/TesseraeKitTests/ReconcileTests.swift	8382	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/ReconciliationViewModelTests.swift	20927	2026-10-22T08:21:01-04:00
@@ -319,6 +319,7 @@ docs/images/welcome.png	319215	2026-10-22T08:32:29-04:00
 docs/phase-2-backlog.md	15436	2026-10-22T08:21:01-04:00
 docs/releases/0.1.0.md	4878	2026-10-22T08:21:01-04:00
 docs/releases/0.1.1.md	1488	2026-10-22T13:32:00-04:00
+docs/releases/0.1.2.md	1046	2026-10-22T14:48:05-04:00
 docs/releasing.md	13197	2026-10-22T10:05:13-04:00
 fuzz/.gitignore	178	2026-10-18T15:38:51-04:00
 fuzz/Cargo.lock	10394	2026-10-22T08:21:01-04:00
@@ -363,7 +364,7 @@ scripts/tests/demo_volume_test.py	20676	2026-10-22T08:21:01-04:00
 scripts/tests/icon_test.py	6667	2026-10-22T08:21:01-04:00
 scripts/tests/publish_test.py	36249	2026-10-22T13:04:18-04:00
 scripts/tests/release_input_test.py	6260	2026-10-22T10:05:13-04:00
-scripts/tests/release_metadata_test.py	8230	2026-10-22T13:32:00-04:00
+scripts/tests/release_metadata_test.py	8248	2026-10-22T14:48:05-04:00
 scripts/tests/release_test.sh	25903	2026-10-22T10:05:13-04:00
 scripts/tests/release_workflow_test.py	23903	2026-10-22T10:13:38-04:00
 scripts/tests/strings_test.py	9919	2026-10-22T08:21:01-04:00
