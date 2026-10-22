@@ -1,6 +1,28 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "reclaim.noCompressedItems": {
+      "comment": "Empty state for the recently compressed history.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No compressed items."
+          }
+        }
+      }
+    },
+    "reclaim.nothingStaged": {
+      "comment": "Summary when no items are staged for reclaiming space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing staged"
+          }
+        }
+      }
+    },
     "reclaimAction.appBundleCompress": {
       "comment": "Warning before compressing an app bundle.",
       "localizations": {

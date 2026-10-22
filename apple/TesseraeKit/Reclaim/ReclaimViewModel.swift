@@ -221,6 +221,10 @@ public struct TrashConfirmation {
         if checked { confirmedWarnings.insert(id) } else { confirmedWarnings.remove(id) }
     }
     public func total(locale: Locale = .current) -> String {
+        if items.isEmpty {
+            return String(localized: "reclaim.nothingStaged", defaultValue: "Nothing staged",
+                bundle: L10n.bundle, locale: locale, comment: "Summary when no items are staged for reclaiming space.")
+        }
         var known: UInt64 = 0
         var unknown = 0
         for item in items {
@@ -804,6 +808,8 @@ extension ReclaimCopy {
         bundle: L10n.bundle, comment: "Open the confirmation for all staged actions.")
     public static let advanced = String(localized: "reclaim.advanced", defaultValue: "Advanced",
         bundle: L10n.bundle, comment: "Collapsed disclosure for advanced archive formats.")
+    public static let noCompressedItems = String(localized: "reclaim.noCompressedItems", defaultValue: "No compressed items.",
+        bundle: L10n.bundle, comment: "Empty state for the recently compressed history.")
     public static let recentlyCompressed = String(localized: "reclaim.recentlyCompressed", defaultValue: "Recently compressed",
         bundle: L10n.bundle, comment: "Heading for reversible compression runs.")
     public static let decompress = String(localized: "reclaim.decompress", defaultValue: "Decompress…",

@@ -426,6 +426,7 @@ struct RecentlyCompressedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(ReclaimCopy.recentlyCompressed).font(.title2.bold())
+            if entries.isEmpty { Text(ReclaimCopy.noCompressedItems).foregroundStyle(.secondary) }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                 Text(entry.displayPath).textSelection(.enabled)
                 if let count = entry.compression?.filesChanged { Text(ReclaimCopy.items(count)) }

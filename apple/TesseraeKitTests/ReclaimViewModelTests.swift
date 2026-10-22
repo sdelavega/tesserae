@@ -399,6 +399,16 @@ final class ReclaimViewModelTests: XCTestCase {
         XCTAssertEqual(reclaim.items.count, 1)
     }
 
+    func test_empty_staging_copy_keeps_byte_summary_for_staged_zero_bytes() {
+        let locale = Locale(identifier: "en_US")
+        XCTAssertEqual(TrashConfirmation(items: []).total(locale: locale), "Nothing staged")
+        let zero = item(1, .ok, 0)
+        let confirmation = TrashConfirmation(items: [zero])
+        XCTAssertEqual(confirmation.items.count, 1)
+        XCTAssertEqual(confirmation.items[0].recordedSize, 0)
+        XCTAssertEqual(confirmation.total(locale: locale), "Zero kB staged")
+    }
+
     func test_count_copy_agrees_for_zero_one_and_two() {
         let locale = Locale(identifier: "en_US")
         for count in 0...2 {
@@ -409,7 +419,7 @@ final class ReclaimViewModelTests: XCTestCase {
             XCTAssertEqual(ReclaimCopy.processed(count, count), "\(count) of \(count) \(noun) processed")
             XCTAssertEqual(ReclaimCopy.rescan(count), "Sizes include \(count) trashed \(noun); rescan for exact figures")
             XCTAssertEqual(TrashConfirmation(items: items).total(locale: locale),
-                "Zero kB staged" + (count == 0 ? "" : " · \(count) \(noun) of unknown size"))
+                (count == 0 ? "Nothing staged" : "Zero kB staged · \(count) \(noun) of unknown size"))
             XCTAssertEqual(trashSummaryText(ExecutionResult(outcomes: [], reclaimableBytes: 0, unknownSizeTrashed: count), locale: locale),
                 "Zero kB moved to Trash — empty Trash to reclaim it" + (count == 0 ? "" : " (plus \(count) \(noun) of unknown size)"))
         }

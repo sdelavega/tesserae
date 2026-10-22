@@ -105,6 +105,16 @@ final class ReclaimSnapshotTests: XCTestCase {
         }
     }
 
+    func test_empty_compressed_history_light_and_dark() throws {
+        try snapshot("reclaim-compressed-empty", RecentlyCompressedView(entries: [], busy: false, decompress: { _ in
+            XCTFail("Empty history has no decompress action")
+        }).frame(width: 620, alignment: .leading))
+        let entry = LogEntry(ts: date, action: "compress", path: "/Fixture/Projects", pathB64: nil,
+            inode: 1, bytes: 100, trashURL: nil, result: "ok")
+        try snapshot("reclaim-compressed-populated", RecentlyCompressedView(entries: [entry], busy: false, decompress: { _ in })
+            .frame(width: 620, alignment: .leading))
+    }
+
     func test_empty_status_has_no_layout_footprint() {
         let host = NSHostingView(rootView: VStack(spacing: 0) {
             ReclaimStatusView()
