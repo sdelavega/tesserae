@@ -199,7 +199,7 @@ public func placeHeaderLabels(
     var out: [PlacedLabel] = []
     for tile in tiles {
         if Task.isCancelled { break }
-        guard let rect = tile.headerRect else { continue }
+        guard tile.node != Tile.noNode, !tile.isAggregate, let rect = tile.headerRect else { continue }
         let room = CGSize(width: rect.width - 2 * labelPadding, height: rect.height)
         let suffix = "  " + displaySize(OverlaySource(s, overlay).allocated(tile.node), locale: locale)
         guard let (text, size) = fit(s.displayName(tile.node), suffix: suffix, in: room, measure: measure) else { continue }

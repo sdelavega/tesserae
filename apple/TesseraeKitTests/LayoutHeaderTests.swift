@@ -67,6 +67,25 @@ final class LayoutHeaderTests: XCTestCase {
         let i = try XCTUnwrap(hit.tile(at: CGPoint(x: 20, y: 8), in: tiles))
         XCTAssertEqual(tiles[i].node, t["folder"])
     }
+    func test_header_labels_exclude_sentinel_and_aggregate_tiles() throws {
+        let t = fixture()
+        let folder = try XCTUnwrap(layout(t, 300, 200).first { $0.node == t["folder"] })
+        XCTAssertNotNil(folder.headerRect, "precondition: a real folder strip still receives text")
+        var sentinel = folder
+        sentinel.node = Tile.noNode
+        var aggregate = folder
+        aggregate.flags |= Tile.Flag.aggregated
+        aggregate.aggregateCount = 20
+        var unreadable = aggregate
+        unreadable.node = Tile.noNode
+        unreadable.flags |= Tile.Flag.permDenied
+        XCTAssertNotNil(sentinel.headerRect)
+        XCTAssertTrue(aggregate.isAggregate)
+        let headers = placeHeaderLabels([folder, sentinel, aggregate, unreadable], in: t.snapshot,
+            measure: { _ in CGSize(width: 20, height: 12) }, locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(headers.map(\.tile), [folder])
+    }
+
     func test_folder_with_strip_gets_no_label() throws {
         let t = fixture(), tiles = layout(t, 300, 200)
         XCTAssertNotNil(try XCTUnwrap(tiles.first { $0.node == t["folder"] }).headerRect)

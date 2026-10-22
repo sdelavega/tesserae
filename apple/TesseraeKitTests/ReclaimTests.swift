@@ -337,6 +337,78 @@ final class ReclaimTests: XCTestCase {
         XCTAssertEqual(session.reclaim.stagedNodes, selected)
     }
 
+    func test_unreadable_aggregate_remains_display_only_across_tile_consumers() async throws {
+        var stats = TessScanStats(); stats.root_device = 7
+        let t = TestSnapshot(.dir("/scan/root", [.file("file", 100)] + (0..<20).map { .denied("private-\($0)") }),
+            stats: stats, fileIDs: true)
+        let ctx = context(t.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), accessLoader: { .granted },
+            stagingStat: fake(t.snapshot), contextLoader: { _ in ctx })
+        await app.waitForAccess()
+        app.replaceSnapshot(t.snapshot)
+        let session = try XCTUnwrap(app.session)
+        XCTAssertNotNil(session.guardContext, "precondition: staging is available")
+        XCTAssertFalse(app.stagingUnavailable)
+        session.resize(to: CGSize(width: 800, height: 600))
+        let index = try XCTUnwrap(session.tiles.firstIndex { $0.isAggregate && $0.isPermissionDenied })
+        let tile = session.tiles[index]
+        XCTAssertEqual(tile.node, Tile.noNode)
+        XCTAssertEqual(tile.aggregateCount, 20)
+        session.hover(tile: index)
+        let info = try XCTUnwrap(session.inspector)
+        XCTAssertEqual(info.subject, .unreadable(count: 20))
+        XCTAssertNil(info.node); XCTAssertNil(info.rawPath); XCTAssertNil(info.displayPath)
+        XCTAssertEqual(info.title(locale: Locale(identifier: "en_US")), "20 unreadable folders")
+        session.pointerMoved(tile: index, point: CGPoint(x: tile.rect.midX, y: tile.rect.midY))
+        defer { session.hoverCallout.hide(for: .motion) }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(session.hoverCallout.info, info)
+
+        var decorated = session.tiles
+        applySelection(&decorated, [Tile.noNode, t["file"]])
+        XCTAssertEqual(decorated[index].flags & Tile.Flag.selected, 0)
+        XCTAssertTrue(decorated.contains { $0.node == t["file"] && $0.flags & Tile.Flag.selected != 0 })
+        applyStaging(&decorated, in: t.snapshot, staged: [Tile.noNode, t.snapshot.root])
+        XCTAssertEqual(decorated[index].flags & Tile.Flag.staged, 0)
+        XCTAssertTrue(decorated.contains { $0.node == t["file"] && $0.flags & Tile.Flag.staged != 0 })
+        session.selection.nodes = [Tile.noNode]
+        XCTAssertTrue(session.selectedTiles.isEmpty, "no outline for a sentinel selection")
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertTrue(session.reclaim.items.isEmpty, "sentinel selection cannot enter Reclaim")
+        session.selection.nodes = []
+        app.stageSelection(); await app.waitForStaging()
+        XCTAssertTrue(session.reclaim.items.isEmpty, "aggregate hover has no node to stage")
+        session.hover(tile: nil)
+        XCTAssertNil(session.inspector)
+
+        let interaction = TreemapInteraction()
+        interaction.navigator = session.navigator
+        interaction.selection = session.selection
+        _ = interaction.setTiles(session.tiles)
+        session.selection.nodes = [t["file"]]
+        let point = CGPoint(x: tile.rect.midX, y: tile.rect.midY)
+        interaction.hover(at: point)
+        XCTAssertEqual(interaction.hovered, index, "precondition: hit test resolves the aggregate")
+        XCTAssertFalse(interaction.selectForContext(at: point), "both treemap context menus share this gate")
+        interaction.press(at: point)
+        XCTAssertFalse(interaction.release(at: point))
+        XCTAssertEqual(session.selection.nodes, [t["file"]], "aggregate clicks preserve the real selection")
+        XCTAssertTrue(interaction.key(.descend))
+        XCTAssertEqual(session.root, t.snapshot.root)
+
+        var labelTile = tile
+        labelTile.rect = CGRect(x: 0, y: 0, width: 300, height: 30)
+        let labels = placeLabels([labelTile], in: t.snapshot, measure: { _ in CGSize(width: 20, height: 12) },
+            locale: Locale(identifier: "en_US"), overlay: session.overlay)
+        XCTAssertEqual(labels.map(\.text), ["20 unreadable folders"])
+        for mode in [ColourMode.folder, .age(now: Date(timeIntervalSince1970: 1)), .typeFocus([.video])] {
+            XCTAssertEqual(session.tileColourIndex(tile, mode: mode), UInt16(Palette.statusIndex))
+        }
+        let colours = FolderColours(tiles: session.tiles, root: session.root, source: session.source)
+        XCTAssertNil(colours.rootChildren[Tile.noNode])
+        XCTAssertNil(colours.slots[Tile.noNode])
+    }
+
     func test_app_stages_hovered_node_when_selection_is_empty() async throws {
         let t = fixture(), ctx = context(t.snapshot)
         let app = AppModel(coordinator: ScanCoordinator(), stagingStat: fake(t.snapshot), contextLoader: { _ in ctx })
