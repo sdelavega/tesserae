@@ -450,4 +450,43 @@ final class RenderSnapshotTests: XCTestCase {
         view.set(tiles: tiles, palette: palette, colourOf: { _ in 3 }, dark: true)
         XCTAssertEqual(view.renderCount, base + 4, "light/dark re-renders")
     }
+    @MainActor
+    func test_reported_and_allocated_lists_light_and_dark() throws {
+        let t = TestSnapshot(.dir("Projects", [.dir("Sources", [.file("report.pdf", 1_100_000_000, logical: 4_200_000_000)]),
+            .file("photo.raw", 2_000_000_000, logical: 2_000_000_000)]))
+        let locale = Locale(identifier: "en_US")
+        for dark in [false, true] {
+            for folders in [true, false] {
+                let folder = FolderOutlineView.Coordinator(source: OverlaySource(t.snapshot, SizeOverlay()), root: 0,
+                    selection: Selection(), navigator: Navigator(snapshot: t.snapshot), expansion: FolderExpansionState(), locale: locale)
+                let files = FileTableView.Coordinator(snapshot: t.snapshot, rows: [t["photo.raw"], t["report.pdf"]], selection: Selection(), locale: locale)
+                let table = folders ? folder.makeOutlineView() : files.makeTableView()
+                XCTAssertEqual(table.numberOfRows, 2)
+                XCTAssertEqual(table.tableColumns[1].title, "Reported Size")
+                XCTAssertEqual(table.tableColumns[2].title, "Allocated")
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 180),
+                    styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 180))
+                scroll.documentView = table
+                window.contentView = scroll
+                table.frame = scroll.bounds
+                table.tableColumns[0].width = 760 - table.tableColumns.dropFirst().reduce(CGFloat(0)) { $0 + $1.width }
+                    - table.intercellSpacing.width * CGFloat(table.numberOfColumns)
+                scroll.layoutSubtreeIfNeeded()
+                scroll.displayIfNeeded()
+                let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 760, pixelsHigh: 180,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 760 * 4, bitsPerPixel: 32))
+                rep.size = scroll.bounds.size
+                scroll.cacheDisplay(in: scroll.bounds, to: rep)
+                let image = try XCTUnwrap(rep.cgImage)
+                try assertMatchesReference(image, named: "size-columns-" + (folders ? "folders" : "files") + (dark ? "-dark" : "-light"))
+                withExtendedLifetime((folder, files)) {}
+            }
+        }
+    }
+
 }

@@ -105,15 +105,17 @@ public struct FolderOutlineView: NSViewRepresentable {
             }
             let titles = [
                 String(localized: "fileTableView.name", defaultValue: "Name", bundle: L10n.bundle, comment: "File name column."),
-                String(localized: "folderTree.size", defaultValue: "Size", bundle: L10n.bundle, comment: "Size on disk column."),
+                SizeColumnText.reported,
+                SizeColumnText.allocated,
                 String(localized: "folderTree.share", defaultValue: "Share", bundle: L10n.bundle, comment: "Share of the navigation root's allocated bytes."),
                 String(localized: "folderTree.items", defaultValue: "Items", bundle: L10n.bundle, comment: "Directory descendant count column."),
                 String(localized: "fileTableView.modified", defaultValue: "Modified", bundle: L10n.bundle, comment: "Modification date column.")
             ]
-            for (index, id) in ["name", "allocated", "share", "items", "modified"].enumerated() {
+            for (index, id) in ["name", "logical", "allocated", "share", "items", "modified"].enumerated() {
                 let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
                 column.title = titles[index]
-                column.width = id == "name" ? 280 : (id == "modified" ? Self.modifiedColumnWidth(locale: locale) : 90)
+                column.headerToolTip = SizeColumnText.help(id)
+                column.width = id == "name" ? 280 : (id == "modified" ? Self.modifiedColumnWidth(locale: locale) : (id == "logical" ? 110 : 90))
                 column.minWidth = id == "name" ? 180 : column.width
                 column.maxWidth = id == "name" ? 10_000 : column.width
                 column.resizingMask = []
@@ -259,6 +261,7 @@ public struct FolderOutlineView: NSViewRepresentable {
             case "name": sortKey = .name
             case "modified": sortKey = .modified
             case "items": sortKey = .items
+            case "logical": sortKey = .logical
             default: sortKey = .allocated
             }
             ascending = descriptor.ascending
@@ -280,7 +283,14 @@ public struct FolderOutlineView: NSViewRepresentable {
         func text(column: String, row: FolderRow) -> String {
             let source = model.source, s = source.snapshot
             switch row {
-            case .smaller(let count, let bytes, _):
+            case .smaller(let count, let bytes, let parent):
+                if column == "logical" {
+                    let shown = model.children(of: parent).compactMap { row -> UInt32? in
+                        if case .node(let node) = row { return node }; return nil
+                    }.reduce(UInt64(0)) { $0 + source.logical($1) }
+                    let total = source.logical(parent)
+                    return displaySize(total >= shown ? total - shown : 0, locale: locale)
+                }
                 if column == "allocated" { return displaySize(bytes, locale: locale) }
                 guard column == "name" else { return "" }
                 let size = displaySize(bytes, locale: locale)
@@ -291,6 +301,7 @@ public struct FolderOutlineView: NSViewRepresentable {
                 switch column {
                 case "name": return s.displayName(node)
                 case "allocated": return displaySize(source.allocated(node), locale: locale)
+                case "logical": return displaySize(source.logical(node), locale: locale)
                 case "items": return source.isDirectory(node) ? source.descendantCount(node).formatted(.number.locale(locale)) : ""
                 case "modified": return TableDates.text(s.nodes[Int(node)].modified, locale: locale)
                 default: return ""
@@ -305,7 +316,7 @@ public struct FolderOutlineView: NSViewRepresentable {
             let field = NSTextField(labelWithString: text(column: id, row: item.row))
             field.font = .systemFont(ofSize: NSFont.systemFontSize)
             field.lineBreakMode = id == "name" ? .byTruncatingMiddle : .byClipping
-            if id == "allocated" || id == "items" {
+            if id == "logical" || id == "allocated" || id == "items" {
                 field.alignment = .right
                 field.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             }
@@ -317,8 +328,10 @@ public struct FolderOutlineView: NSViewRepresentable {
                 field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
                 field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
             ])
-            let label = [text(column: "name", row: item.row), text(column: "allocated", row: item.row),
-                id == "name" || id == "allocated" ? "" : text(column: id, row: item.row)].filter { !$0.isEmpty }.joined(separator: ", ")
+            let base = SizeColumnText.accessibility(name: text(column: "name", row: item.row),
+                reported: text(column: "logical", row: item.row), allocated: text(column: "allocated", row: item.row))
+            let detail = ["name", "logical", "allocated"].contains(id) ? "" : text(column: id, row: item.row)
+            let label = detail.isEmpty ? base : base + ", " + detail
             cell.setAccessibilityLabel(label)
             field.setAccessibilityLabel(label)
             return cell
@@ -357,7 +370,7 @@ private final class FolderOutline: NSOutlineView {
 private final class FittingOutlineScrollView: NSScrollView {
     override func tile() {
         super.tile()
-        guard let outline = documentView as? NSOutlineView, outline.tableColumns.count == 5 else { return }
+        guard let outline = documentView as? NSOutlineView, outline.tableColumns.count == 6 else { return }
         let columns = outline.tableColumns
         let fixed = columns.dropFirst().reduce(CGFloat(0)) { $0 + $1.width }
         let spacing = outline.intercellSpacing.width * CGFloat(columns.count)

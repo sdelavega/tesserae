@@ -452,17 +452,6 @@
         }
       }
     },
-    "fileTableView.allocated.v2": {
-      "comment": "FileTableView: allocated.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " allocated"
-          }
-        }
-      }
-    },
     "fileTableView.kind": {
       "comment": "FileTableView: Kind.",
       "localizations": {
@@ -470,39 +459,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kind"
-          }
-        }
-      }
-    },
-    "fileTableView.locale.locale": {
-      "comment": "FileTableView: {snapshot.displayName(node)}, {displaySize(snapshot.allocated(node), locale: locale)}.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@, %@"
-          }
-        }
-      }
-    },
-    "fileTableView.logical": {
-      "comment": "FileTableView: Logical.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Logical"
-          }
-        }
-      }
-    },
-    "fileTableView.logical.v2": {
-      "comment": "FileTableView: , logical {text(column: id, row: row)}.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ", logical %@"
           }
         }
       }
@@ -2805,17 +2761,6 @@
         }
       }
     },
-    "folderTree.size": {
-      "comment": "Size on disk column.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Size"
-          }
-        }
-      }
-    },
     "folderTree.smaller": {
       "comment": "Summary of the contiguous suffix beyond 500 children: count and size on disk.",
       "localizations": {
@@ -3509,6 +3454,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Checking…"
+          }
+        }
+      }
+    },
+    "sizeColumns.accessibility": {
+      "comment": "VoiceOver row label: item name, logical size reported by Finder, then occupied disk space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, reported size %@, allocated %@"
+          }
+        }
+      }
+    },
+    "sizeColumns.allocated.help": {
+      "comment": "Help for the Allocated column header in both lists.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space the item takes on disk. Less than the reported size when it is compressed, sparse or stored in iCloud."
+          }
+        }
+      }
+    },
+    "sizeColumns.reported": {
+      "comment": "Logical bytes column, matching Finder's Size, including folder subtree totals.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reported Size"
+          }
+        }
+      }
+    },
+    "sizeColumns.reported.help": {
+      "comment": "Help for the Reported Size column header in both lists.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The size Finder reports: how much data the item holds."
           }
         }
       }

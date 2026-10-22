@@ -19,12 +19,13 @@ import Combine
 import SwiftUI
 
 /// The file table (spec §8): an `NSTableView` whose data source reads the
-/// snapshot through `rows`, an array of node indices. Columns Name, Allocated,
-/// Logical, Modified, Kind. Clicking a header reports the sort through
+/// snapshot and overlay through `rows`, an array of node indices. Columns Name, Reported Size,
+/// Allocated, Modified, Kind. Clicking a header reports the sort through
 /// `onSort` (the caller sorts off the main actor and passes new `rows`).
 /// Selecting rows writes `selection`; changes to `selection` select the
 /// matching rows, so table and treemap highlight each other.
 public struct FileTableView: NSViewRepresentable {
+    public var overlay: SizeOverlay
     public var snapshot: Snapshot
     public var rows: [UInt32]
     public var selection: Selection
@@ -33,9 +34,10 @@ public struct FileTableView: NSViewRepresentable {
     public var locale: Locale
 
     public init(
-        snapshot: Snapshot, rows: [UInt32], selection: Selection, locale: Locale = .current, onStage: (() -> Void)? = nil,
+        snapshot: Snapshot, rows: [UInt32], selection: Selection, overlay: SizeOverlay = SizeOverlay(), locale: Locale = .current, onStage: (() -> Void)? = nil,
         onSort: ((SortKey, Bool) -> Void)? = nil
     ) {
+        self.overlay = overlay
         self.snapshot = snapshot
         self.rows = rows
         self.selection = selection
@@ -45,7 +47,7 @@ public struct FileTableView: NSViewRepresentable {
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(snapshot: snapshot, rows: rows, selection: selection, locale: locale)
+        Coordinator(snapshot: snapshot, rows: rows, selection: selection, overlay: overlay, locale: locale)
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
@@ -63,7 +65,7 @@ public struct FileTableView: NSViewRepresentable {
         let c = context.coordinator
         c.contextMenu.stage = onStage
         c.onSort = onSort
-        c.update(snapshot: snapshot, rows: rows)
+        c.update(snapshot: snapshot, rows: rows, overlay: overlay)
     }
 
     /// Data source and delegate; owns the snapshot it reads.
@@ -75,18 +77,9 @@ public struct FileTableView: NSViewRepresentable {
                 defaultValue: "Name",
                 bundle: L10n.bundle,
                 comment: "FileTableView: Name."
-            ), .name, 280), ("allocated", String(
-                localized: "fileTableView.allocated",
-                defaultValue: "Allocated",
-                bundle: L10n.bundle,
-                comment: "FileTableView: Allocated."
-            ), .allocated, 90),
-            ("logical", String(
-                localized: "fileTableView.logical",
-                defaultValue: "Logical",
-                bundle: L10n.bundle,
-                comment: "FileTableView: Logical."
-            ), .logical, 90), ("modified", String(
+            ), .name, 280),
+            ("logical", SizeColumnText.reported, .logical, 110),
+            ("allocated", SizeColumnText.allocated, .allocated, 90), ("modified", String(
                 localized: "fileTableView.modified",
                 defaultValue: "Modified",
                 bundle: L10n.bundle,
@@ -104,6 +97,7 @@ public struct FileTableView: NSViewRepresentable {
         static let unknownDate = "—"
 
         // The strong reference keeps the borrowed Rust memory alive for the cells.
+        private(set) var overlay: SizeOverlay
         private(set) var snapshot: Snapshot
         private(set) var rows: [UInt32]
         let selection: Selection
@@ -116,7 +110,8 @@ public struct FileTableView: NSViewRepresentable {
         /// resulting notification is not echoed back into `selection`.
         private var applyingSelection = false
 
-        public init(snapshot: Snapshot, rows: [UInt32], selection: Selection, locale: Locale = .current) {
+        public init(snapshot: Snapshot, rows: [UInt32], selection: Selection, overlay: SizeOverlay = SizeOverlay(), locale: Locale = .current) {
+            self.overlay = overlay
             self.snapshot = snapshot
             self.rows = rows
             self.selection = selection
@@ -140,6 +135,7 @@ public struct FileTableView: NSViewRepresentable {
             for col in Coordinator.columns {
                 let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
                 c.title = col.title
+                c.headerToolTip = SizeColumnText.help(col.id)
                 let width = col.id == "modified" ? TableDates.width(locale: locale) : col.width
                 c.width = width
                 c.minWidth = col.id == "name" ? 180 : width
@@ -162,8 +158,9 @@ public struct FileTableView: NSViewRepresentable {
             return t
         }
 
-        func update(snapshot s: Snapshot, rows r: [UInt32]) {
-            guard s !== snapshot || r != rows else { return }
+        func update(snapshot s: Snapshot, rows r: [UInt32], overlay o: SizeOverlay = SizeOverlay()) {
+            guard s !== snapshot || r != rows || o.revision != overlay.revision else { return }
+            overlay = o
             snapshot = s
             rows = r
             applyingSelection = true  // reloading drops the table's selection; that is not the user's
@@ -196,10 +193,11 @@ public struct FileTableView: NSViewRepresentable {
             // Rows and snapshot arrive separately from SwiftUI; never trap on a mismatch.
             guard Int(node) < snapshot.nodes.count else { return "" }
             let n = snapshot.nodes[Int(node)]
+            let source = OverlaySource(snapshot, overlay)
             switch id {
             case "name": return snapshot.displayName(node)
-            case "allocated": return displaySize(n.allocated, locale: locale)
-            case "logical": return displaySize(n.logical, locale: locale)
+            case "allocated": return displaySize(source.allocated(node), locale: locale)
+            case "logical": return displaySize(source.logical(node), locale: locale)
             case "modified":
                 guard n.modified != 0 else { return Coordinator.unknownDate }
                 return TableDates.text(n.modified, locale: locale)
@@ -207,31 +205,14 @@ public struct FileTableView: NSViewRepresentable {
             }
         }
 
-        /// The VoiceOver label (spec §12): always the name and the allocated
-        /// size ("report.pdf, 4.2 GB"), then what this column adds.
+        /// VoiceOver reads the name and both sizes before any other column detail.
         func accessibilityLabel(column id: String, row: Int) -> String {
             let node = rows[row]
             guard Int(node) < snapshot.nodes.count else { return "" }
-            let base = String(
-                localized: "fileTableView.locale.locale",
-                defaultValue: "\(snapshot.displayName(node)), \(displaySize(snapshot.allocated(node), locale: locale))",
-                bundle: L10n.bundle,
-                comment: "FileTableView: {snapshot.displayName(node)}, {displaySize(snapshot.allocated(node), locale: locale)}."
-            )
+            let base = SizeColumnText.accessibility(name: snapshot.displayName(node),
+                reported: text(column: "logical", row: row), allocated: text(column: "allocated", row: row))
             switch id {
-            case "name": return base
-            case "allocated": return base + String(
-                localized: "fileTableView.allocated.v2",
-                defaultValue: " allocated",
-                bundle: L10n.bundle,
-                comment: "FileTableView: allocated."
-            )
-            case "logical": return base + String(
-                localized: "fileTableView.logical.v2",
-                defaultValue: ", logical \(text(column: id, row: row))",
-                bundle: L10n.bundle,
-                comment: "FileTableView: , logical {text(column: id, row: row)}."
-            )
+            case "name", "logical", "allocated": return base
             case "modified":
                 let m = snapshot.nodes[Int(node)].modified
                 return base + (m == 0 ? String(
@@ -344,5 +325,28 @@ enum TableDates {
         let dates = (1...12).compactMap { calendar.date(from: DateComponents(year: 2026, month: $0, day: 28, hour: 12)) }
             + [Date(timeIntervalSince1970: 1798718400)]
         return max(120, dates.map { ceil((formatter.string(from: $0) as NSString).size(withAttributes: [.font: font]).width) + 8 }.max() ?? 120)
+    }
+}
+
+/// Shared catalogued wording for the two size columns and their VoiceOver labels.
+enum SizeColumnText {
+    static var reported: String { String(localized: "sizeColumns.reported", defaultValue: "Reported Size",
+        bundle: L10n.bundle, comment: "Logical bytes column, matching Finder's Size, including folder subtree totals.") }
+    static var allocated: String { String(localized: "fileTableView.allocated", defaultValue: "Allocated",
+        bundle: L10n.bundle, comment: "Bytes occupied on disk, including folder subtree totals.") }
+    static func help(_ id: String) -> String? {
+        switch id {
+        case "logical": return String(localized: "sizeColumns.reported.help",
+            defaultValue: "The size Finder reports: how much data the item holds.", bundle: L10n.bundle,
+            comment: "Help for the Reported Size column header in both lists.")
+        case "allocated": return String(localized: "sizeColumns.allocated.help",
+            defaultValue: "Space the item takes on disk. Less than the reported size when it is compressed, sparse or stored in iCloud.",
+            bundle: L10n.bundle, comment: "Help for the Allocated column header in both lists.")
+        default: return nil
+        }
+    }
+    static func accessibility(name: String, reported: String, allocated: String) -> String {
+        String(localized: "sizeColumns.accessibility", defaultValue: "\(name), reported size \(reported), allocated \(allocated)",
+            bundle: L10n.bundle, comment: "VoiceOver row label: item name, logical size reported by Finder, then occupied disk space.")
     }
 }

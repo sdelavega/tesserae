@@ -111,7 +111,7 @@ public final class FileTableModel: @unchecked Sendable {
             let k = rows.map { OverlaySource(s, overlay).allocated($0) }
             order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }
         case .logical:
-            let k = rows.map { s.nodes[Int($0)].logical }
+            let k = rows.map { OverlaySource(s, overlay).logical($0) }
             order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }
         case .modified:
             // A stored 0 is "never read" (the Inspector reports it unknown): oldest.

@@ -329,7 +329,7 @@ final class TableTests: XCTestCase {
         scroll.documentView = table
         window.contentView!.addSubview(scroll)
         XCTAssertEqual(table.numberOfRows, 2)
-        XCTAssertEqual(table.tableColumns.map(\.title), ["Name", "Allocated", "Logical", "Modified", "Kind"])
+        XCTAssertEqual(table.tableColumns.map(\.title), ["Name", "Reported Size", "Allocated", "Modified", "Kind"])
 
         let pdfRow = try XCTUnwrap(rows.firstIndex(of: t["report.pdf"]))
         for column in 0..<table.numberOfColumns {
@@ -343,17 +343,17 @@ final class TableTests: XCTestCase {
             }
         }
         let nameCell = try XCTUnwrap(table.view(atColumn: 0, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
-        XCTAssertEqual(nameCell.accessibilityLabel(), "report.pdf, 4.2 GB")
+        XCTAssertEqual(nameCell.accessibilityLabel(), "report.pdf, reported size 4.1 GB, allocated 4.2 GB")
         XCTAssertEqual(nameCell.textField?.stringValue, "report.pdf")
-        let logicalCell = try XCTUnwrap(table.view(atColumn: 2, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
+        let logicalCell = try XCTUnwrap(table.view(atColumn: 1, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
         XCTAssertEqual(logicalCell.textField?.stringValue, "4.1 GB")
-        XCTAssertEqual(logicalCell.accessibilityLabel(), "report.pdf, 4.2 GB, logical 4.1 GB")
+        XCTAssertEqual(logicalCell.accessibilityLabel(), "report.pdf, reported size 4.1 GB, allocated 4.2 GB")
         let kindCell = try XCTUnwrap(table.view(atColumn: 4, row: pdfRow, makeIfNecessary: true) as? NSTableCellView)
         XCTAssertEqual(kindCell.textField?.stringValue, "Document", "the Inspector's kind")
         let tinyRow = try XCTUnwrap(rows.firstIndex(of: t["tiny"]))
         let undated = try XCTUnwrap(table.view(atColumn: 3, row: tinyRow, makeIfNecessary: true) as? NSTableCellView)
         XCTAssertEqual(undated.textField?.stringValue, "—", "a stored 0 is unknown, not 1970")
-        XCTAssertEqual(undated.accessibilityLabel(), "tiny, 2 kB, modified unknown", "VoiceOver reads words, not a dash")
+        XCTAssertEqual(undated.accessibilityLabel(), "tiny, reported size 7 bytes, allocated 2 kB, modified unknown", "VoiceOver reads words, not a dash")
     }
     // MARK: Atomic content, bounds, scrolling, cancellation
 
@@ -412,13 +412,13 @@ final class TableTests: XCTestCase {
             XCTAssertEqual(coord.text(column: "name", row: row), shown)
             XCTAssertEqual(coord.text(column: "name", row: row), s.displayName(t[name]))
             let size = displaySize(s.allocated(t[name]), locale: en)
-            XCTAssertEqual(coord.accessibilityLabel(column: "name", row: row), "\(shown), \(size)")
+            XCTAssertEqual(coord.accessibilityLabel(column: "name", row: row), "\(shown), reported size \(size), allocated \(size)")
             for id in ["allocated", "logical", "modified", "kind"] {
-                XCTAssertTrue(coord.accessibilityLabel(column: id, row: row).hasPrefix("\(shown), \(size)"), id)
+                XCTAssertTrue(coord.accessibilityLabel(column: id, row: row).hasPrefix("\(shown), reported size \(size), allocated \(size)"), id)
             }
             let cell = try XCTUnwrap(table.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView)
             XCTAssertEqual(cell.textField?.stringValue, shown)
-            XCTAssertEqual(cell.accessibilityLabel(), "\(shown), \(size)")
+            XCTAssertEqual(cell.accessibilityLabel(), "\(shown), reported size \(size), allocated \(size)")
         }
     }
 

@@ -178,7 +178,7 @@ final class FolderTreeTests: XCTestCase {
         XCTAssertEqual(c.share(of: .node(t["zeta"])), 40.0 / 101.0, accuracy: 0.0001)
         XCTAssertEqual(c.text(column: "name", row: .smaller(count: 1, bytes: 1, parent: 0)), "1 smaller item — 1 byte")
         XCTAssertEqual(c.text(column: "name", row: .smaller(count: 2, bytes: 2, parent: 0)), "2 smaller items — 2 bytes")
-        let bar = try XCTUnwrap(c.outlineView(outline, viewFor: outline.tableColumns[2], item: c.item(.node(t["zeta"]))) as? FolderShareBar)
+        let bar = try XCTUnwrap(c.outlineView(outline, viewFor: try XCTUnwrap(outline.tableColumns.first { $0.identifier.rawValue == "share" }), item: c.item(.node(t["zeta"]))) as? FolderShareBar)
         XCTAssertEqual(bar.ink, NSColor.secondaryLabelColor)
         var overlay = SizeOverlay()
         overlay.remove(t["leaf"], in: s)
@@ -277,6 +277,123 @@ final class FolderTreeTests: XCTestCase {
         let summary = c.item(.smaller(count: 1, bytes: 1, parent: 0))
         XCTAssertEqual(outline.row(forItem: summary), 500)
         XCTAssertFalse(c.outlineView(outline, shouldSelectItem: summary))
+    }
+
+    @MainActor
+    private func sizeColumnsFixture() -> (TestSnapshot, FolderOutlineView.Coordinator, NSOutlineView) {
+        let t = TestSnapshot(.dir("root", [.dir("folder", [.file("compressed", 100, logical: 900)]),
+            .file("plain", 200, logical: 300)]))
+        let c = FolderOutlineView.Coordinator(source: OverlaySource(t.snapshot, SizeOverlay()), root: 0,
+            selection: Selection(), navigator: Navigator(snapshot: t.snapshot), expansion: FolderExpansionState(),
+            locale: Locale(identifier: "en_US"))
+        return (t, c, c.makeOutlineView())
+    }
+
+    @MainActor
+    func test_folder_tree_has_reported_and_allocated_columns_in_order() {
+        let (_, _, outline) = sizeColumnsFixture()
+        XCTAssertEqual(outline.tableColumns.map(\.identifier.rawValue), ["name", "logical", "allocated", "share", "items", "modified"])
+        XCTAssertEqual(outline.tableColumns.map(\.title), ["Name", "Reported Size", "Allocated", "Share", "Items", "Modified"])
+        XCTAssertEqual(outline.tableColumns.first { $0.identifier.rawValue == "logical" }?.headerToolTip,
+            "The size Finder reports: how much data the item holds.")
+        XCTAssertEqual(outline.tableColumns.first { $0.identifier.rawValue == "allocated" }?.headerToolTip,
+            "Space the item takes on disk. Less than the reported size when it is compressed, sparse or stored in iCloud.")
+    }
+
+    @MainActor
+    func test_file_table_column_titles_and_order() {
+        let (t, _, _) = sizeColumnsFixture()
+        let c = FileTableView.Coordinator(snapshot: t.snapshot, rows: [t["compressed"]], selection: Selection())
+        let table = c.makeTableView()
+        XCTAssertEqual(table.numberOfRows, 1)
+        XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ["name", "logical", "allocated", "modified", "kind"])
+        XCTAssertEqual(table.tableColumns.map(\.title), ["Name", "Reported Size", "Allocated", "Modified", "Kind"])
+        XCTAssertEqual(table.tableColumns[1].headerToolTip, "The size Finder reports: how much data the item holds.")
+        XCTAssertEqual(table.tableColumns[2].headerToolTip,
+            "Space the item takes on disk. Less than the reported size when it is compressed, sparse or stored in iCloud.")
+    }
+
+    @MainActor
+    func test_sort_by_reported_size_sorts_siblings() {
+        let (t, c, outline) = sizeColumnsFixture()
+        XCTAssertEqual(c.model.children(of: 0), [.node(t["plain"]), .node(t["folder"])])
+        outline.sortDescriptors = [NSSortDescriptor(key: "logical", ascending: false)]
+        XCTAssertEqual(c.model.children(of: 0), [.node(t["folder"]), .node(t["plain"])])
+        outline.sortDescriptors = [NSSortDescriptor(key: "logical", ascending: true)]
+        XCTAssertEqual(c.model.children(of: 0), [.node(t["plain"]), .node(t["folder"])])
+    }
+
+    @MainActor
+    func test_default_sort_is_allocated() {
+        let (t, c, outline) = sizeColumnsFixture()
+        XCTAssertGreaterThan(t.snapshot.nodes[Int(t["folder"])].logical, t.snapshot.nodes[Int(t["plain"])].logical)
+        XCTAssertEqual(c.model.children(of: 0), [.node(t["plain"]), .node(t["folder"])])
+        XCTAssertEqual(c.share(of: .node(t["folder"])), 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(outline.numberOfRows, 2)
+        XCTAssertEqual(FileTableModel(snapshot: t.snapshot, scope: 0).defaultRows(), [t["plain"], t["compressed"]])
+    }
+
+    @MainActor
+    func test_compressed_overlay_lowers_allocated_not_reported() {
+        let (t, c, _) = sizeColumnsFixture()
+        var overlay = SizeOverlay()
+        var outcome = CompressOutcome(runID: CompressRunID())
+        outcome.allocatedDeltas = [t["compressed"]: -80]
+        outcome.apply(to: &overlay, snapshot: t.snapshot)
+        let source = OverlaySource(t.snapshot, overlay)
+        XCTAssertEqual(t.snapshot.allocated(t["folder"]), 100)
+        XCTAssertEqual(source.allocated(t["folder"]), 20)
+        XCTAssertEqual(source.logical(t["folder"]), 900)
+        XCTAssertEqual(source.logical(0), 1200)
+        c.update(source: source, root: 0)
+        XCTAssertEqual(c.text(column: "logical", row: .node(t["folder"])), "900 bytes")
+        XCTAssertEqual(c.text(column: "allocated", row: .node(t["folder"])), "20 bytes")
+        let files = FileTableView.Coordinator(snapshot: t.snapshot, rows: [t["compressed"]], selection: Selection(), locale: Locale(identifier: "en_US"))
+        let table = files.makeTableView()
+        XCTAssertEqual(table.numberOfRows, 1)
+        XCTAssertEqual(files.text(column: "allocated", row: 0), "100 bytes")
+        files.update(snapshot: t.snapshot, rows: [t["compressed"]], overlay: overlay)
+        XCTAssertEqual(files.text(column: "logical", row: 0), "900 bytes")
+        XCTAssertEqual(files.text(column: "allocated", row: 0), "20 bytes")
+        XCTAssertEqual(files.accessibilityLabel(column: "name", row: 0), "compressed, reported size 900 bytes, allocated 20 bytes")
+        // Deleted files disappear and both rolled-up sizes shrink.
+        overlay.remove(t["plain"], in: t.snapshot)
+        XCTAssertEqual(OverlaySource(t.snapshot, overlay).logical(0), 900)
+        XCTAssertEqual(OverlaySource(t.snapshot, overlay).allocated(0), 20)
+    }
+
+    @MainActor
+    func test_accessibility_label_reads_both_sizes() throws {
+        let (t, c, outline) = sizeColumnsFixture()
+        let expected = "folder, reported size 900 bytes, allocated 100 bytes"
+        for id in ["name", "logical", "allocated"] {
+            let col = try XCTUnwrap(outline.tableColumns.first { $0.identifier.rawValue == id })
+            let cell = try XCTUnwrap(c.outlineView(outline, viewFor: col, item: c.item(.node(t["folder"]))) as? NSTableCellView)
+            XCTAssertEqual(cell.accessibilityLabel(), expected)
+        }
+        let file = FileTableView.Coordinator(snapshot: t.snapshot, rows: [t["compressed"]], selection: Selection(), locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(file.accessibilityLabel(column: "name", row: 0), "compressed, reported size 900 bytes, allocated 100 bytes")
+    }
+
+    @MainActor
+    func test_column_widths_fit_at_minimum_window_width() throws {
+        // en is the catalog translation; en_GB exercises the other English date/number region.
+        for identifier in ["en_US", "en_GB"] {
+            let locale = Locale(identifier: identifier)
+            let (t, _, _) = sizeColumnsFixture()
+            let c = FolderOutlineView.Coordinator(source: OverlaySource(t.snapshot, SizeOverlay()), root: 0,
+                selection: Selection(), navigator: Navigator(snapshot: t.snapshot), expansion: FolderExpansionState(), locale: locale)
+            let outline = c.makeOutlineView()
+            let required = outline.tableColumns.reduce(CGFloat(0)) { $0 + $1.minWidth } + CGFloat(outline.numberOfColumns) * outline.intercellSpacing.width
+            XCTAssertEqual(outline.numberOfColumns, 6)
+            // The 730-point pane reserves at least 30 points for scroll-view chrome.
+            XCTAssertLessThanOrEqual(required, 700)
+            for column in outline.tableColumns.dropFirst() {
+                XCTAssertEqual(column.minWidth, column.maxWidth)
+                let textWidth = (column.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]).width
+                XCTAssertLessThanOrEqual(textWidth + 16, column.width, column.title)
+            }
+        }
     }
 
 }
