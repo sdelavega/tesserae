@@ -92,6 +92,8 @@ These are the author's inferences, recorded so they can be challenged:
 ### v1
 
 - A start screen listing the mounted volumes to scan, plus Choose a Folder… (§8).
+- Simple (default) and Detailed presentation, plain startup-disk paths, and
+  dismissible warning banners with an explanation link (§8, 0.2.0).
 - Full-volume scan, stateless, no persistent index.
 - Squarified treemap with level-of-detail and smooth zoom, coloured by
   top-level folder by default, with folder name strips (§8).
@@ -1230,6 +1232,36 @@ an overlay** of the tiles carrying the `selected` flag (a 2pt stroke), hidden
 while motion runs, like the labels. The window replaces its whole session on a
 rescan (§5).
 
+**Banners, displayed paths and detail level (0.2.0, user decisions
+2026-10-22).**
+
+- *Partial-result link.* The partial-result banner ends with a link, "What
+  wasn't scanned?", that opens a sheet explaining in plain words why the
+  result is partial and listing what was skipped or unreadable (top locations
+  by size and count), with "Show Scan Report" to open the full report pane.
+- *Dismissing.* Each warning banner (partial result, dropped tiles, rescan
+  advised, limited scan) has a close button (✕, "Dismiss") at its trailing
+  edge. Dismissing hides that banner for the current session only; the window
+  returns to its normal background; a new scan or a new, different warning
+  shows it again. Dismissal never hides the scan report or changes any count.
+- *Displayed paths.* On the startup disk, every path shown to the user drops
+  the firmlink prefix `/System/Volumes/Data`, so `/System/Volumes/Data/Users/x`
+  reads `/Users/x` (the window title, breadcrumb, Inspector, hover callout,
+  Reclaim Space rows, confirmation, results, recently trashed/compressed and
+  the scan report). The rule applies only when the path is under the startup
+  Data volume and the remainder maps to the firmlinked location; any other
+  path is shown unchanged. Copy Path, every action, identity check, log entry
+  and diagnostics keep the raw path.
+- *Detail level.* Settings → General → **Detail: Simple / Detailed**, Simple
+  by default. Simple speaks plainly: the space breakdown shows Used, Free and
+  "Other" (snapshots, system and the signed residual folded into one line with
+  a help tooltip); the scan report shows a short summary ("12 folders couldn't
+  be read", "3 items are only in iCloud") with "Show details"; Reclaim Space
+  shows one-line warnings and results; error codes, errno values, raw counters
+  and reason identifiers are hidden. Detailed shows everything as before. The
+  setting changes presentation only — never what is scanned, checked, refused
+  or logged — and Copy Diagnostics always copies the full detail.
+
 **Start screen (Phase 6).** With no session, the window shows a list of
 places to scan instead of two buttons, in three groups:
 
@@ -1728,6 +1760,22 @@ Every §10 denial denies all three actions. An unavailable action stays visible
 in the item's action picker, disabled, with its reason as the tooltip. On a
 volume without Compress (exFAT, FAT, NTFS, network) the review explains
 "This disk can't compress files in place. Archive instead?".
+
+**Default action and instant staging (0.2.0, user decision 2026-10-22).** A
+newly staged item's action is **Compress** when Compress is available for it
+(APFS/HFS+ as above, not denied, and not a single file whose extension is on
+the won't-shrink list); otherwise **Move to Trash**. A choice the user makes
+is kept. Staging and the review never wait on the filesystem for Move to Trash
+or Compress: availability comes from the volume's capabilities (one `statfs`)
+and the snapshot's facts (size, cloud-only, hard-link duplicates, unknown
+content), and every filesystem check still runs at execution as §10 and the
+Compress section describe. Two things run in the background and refine an
+item without blocking it: the Compress savings estimate (the sample read),
+shown as "Estimating…" until it arrives, and the full archive inspection,
+which runs only for items whose action is Archive. An Archive item can't be
+confirmed until its own inspection has finished (its row says "Checking…"),
+because the inspection supplies warnings the review must show; no other item
+waits for it. There is no "Preparing actions…" state.
 
 ### Compress
 
@@ -2655,6 +2703,13 @@ candidates, none measured individually (§9).
 ---
 
 ## 14. Build and distribution
+
+**Version numbers (user decision 2026-10-22).** No release may carry a
+version whose marketing string (`MARKETING_VERSION`) or derived build number
+(`CFBundleVersion`, `major*10000 + minor*100 + patch`) contains the digits
+`666` in a row — for example 0.6.66 (build 666) or 6.66.0 — at any stage:
+`scripts/bundle-version.sh`, the release preflight and the CI release job
+refuse it and name the next allowed version.
 
 ### Rust inside Xcode
 
