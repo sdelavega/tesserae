@@ -94,6 +94,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotRegex(json.dumps({key: value for key, value in self.workflow.items() if key != "jobs"}),
                             r"secrets\.(?:DEVELOPER_ID_|NOTARY_|SPARKLE_|TAP_PUSH_TOKEN)")
 
+    def test_workflows_use_read_only_defaults_and_minimum_release_permissions(self):
+        for name in ("ci", "nightly", "release"):
+            path = ROOT / ".github/workflows" / (name + ".yml")
+            workflow = json.loads(subprocess.check_output(["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", str(path)], text=True))
+            self.assertEqual(workflow["permissions"], {"contents": "read"}, name)
+            for job_name, job in workflow["jobs"].items():
+                expected = {"contents": "write", "actions": "read"} if name == "release" and job_name == "release" else {"contents": "read"}
+                self.assertEqual(job.get("permissions", workflow["permissions"]), expected, job_name)
+
     def test_tool_uses_fresh_environment_without_exported_functions(self):
         for inherited in (False, True):
             with self.subTest(inherited=inherited):

@@ -16,6 +16,9 @@ on:
 # a floating nightly goes red on days its Miri build is missing, and a job that
 # is red for reasons unrelated to the code teaches people to ignore it. Bump the
 # pin every few weeks, as its own commit.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "13.0"
