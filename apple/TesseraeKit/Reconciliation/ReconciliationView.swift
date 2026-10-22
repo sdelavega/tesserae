@@ -36,11 +36,16 @@ public struct ReconciliationView: View {
                 Text(model.title).font(.headline)
                 ForEach(Array(model.rows(for: detail.current).enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack {
+                        let label = HStack {
                             Text(row.title)
                             Spacer(minLength: 2)
                             Text(row.value).monospacedDigit()
-                        }.font(.callout).help(row.help ?? "")
+                        }.font(.callout)
+                        if let help = row.help {
+                            label.help(help)
+                        } else {
+                            label
+                        }
                         if let fraction = row.fraction {
                             GeometryReader { geometry in
                                 // One scale for every row keeps clone over-counts proportional,

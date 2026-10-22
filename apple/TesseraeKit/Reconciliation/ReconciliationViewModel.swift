@@ -207,6 +207,12 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             bundle: L10n.bundle,
             comment: "ReconciliationViewModel: Local snapshots: —."
         ) }
+        let freeRow = Row(title: String(
+            localized: "reconciliationViewModel.free",
+            defaultValue: "Free",
+            bundle: L10n.bundle,
+            comment: "ReconciliationViewModel: Free."
+        ), value: size(r?.free), detail: nil, fraction: fraction(r?.free), negative: false)
         let residual = r?.residual
         rows = [
             Row(title: String(
@@ -269,12 +275,7 @@ public struct ReconciliationViewModel: Equatable, Sendable {
                         comment: "ReconciliationViewModel: Too large to compute."
                     ),
                 fraction: fraction(residual?.magnitude), negative: (residual ?? 0) < 0, annotation: snapshotAnnotation),
-            Row(title: String(
-                localized: "reconciliationViewModel.free",
-                defaultValue: "Free",
-                bundle: L10n.bundle,
-                comment: "ReconciliationViewModel: Free."
-            ), value: size(r?.free), detail: nil, fraction: fraction(r?.free), negative: false)]
+            freeRow]
         // Snapshot sizes are already inside the signed residual; never add them twice.
         let other: (magnitude: UInt64, negative: Bool)? = r.flatMap { r in
             guard let residual = r.residual else { return nil }
@@ -289,7 +290,7 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             Row(title: String(localized: "detail.used", defaultValue: "Used", bundle: L10n.bundle,
                 comment: "Known scanned allocation in the simple breakdown."), value: size(scan.allocatedSum), detail: nil,
                 fraction: fraction(scan.allocatedSum), negative: false),
-            rows[4],
+            freeRow,
             Row(title: String(localized: "detail.other", defaultValue: "Other", bundle: L10n.bundle,
                 comment: "System, snapshots and signed residual combined."),
                 value: other.map { ($0.negative ? "−" : "") + size($0.magnitude) } ?? "—", detail: nil,

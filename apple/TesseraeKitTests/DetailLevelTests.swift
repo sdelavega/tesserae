@@ -64,6 +64,38 @@ final class DetailLevelTests: XCTestCase {
             XCTAssertEqual(used + free + (rows[2].negative ? -1 : 1) * remainder, 1, accuracy: 0.0001)
         }
     }
+    func test_simple_free_row_is_shared_without_positional_indexing() throws {
+        let model = breakdown()
+        let detailedFree = try XCTUnwrap(model.rows(for: .detailed).first { $0.title == "Free" })
+        let simpleFree = try XCTUnwrap(model.rows(for: .simple).first { $0.title == "Free" })
+        XCTAssertEqual(detailedFree.value, "20 bytes")
+        XCTAssertEqual(simpleFree, detailedFree)
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("TesseraeKit/Reconciliation/ReconciliationViewModel.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertNil(source.range(of: #"rows\[\d+\]"#, options: .regularExpression),
+            "Simple must reuse Free by identity rather than Detailed row position")
+    }
+    func test_simple_stalled_report_states_reason_once() {
+        var stats = TessScanStats()
+        stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED)
+        let raw = Data("/root/hung".utf8)
+        let tree = TestSnapshot(.dir("/root", []), stats: stats, stalledAt: raw)
+        let detailed = "Scan stalled at /root/hung"
+        let caveat = ScanReport.ReportCaveat.stalled(display: "Scan stalled at /different/display", rawPath: raw)
+        XCTAssertEqual(tree.snapshot.stats.incomplete, UInt32(TESS_INCOMPLETE_STALLED))
+        XCTAssertEqual(tree.snapshot.stalledAt, raw)
+        for caveats in [[], [caveat], [caveat, caveat]] {
+            let value = ScanReport(snapshot: tree.snapshot, caveats: [], access: .granted,
+                scanTime: Date(timeIntervalSince1970: 0), appVersion: "test", engineVersion: "test",
+                locale: locale, reportCaveats: caveats)
+            XCTAssertEqual(value.summaryLines, ["The scan stopped because a folder wasn't responding."])
+            XCTAssertEqual(value.incomplete, [detailed])
+            XCTAssertEqual(value.caveats, caveats.map(\.displayText))
+            XCTAssertTrue(value.text(for: .detailed).contains(detailed))
+            XCTAssertTrue(caveats.allSatisfy { $0.diagnosticsText == detailed })
+        }
+    }
     func test_simple_report_summary_lines() {
         XCTAssertEqual(report().summaryLines, ["12 folders couldn't be read", "3 items are only in iCloud", "1 problem occurred during the scan"])
         XCTAssertEqual(report(1).summaryLines.first, "1 folder couldn't be read")

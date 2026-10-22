@@ -74,6 +74,11 @@ public enum ScanBanner {
             comment: "ScanBanner: Scan ran out of memory."
         )
         case UInt32(TESS_INCOMPLETE_STALLED):
+            if detailLevel == .simple {
+                return String(localized: "detail.scan.stalled",
+                    defaultValue: "The scan stopped because a folder wasn't responding.",
+                    bundle: L10n.bundle, comment: "Plain explanation of a stalled scan without a path.")
+            }
             return String(
                 localized: "scanBanner.scan.stalled",
                 defaultValue: "Scan stalled",

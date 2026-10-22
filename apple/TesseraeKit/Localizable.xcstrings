@@ -1,6 +1,17 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "detail.scan.stalled": {
+      "comment": "Plain explanation of a stalled scan without a path.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because a folder wasn't responding."
+          }
+        }
+      }
+    },
     "reclaim.noCompressedItems": {
       "comment": "Empty state for the recently compressed history.",
       "localizations": {

@@ -32,8 +32,14 @@ public struct ScanReport: Equatable, Sendable {
         }
 
         var simpleText: String {
-            if case .presented(_, let simple) = self { return simple }
-            return displayText
+            switch self {
+            case .presented(_, let simple): return simple
+            case .stalled:
+                var stats = TessScanStats()
+                stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED)
+                return ScanBanner.incompleteReason(for: stats, stalledAt: nil, detailLevel: .simple)!
+            case .text(let text): return text
+            }
         }
         var diagnosticsText: String {
             switch self {
@@ -130,7 +136,9 @@ public struct ScanReport: Equatable, Sendable {
         if let stop = ScanBanner.incompleteReason(for: stats,
             stalledAt: snapshot.stalledAt.map { path(Location(rawPath: $0, reason: nil)) }, detailLevel: .simple) { plain.append(stop) }
         if snapshot.noMaterializeFailed { plain.append(ReconciliationViewModel.downloadProtectionWarning) }
-        plain += caveats.map(\.simpleText).filter { !plain.contains($0) }
+        for caveat in caveats.map(\.simpleText) where !plain.contains(caveat) {
+            plain.append(caveat)
+        }
         if access != .granted {
             plain.append(String(localized: "detail.report.access", defaultValue: "Full Disk Access is needed to include protected folders.",
                 bundle: L10n.bundle, comment: "Access limitation in a simple report."))
