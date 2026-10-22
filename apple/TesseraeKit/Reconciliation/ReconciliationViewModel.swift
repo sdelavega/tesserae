@@ -42,7 +42,8 @@ public struct ReconciliationViewModel: Equatable, Sendable {
     public let purgeable: String?
     public let warning: String?
     public let showGrantAccess: Bool
-    public let caveats: [String]
+    public let reportCaveats: [ScanReport.ReportCaveat]
+    public var caveats: [String] { reportCaveats.map(\.displayText) }
     /// The report keeps `caveats`; the breakdown omits the Residual row’s explanation.
     public var breakdownCaveats: [String] {
         Self.breakdownCaveats(rows: rows, caveats: caveats)
@@ -82,7 +83,8 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             bundle: L10n.bundle,
             comment: "ReconciliationViewModel: Too large to compute."
         ) : nil
-        caveats = (r?.caveats ?? Self.scanCaveats(scan)).map {
+        let sourceCaveats = r?.caveats ?? Self.scanCaveats(scan)
+        let renderedCaveats = sourceCaveats.map {
             switch $0 {
             case .cloneDoubleCounting: return String(
                 localized: "reconciliationViewModel.the.scan.is.double.counting.shared.blocks",
@@ -130,6 +132,12 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             )
             }
         } + [unavailableReason, overflowReason].compactMap { $0 } + (scan.noMaterializeFailed ? [Self.downloadProtectionWarning] : [])
+        reportCaveats = renderedCaveats.enumerated().map { index, text in
+            if index < sourceCaveats.count, case .partialScan = sourceCaveats[index], let raw = scan.stalledAt {
+                return .stalled(display: text, rawPath: raw)
+            }
+            return .text(text)
+        }
         scopeMessage = wholeVolume ? nil : String(
             localized: "reconciliationViewModel.space.breakdown.is.available.when.you.scan.a",
             defaultValue: "Space breakdown is available when you scan a whole volume.",

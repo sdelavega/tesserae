@@ -20,6 +20,7 @@ public struct ScanFacts: Equatable, Sendable {
     public let allocatedSum: UInt64
     public let unreadableLocations: Int
     public let incompleteReason: String?
+    public let stalledAt: Data?
     public let limited: Bool
     public let datalessItems: UInt64?
     public let datalessLogicalBytes: UInt64?
@@ -28,10 +29,11 @@ public struct ScanFacts: Equatable, Sendable {
 
     public init(allocatedSum: UInt64, unreadableLocations: Int, incompleteReason: String?,
                 limited: Bool, datalessItems: UInt64?, access: AccessState,
-                datalessLogicalBytes: UInt64? = nil, noMaterializeFailed: Bool = false) {
+                datalessLogicalBytes: UInt64? = nil, noMaterializeFailed: Bool = false, stalledAt: Data? = nil) {
         self.allocatedSum = allocatedSum
         self.unreadableLocations = unreadableLocations
         self.incompleteReason = incompleteReason
+        self.stalledAt = stalledAt
         self.limited = limited
         self.datalessItems = datalessItems
         self.datalessLogicalBytes = datalessLogicalBytes

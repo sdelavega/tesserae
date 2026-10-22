@@ -15,10 +15,33 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import Foundation
+import TesseraeFFI
 
 /// A detached value: paths retain their raw identity independently of the tree
 /// layout, and only the display strings are decoded and sanitised.
 public struct ScanReport: Equatable, Sendable {
+    public enum ReportCaveat: Equatable, Sendable {
+        case text(String)
+        case stalled(display: String, rawPath: Data)
+
+        public var displayText: String {
+            switch self {
+            case .text(let text), .stalled(let text, _): return text
+            }
+        }
+
+        var diagnosticsText: String {
+            switch self {
+            case .text(let text): return text
+            case .stalled(_, let raw):
+                var stats = TessScanStats()
+                stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED)
+                return ScanBanner.incompleteReason(for: stats,
+                    stalledAt: Location(rawPath: raw, reason: nil).diagnosticsPath)!
+            }
+        }
+    }
+
     public struct Location: Equatable, Sendable {
         public let rawPath: Data
         public let reason: String?
@@ -48,13 +71,13 @@ public struct ScanReport: Equatable, Sendable {
     private let diagnosticsText: String
 
     public init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
-                appVersion: String, engineVersion: String, locale: Locale = .current, timeZone: TimeZone = .current) {
-        self.init(snapshot: snapshot, caveats: caveats, access: access, scanTime: scanTime,
+                appVersion: String, engineVersion: String, locale: Locale = .current, timeZone: TimeZone = .current, reportCaveats: [ReportCaveat]? = nil) {
+        self.init(snapshot: snapshot, caveats: reportCaveats ?? caveats.map { .text($0) }, access: access, scanTime: scanTime,
                   appVersion: appVersion, engineVersion: engineVersion, locale: locale, timeZone: timeZone,
                   displayPaths: true)
     }
 
-    private init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
+    private init(snapshot: Snapshot, caveats: [ReportCaveat], access: AccessState, scanTime: Date,
                  appVersion: String, engineVersion: String, locale: Locale, timeZone: TimeZone, displayPaths: Bool) {
         func path(_ location: Location) -> String { displayPaths ? location.displayPath : location.diagnosticsPath }
         unreadable = snapshot.unreadable.map { Location(rawPath: $0, reason: String(
@@ -65,13 +88,7 @@ public struct ScanReport: Equatable, Sendable {
         )) }
         skipped = snapshot.skipped.map { Location(rawPath: $0.path, reason: $0.reason) }
         let stats = snapshot.stats
-        let displayReason = ScanBanner.incompleteReason(for: stats,
-            stalledAt: snapshot.stalledAt.map { DisplayPath.text($0) })
-        let rawReason = ScanBanner.incompleteReason(for: stats,
-            stalledAt: snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) })
-        // Reconciliation receives a display reason from AppModel. Diagnostics
-        // rebuild that exact reason from the snapshot's original stalled path.
-        self.caveats = caveats.map { !displayPaths && $0 == displayReason ? (rawReason ?? $0) : $0 }
+        self.caveats = caveats.map { displayPaths ? $0.displayText : $0.diagnosticsText }
         var reasons = ScanBanner.incompleteReason(for: stats,
             stalledAt: snapshot.stalledAt.map { path(Location(rawPath: $0, reason: nil)) }).map { [$0] } ?? []
         if snapshot.noMaterializeFailed { reasons.append(ReconciliationViewModel.downloadProtectionWarning) }

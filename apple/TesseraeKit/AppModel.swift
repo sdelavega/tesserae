@@ -138,7 +138,7 @@ public final class AppSession: ObservableObject, Identifiable {
                 defaultValue: " (ABI \(abiVersion))",
                 bundle: L10n.bundle,
                 comment: "AppModel: (ABI {abiVersion})."
-            ))
+            ), reportCaveats: reconciliation?.reportCaveats)
         self.reconciliation = reconciliation
         self.snapshot = snapshot
         reclaim = Reclaim(sessionID: id)
@@ -784,7 +784,7 @@ public final class AppModel: ObservableObject {
                 incompleteReason: ScanBanner.incompleteReason(for: snapshot.stats,
                     stalledAt: snapshot.stalledAt.map { DisplayPath.text($0) }),
                 limited: limited, datalessItems: snapshot.datalessItems, access: state,
-                datalessLogicalBytes: snapshot.datalessLogicalBytes, noMaterializeFailed: snapshot.noMaterializeFailed)
+                datalessLogicalBytes: snapshot.datalessLogicalBytes, noMaterializeFailed: snapshot.noMaterializeFailed, stalledAt: snapshot.stalledAt)
             return (loader(root, scan), state, loadContext(snapshot))
         }
         factsWork = work
