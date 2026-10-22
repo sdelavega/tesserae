@@ -1194,6 +1194,15 @@ unchanged).
   table, sorting each sibling list. Aggregation mirrors the treemap's
   contiguous-suffix cut: after the first 500 children a row reads "N smaller
   items — X".
+- **Size columns (0.2.0, user decision 2026-10-22).** Both lists show two
+  size columns side by side: **Reported Size** (logical bytes, what Finder's
+  "Size" reports; the file table's former "Logical") followed by
+  **Allocated** (bytes on disk; the folder tree's former "Size"). For a folder
+  both are the rolled-up subtree totals. Allocated well below Reported Size
+  tells the reader at a glance that an item is already compressed (or sparse,
+  or cloud-only). Both columns are sortable; the default sort, the share bar
+  and the treemap stay on Allocated. Headers carry help tooltips explaining
+  each figure, and VoiceOver reads both. Same in Simple and Detailed.
 - It reads the snapshot through `OverlaySource`, so trashed or archived items
   disappear and ancestors shrink. Children are produced lazily on expansion
   (sorted ranges are already contiguous in the snapshot; affected parents use
@@ -1776,6 +1785,15 @@ which runs only for items whose action is Archive. An Archive item can't be
 confirmed until its own inspection has finished (its row says "Checking…"),
 because the inspection supplies warnings the review must show; no other item
 waits for it. There is no "Preparing actions…" state.
+
+**Acted-on items leave the list (0.2.0, user decision 2026-10-22).** After a
+batch, every item the action changed leaves Reclaim Space automatically:
+trashed; compressed, including a partial result (some files compressed, some
+skipped, failed or cancelled); archived, with or without the originals kept.
+Only an item the batch left untouched stays: refused before anything happened,
+skipped as changed since review, or failed with no file changed. Its row shows
+the reason. The batch summary and its Undo/Put Back/Decompress controls still
+report every item, including the removed ones.
 
 ### Compress
 
