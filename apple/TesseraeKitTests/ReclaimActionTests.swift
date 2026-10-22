@@ -25,6 +25,67 @@ final class ReclaimActionTests: XCTestCase, @unchecked Sendable {
         ReclaimItem(nodeIndex: 1, path: Data(path.utf8), recorded: Recorded(fileID: 3, device: 4, isDirectory: directory),
                     recordedSize: 512, verdict: .ok, warnings: warnings, hasUnknownContent: unknown, archiveFacts: facts)
     }
+
+    func test_production_ancestry_checks_extended_acl_grants_without_mode_changes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("acl-ancestry-\(UUID().uuidString)")
+        let parent = root.appendingPathComponent("parent")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = parent.appendingPathComponent("item")
+        try Data("fixture".utf8).write(to: file)
+        let path = Data(file.path.utf8), volumeRoot = Data(root.path.utf8)
+        func chmodACL(_ arguments: [String], at directory: URL) async {
+            let result = await SpawnRunner().runCapturing("/bin/chmod", (arguments + [directory.path]).map { Data($0.utf8) })
+            XCTAssertEqual(result.0, .exited(0), "precondition: chmod \(arguments): \(String(decoding: result.stderr, as: UTF8.self))")
+        }
+        await chmodACL(["-N"], at: root)
+        await chmodACL(["-N"], at: parent)
+        XCTAssertEqual(chmod(root.path, 0o755), 0)
+        XCTAssertEqual(chmod(parent.path, 0o755), 0)
+        XCTAssertTrue(mutationAncestryIsSafe(path, volumeRoot: volumeRoot), "precondition: no ACL is safe")
+        let currentUser = try XCTUnwrap(getpwuid(geteuid())).pointee.pw_name
+        let ownName = String(cString: try XCTUnwrap(currentUser))
+        XCTAssertNotEqual(ownName, "nobody", "precondition: nobody is another principal")
+        let grants = ["add_file,delete_child", "add_file", "add_subdirectory", "delete_child", "write",
+                      "delete", "writesecurity", "chown"]
+        for directory in [parent, root] {
+            for grant in grants {
+                await chmodACL(["+a", "user:nobody allow \(grant)"], at: directory)
+                guard case .ok(let observation, _, false) = ProductionFileStat().lstat(Data(directory.path.utf8)) else {
+                    return XCTFail("precondition: scratch directory exists")
+                }
+                XCTAssertEqual(observation.permissions, 0o755, "precondition: ACL does not change mode bits")
+                XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: volumeRoot), "\(directory.lastPathComponent): \(grant)")
+                await chmodACL(["-N"], at: directory)
+            }
+        }
+        for (entry, expected) in [
+            ("user:\(ownName) allow add_file,delete_child,add_subdirectory,delete,writesecurity,chown", true),
+            ("user:nobody allow read,readattr,readextattr,readsecurity,search", true),
+            ("user:nobody deny add_file,delete_child,add_subdirectory,delete,writesecurity,chown", true),
+            ("group:everyone deny delete", true),
+            ("group:everyone allow add_file", false),
+            ("group:staff allow delete_child", false),
+            ("user:root allow add_file", geteuid() == 0)
+        ] {
+            await chmodACL(["+a", entry], at: parent)
+            XCTAssertEqual(mutationAncestryIsSafe(path, volumeRoot: volumeRoot), expected, entry)
+            await chmodACL(["-N"], at: parent)
+        }
+        await chmodACL(["+a", "group:everyone deny delete"], at: parent)
+        await chmodACL(["+a", "user:nobody allow add_file"], at: parent)
+        XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: volumeRoot), "deny does not hide a later write grant")
+        let reader = ProductionMutationACLReader()
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: parent)
+        XCTAssertEqual(reader.allowsOtherMutation(Data(parent.path.utf8), user: geteuid()), true, "precondition: target has write grant")
+        XCTAssertEqual(reader.allowsOtherMutation(Data(link.path.utf8), user: geteuid()), false, "ACL read does not follow final symlink")
+        XCTAssertEqual(reader.allowsOtherMutation(Data(root.appendingPathComponent("missing").path.utf8), user: geteuid()), false, "ENOENT means no ACL")
+        XCTAssertNil(reader.allowsOtherMutation(path + Data("/child".utf8), user: geteuid()), "ENOTDIR fails closed")
+        XCTAssertNil(reader.allowsOtherMutation(path + Data([0]), user: geteuid()), "embedded NUL fails closed")
+        await chmodACL(["-N"], at: parent)
+    }
+
     @MainActor
     func test_review_refuses_archive_after_parent_becomes_shared() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -64,6 +125,55 @@ final class ReclaimActionTests: XCTestCase, @unchecked Sendable {
             values[Data(path.utf8)] = .ok(Observed(device: 7, flags: 0, isDirectory: directory, linkCount: 1,
                 owner: owner, permissions: permissions), fileID: 1, isSymlink: symlink)
         }
+    }
+
+    final class AncestryACL: MutationACLReader, @unchecked Sendable {
+        var grants: Set<Data> = []
+        var unreadable: Set<Data> = []
+        var calls: [Data] = []
+        var users: [UInt32] = []
+        func allowsOtherMutation(_ path: Data, user: UInt32) -> Bool? {
+            calls.append(path); users.append(user)
+            return unreadable.contains(path) ? nil : grants.contains(path)
+        }
+    }
+
+    func test_mutation_ancestry_reads_acl_for_each_verified_directory_and_fails_closed() {
+        let probe = AncestryStat(), acl = AncestryACL(), user = geteuid()
+        let path = Data("/disk/home/folder/item".utf8), root = Data("/disk".utf8)
+        let directories = ["/disk/home/folder", "/disk/home", "/disk"].map { Data($0.utf8) }
+        probe.seed("/disk", owner: 0)
+        probe.seed("/disk/home", owner: user)
+        probe.seed("/disk/home/folder", owner: user)
+        probe.seed("/disk/home/folder/item", owner: user, directory: false)
+        XCTAssertTrue(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl), "precondition: safe ancestry")
+        XCTAssertEqual(acl.calls, directories)
+        XCTAssertEqual(acl.users, Array(repeating: user, count: directories.count))
+        for directory in directories {
+            acl.grants = [directory]
+            XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl), "grant: \(directory)")
+            acl.grants = []
+            acl.unreadable = [directory]
+            XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl), "unreadable: \(directory)")
+            acl.unreadable = []
+        }
+        acl.calls = []
+        probe.seed("/disk/home/folder", owner: user, symlink: true)
+        XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl))
+        XCTAssertTrue(acl.calls.isEmpty, "ACL is only read after a non-symlink directory is verified")
+    }
+
+    func test_firmlinked_ancestry_reads_acl_at_physical_volume_root() {
+        let probe = AncestryStat(), acl = AncestryACL(), user = geteuid()
+        probe.seed("/Users", owner: 0)
+        probe.seed("/Users/tester", owner: user)
+        probe.seed("/Users/tester/item", owner: user, directory: false)
+        let root = Data("/System/Volumes/Data".utf8), path = Data("/Users/tester/item".utf8)
+        probe.seed(String(decoding: root, as: UTF8.self), owner: 0)
+        XCTAssertTrue(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl), "precondition")
+        XCTAssertEqual(acl.calls, [Data("/Users/tester".utf8), Data("/Users".utf8), root])
+        acl.grants = [root]
+        XCTAssertFalse(mutationAncestryIsSafe(path, volumeRoot: root, user: user, stat: probe, acl: acl))
     }
 
     func test_mutation_ancestry_checks_every_directory_and_stops_at_volume_root() {

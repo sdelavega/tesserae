@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import Darwin
+import Darwin.membership
 import Foundation
 
 public enum ReclaimAction: Hashable, Sendable {
@@ -124,11 +125,56 @@ func unsafeMutationFolderReason() -> String {
         bundle: L10n.bundle, comment: "Compress and Archive are disabled when another local user can replace path entries.")
 }
 
-// The superuser is trusted: ordinary home paths have root-owned system ancestors.
+protocol MutationACLReader: Sendable {
+    // nil means the ACL or its entries could not be read.
+    func allowsOtherMutation(_ path: Data, user: UInt32) -> Bool?
+}
+
+struct ProductionMutationACLReader: MutationACLReader {
+    func allowsOtherMutation(_ path: Data, user: UInt32) -> Bool? {
+        guard path.first == 47, !path.contains(0) else { return nil }
+        let acl = (path + Data([0])).withUnsafeBytes {
+            acl_get_link_np($0.baseAddress!.assumingMemoryBound(to: CChar.self), ACL_TYPE_EXTENDED)
+        }
+        guard let acl else { return errno == ENOENT ? false : nil }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        guard acl_valid(acl) == 0 else { return nil }
+        let mutationPermissions = [ACL_ADD_FILE, ACL_ADD_SUBDIRECTORY, ACL_DELETE_CHILD, ACL_WRITE_DATA,
+                                   ACL_DELETE, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER]
+            .reduce(acl_permset_mask_t(0)) { $0 | acl_permset_mask_t($1.rawValue) }
+        var entry: acl_entry_t?
+        var position = ACL_FIRST_ENTRY
+        while true {
+            errno = 0
+            guard acl_get_entry(acl, position.rawValue, &entry) == 0 else {
+                // Darwin uses EINVAL for exhaustion, including an empty valid ACL.
+                return errno == EINVAL ? false : nil
+            }
+            position = ACL_NEXT_ENTRY
+            guard let entry else { return nil }
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(entry, &tag) == 0 else { return nil }
+            if tag == ACL_EXTENDED_DENY { continue }
+            guard tag == ACL_EXTENDED_ALLOW else { return nil }
+            var permissions: acl_permset_mask_t = 0
+            guard acl_get_permset_mask_np(entry, &permissions) == 0 else { return nil }
+            if permissions & mutationPermissions == 0 { continue }
+            guard let qualifier = acl_get_qualifier(entry) else { return nil }
+            defer { acl_free(qualifier) }
+            var currentUser: uuid_t = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            guard mbr_uid_to_uuid(user, &currentUser) == 0 else { return nil }
+            if uuid_compare(qualifier.assumingMemoryBound(to: UInt8.self), &currentUser) != 0 { return true }
+        }
+    }
+}
+
+// Root ownership is trusted: ordinary home paths have root-owned system ancestors.
+// ACL mutation grants are safe only for the current user's exact GUID.
 // Sticky protection applies only when neither the directory owner nor the child
 // entry owner is a different unprivileged user. All observations are fresh lstat.
 func mutationAncestryIsSafe(_ path: Data, volumeRoot suppliedRoot: Data? = nil,
-                           user: UInt32 = geteuid(), stat: any FileStat = ProductionFileStat()) -> Bool {
+                           user: UInt32 = geteuid(), stat: any FileStat = ProductionFileStat(),
+                           acl: any MutationACLReader = ProductionMutationACLReader()) -> Bool {
     func canonical(_ p: Data) -> Bool {
         p.first == 47 && !p.contains(0) && !p.split(separator: 47).contains { $0 == Data(".".utf8) || $0 == Data("..".utf8) }
     }
@@ -156,6 +202,7 @@ func mutationAncestryIsSafe(_ path: Data, volumeRoot suppliedRoot: Data? = nil,
         if permissions & (S_IWGRP | S_IWOTH) != 0 {
             guard permissions & S_ISVTX != 0, childInfo.owner == user || childInfo.owner == 0 else { return false }
         }
+        guard acl.allowsOtherMutation(probe, user: user) == false else { return false }
         child = parent
         childInfo = info
         if child == Data([47]) && root != child { return false }
