@@ -24,7 +24,6 @@ struct ReclaimView: View {
     var advancedExpanded = false
     var unavailable = false
     var unavailableMessage = ReclaimCopy.unavailable
-    var preparing = false
     var busy = false
     var remove: (UInt32) -> Void
     var confirm: () -> Void
@@ -43,11 +42,6 @@ struct ReclaimView: View {
                 comment: "ReclaimView: Staged items stay where they are until you confirm their actions."
             )).foregroundStyle(.secondary)
             if unavailable { Text(unavailableMessage).font(.callout) }
-            if preparing { Text(String(
-                localized: "reclaimView.preparing",
-                defaultValue: "Preparing…",
-                comment: "ReclaimView: Preparing…."
-            )).font(.headline) }
             Text(TrashConfirmation(items: items).total(locale: locale)).font(.headline)
             if items.isEmpty { Text(String(
                 localized: "reclaimView.no.items.staged",
@@ -63,16 +57,16 @@ struct ReclaimView: View {
                             localized: "reclaimView.remove.from.reclaim.space",
                             defaultValue: "Remove from Reclaim Space",
                             comment: "ReclaimView: Remove from Reclaim Space."
-                        )) { remove(item.id) }.disabled(busy || preparing)
+                        )) { remove(item.id) }.disabled(busy)
                     }
                     if let viewModel {
                         ReclaimActionPicker(model: viewModel, item: item, advancedExpanded: advancedExpanded)
-                            .disabled(busy || preparing)
+                            .disabled(busy)
                         Text(viewModel.estimateText(for: item, locale: locale)).foregroundStyle(.secondary)
                     } else {
                         Text(ReclaimCopy.size(item.recordedSize, upperBound: item.recorded.isDirectory, unknownContent: item.hasUnknownContent, locale: locale)).foregroundStyle(.secondary)
                     }
-                    if case .unavailable(let reason) = item.actionAvailability { Text(reason).font(.callout) }
+                    if case .unavailable(let reason) = item.actionAvailability, !item.isCheckingArchive { Text(reason).font(.callout) }
                     if item.actionAvailability == .available {
                     switch item.verdict {
                     case .ok: Label(String(
@@ -93,7 +87,7 @@ struct ReclaimView: View {
                         ), systemImage: "hand.raised")
                         Text(reasonText(reason))
                     }
-                    } else {
+                    } else if !item.isCheckingArchive {
                         Label(String(localized: "reclaimView.will.be.skipped", defaultValue: "Will be skipped",
                             comment: "ReclaimView: Will be skipped."), systemImage: "hand.raised")
                     }
@@ -101,7 +95,7 @@ struct ReclaimView: View {
                     ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(reasonText(reason)) }
                 }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
             }
-            Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy || preparing)
+            Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy)
 
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -235,10 +229,12 @@ final class ReclaimPresentation: ObservableObject {
         }
         choiceObservation?.cancel()
         if let viewModel = viewModel ?? model?.session?.reclaim.viewModel {
-            choiceObservation = viewModel.$items.dropFirst().sink { [weak self] _ in
-                guard self?.running == false else { return }
-                self?.choicesChanged = true
-                self?.showingConfirmation = false
+            choiceObservation = viewModel.$items.dropFirst().sink { [weak self] current in
+                guard let self, !self.running else { return }
+                // A completed inspection leaves its frozen, unavailable row excluded.
+                guard !self.preservesReview(current) else { return }
+                self.choicesChanged = true
+                self.showingConfirmation = false
             }
         }
         if let session = model?.session {
@@ -248,6 +244,17 @@ final class ReclaimPresentation: ObservableObject {
             }
         }
         showingConfirmation = true
+    }
+    private func preservesReview(_ current: [ReclaimItem]) -> Bool {
+        let frozen = confirmation.items
+        guard frozen.count == current.count else { return false }
+        for (reviewed, updated) in zip(frozen, current) {
+            if reviewed == updated { continue }
+            guard reviewed.isCheckingArchive, reviewed.id == updated.id, reviewed.action == updated.action else { return false }
+            guard reviewed.path == updated.path, reviewed.recorded == updated.recorded else { return false }
+            guard reviewed.sessionID == updated.sessionID, reviewed.overlayRevision == updated.overlayRevision else { return false }
+        }
+        return true
     }
     @discardableResult
     func startExecution(_ model: AppModel, trasher: any Trasher = ProductionTrasher(),

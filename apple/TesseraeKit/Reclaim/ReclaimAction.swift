@@ -109,6 +109,17 @@ public func availableActions(for item: ReclaimItem, volume: VolumeCapabilities, 
     return actions
 }
 
+public func defaultAction(for item: ReclaimItem, volume: VolumeCapabilities, verdict: Verdict) -> ReclaimAction {
+    guard volume.canCompress else { return .trash }
+    if case .denied = verdict { return .trash }
+    if case .denied = item.verdict { return .trash }
+    if !item.recorded.isDirectory {
+        if item.compressionSkipReason == .alreadyCompressed || item.compressionSkipReason == .wontShrink { return .trash }
+        if compressEligibility(path: item.path, stat: FileFacts(), context: EligibilityContext()) == .wontShrink { return .trash }
+    }
+    return .compress
+}
+
 public func actionWarnings(for item: ReclaimItem, action: ReclaimAction, facts: ArchiveItemFacts) -> [Reason] {
     guard action == .compress else { return [] }
     var reasons: [Reason] = []

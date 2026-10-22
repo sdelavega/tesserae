@@ -21,6 +21,177 @@ import TesseraeFFI
 
 @MainActor
 final class ReclaimViewModelTests: XCTestCase {
+    func test_staging_is_ready_without_filesystem_inspection() async throws {
+        let probe = BlockingArchiveFiles()
+        defer { probe.release.signal() }
+        let path = Data(URL(fileURLWithPath: #filePath).path.utf8)
+        let staged = ReclaimItem(nodeIndex: 1, path: path,
+            recorded: Recorded(fileID: 1, device: 1, isDirectory: false), recordedSize: 512, verdict: .ok)
+        let vm = ReclaimViewModel(defaults: nil, archiveFiles: probe)
+        vm.prepare([staged], context: nil)
+        XCTAssertEqual(vm.items.count, 1, "precondition: staging published an item")
+        XCTAssertEqual(vm.items[0].action, .compress, "precondition: the Compress default is selected")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1,
+            "Compress must be immediately confirmable, even if archive inspection would block forever")
+        vm.setAction(.trash, for: 1)
+        XCTAssertEqual(vm.items[0].action, .trash)
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(probe.calls, 0, "Trash and Compress never invoke Archive inspection")
+        vm.replace([], volumes: [:])
+    }
+
+    func test_user_choice_survives_restaging() {
+        let staged = item(1, .ok, 512)
+        let vm = ReclaimViewModel(items: [staged], volumes: [1: appleVolume], defaults: nil)
+        XCTAssertEqual(vm.items[0].action, .compress, "precondition: the new default is Compress")
+        vm.setAction(.trash, for: 1)
+        XCTAssertEqual(vm.items[0].action, .trash, "precondition: an explicit choice was made")
+        vm.replace([staged, item(2, .ok, 256)], volumes: [1: appleVolume, 2: appleVolume])
+        XCTAssertEqual(vm.items.map(\.action), [.trash, .compress])
+        var replacement = staged
+        replacement = ReclaimItem(nodeIndex: staged.id, path: Data("/different/item".utf8),
+            recorded: staged.recorded, recordedSize: 512, verdict: .ok)
+        vm.replace([replacement], volumes: [1: appleVolume])
+        XCTAssertEqual(vm.items[0].action, .compress, "a reused node ID cannot inherit another item's choice")
+        let other = ReclaimViewModel(items: [staged], volumes: [1: VolumeCapabilities(isLocal: true, isWritable: true, fsType: "exfat")], defaults: nil)
+        XCTAssertEqual(other.items[0].action, .trash, "precondition: unsupported volume defaults to Trash")
+        other.setAction(.trash, for: 1)
+        other.replace([staged], volumes: [1: appleVolume])
+        XCTAssertEqual(other.items[0].action, .trash, "explicitly choosing the current default is still a user choice")
+        vm.replace([], volumes: [:])
+    }
+
+    func test_archive_item_blocks_only_itself_until_inspected() async throws {
+        let probe = BlockingArchiveFiles()
+        defer { probe.release.signal() }
+        let vm = reviewWithProbe(probe)
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 2, "precondition: both start ready")
+        vm.setAction(.archive(.zip), for: 1)
+        XCTAssertTrue(vm.checking.contains(1))
+        XCTAssertEqual(vm.estimateText(for: vm.items[0]), "Checking…")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
+        XCTAssertEqual(TrashConfirmation(items: vm.items).checkingItems.map(\.id), [1])
+        XCTAssertEqual(vm.items[1].actionAvailability, .available)
+        await assertStarted(probe.started)
+        let ui = ReclaimPresentation(historyLoader: { [] })
+        ui.prepare(vm.items, viewModel: vm)
+        XCTAssertTrue(ui.showingConfirmation, "precondition: other items can open confirmation")
+        XCTAssertEqual(ui.confirmation.movingCount, 1)
+        probe.release.signal()
+        await vm.waitForInspection(1)
+        XCTAssertTrue(ui.showingConfirmation, "an Archive completion cannot interrupt confirmation for other items")
+        XCTAssertEqual(ui.confirmation.movingCount, 1, "the frozen pending Archive item stays excluded from this batch")
+        XCTAssertFalse(vm.checking.contains(1))
+        XCTAssertEqual(vm.items[0].actionAvailability, .available)
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 2)
+        XCTAssertEqual(probe.calls, 1, "the inspection is reused for the archive estimate")
+        vm.replace([], volumes: [:])
+    }
+
+    func test_stale_inspection_result_is_dropped() async throws {
+        let probe = BlockingArchiveFiles()
+        probe.facts = ArchiveItemFacts(containsUnknownContent: true, containsRealAppleDouble: true)
+        defer { probe.release.signal(); probe.laterRelease.signal() }
+        let vm = reviewWithProbe(probe)
+        vm.setAction(.archive(.zip), for: 1)
+        await assertStarted(probe.started)
+        let old = vm.inspectionTask(for: 1)
+        vm.setAction(.trash, for: 1)
+        XCTAssertFalse(vm.checking.contains(1))
+        XCTAssertEqual(vm.items[0].action, .trash, "precondition: choice changed while inspection is blocked")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 2)
+        // A new Archive choice for the same ID must not accept the previous generation's result.
+        vm.setAction(.archive(.zip), for: 1)
+        await assertStarted(probe.started)
+        let current = vm.inspectionTask(for: 1)
+        probe.release.signal()
+        await old?.value
+        XCTAssertTrue(vm.checking.contains(1), "the superseded inspection cannot unlock the newer Archive choice")
+        XCTAssertFalse(vm.items[0].archiveFacts.containsUnknownContent)
+        vm.setAction(.trash, for: 1)
+        probe.laterRelease.signal()
+        await current?.value
+        XCTAssertEqual(vm.items[0].action, .trash)
+        XCTAssertFalse(vm.items[0].archiveFacts.containsUnknownContent)
+        XCTAssertEqual(vm.availability(.archive(.zip), for: vm.items[0]), .available)
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 2)
+        vm.setAction(.archive(.zip), for: 1)
+        await assertStarted(probe.started)
+        let restaged = vm.inspectionTask(for: 1)
+        vm.replace([], volumes: [:])
+        probe.release.signal()
+        await restaged?.value
+        XCTAssertTrue(vm.items.isEmpty)
+        XCTAssertTrue(vm.checking.isEmpty)
+    }
+
+    func test_estimate_fills_in_without_blocking() async throws {
+        let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let vm = ReclaimViewModel(items: [item(1, .ok, 1_000_000_000)], volumes: [1: appleVolume],
+            defaults: nil, compressionEstimate: { _ in started.signal(); release.wait(); return 500_000_000 })
+        XCTAssertEqual(vm.items[0].action, .compress)
+        XCTAssertTrue(vm.estimating.contains(1))
+        XCTAssertEqual(vm.estimateText(for: vm.items[0]), "Estimating…")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
+        await assertStarted(started)
+        let frozen = vm.items
+        release.signal()
+        await vm.waitForEstimate()
+        XCTAssertFalse(vm.estimating.contains(1))
+        XCTAssertEqual(vm.items, frozen, "an estimate cannot invalidate an open confirmation")
+        XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US")),
+            "Saves about 500 MB (estimated)")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
+    }
+
+    func test_archive_inspection_cancels_background_walk() throws {
+        let path = Data(URL(fileURLWithPath: #filePath).path.utf8)
+        let ordinary = try ProductionArchiveFileSystem().inspect(path)
+        XCTAssertFalse(ordinary.files.isEmpty, "precondition: the real file can be inspected")
+        let cancelled = ProductionArchiveFileSystem(isCancelled: { true })
+        XCTAssertThrowsError(try cancelled.inspect(path)) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func test_volume_capabilities_are_cached_per_device() {
+        let probe = VolumeProbe()
+        let vm = ReclaimViewModel(defaults: nil, volumeLoader: { probe.load($0) })
+        vm.prepare([item(1, .ok, 512), item(2, .ok, 512)], context: nil)
+        XCTAssertEqual(vm.items.count, 2)
+        XCTAssertEqual(probe.calls, 1, "one statfs for two items on the same volume")
+        vm.prepare(vm.items, context: nil)
+        XCTAssertEqual(probe.calls, 1, "restaging reuses the volume cache")
+        XCTAssertEqual(vm.items.map(\.actionAvailability), [.available, .available])
+        vm.replace([], volumes: [:])
+        let failed = VolumeProbe(result: VolumeCapabilities(isLocal: false, isWritable: false, fsType: ""))
+        let retry = ReclaimViewModel(defaults: nil, volumeLoader: { failed.load($0) })
+        retry.prepare([item(1, .ok, 512), item(2, .ok, 512)], context: nil)
+        XCTAssertEqual(failed.calls, 1, "a failed statfs is shared within one staging request")
+        XCTAssertEqual(TrashConfirmation(items: retry.items).movingCount, 0, "a failed observation fails closed")
+        retry.prepare(retry.items, context: nil)
+        XCTAssertEqual(failed.calls, 2, "failed capabilities can be retried on restaging")
+    }
+
+    private nonisolated static func blockingStartWait(_ semaphore: DispatchSemaphore) -> DispatchTimeoutResult {
+        semaphore.wait(timeout: .now() + 3)
+    }
+    private func assertStarted(_ semaphore: DispatchSemaphore, file: StaticString = #filePath, line: UInt = #line) async {
+        let result = await Task.detached { Self.blockingStartWait(semaphore) }.value
+        XCTAssertEqual(result, .success, "precondition: background work actually started", file: file, line: line)
+    }
+
+    private func reviewWithProbe(_ probe: BlockingArchiveFiles) -> ReclaimViewModel {
+        let path = Data(URL(fileURLWithPath: #filePath).path.utf8)
+        let staged = (1...2).map { id in ReclaimItem(nodeIndex: UInt32(id), path: path,
+            recorded: Recorded(fileID: UInt64(id), device: 1, isDirectory: false), recordedSize: 512, verdict: .ok) }
+        return ReclaimViewModel(items: staged, volumes: [1: appleVolume, 2: appleVolume], defaults: nil,
+            archiveFiles: probe, archiveSafety: { _, _ in true }, compressionEstimate: { _ in 0 })
+    }
+
+
     func test_reclaim_paths_use_neutral_distinct_display_and_keep_raw_bytes() throws {
         let raw = [Data("/fixture/evil\u{202e}gpj.exe".utf8), Data("/fixture/tiny\nname".utf8),
                    Data("/fixture/bad-".utf8) + Data([255]), Data("/fixture/bad-".utf8) + Data([254])]
@@ -52,7 +223,7 @@ final class ReclaimViewModelTests: XCTestCase {
         XCTAssertTrue(view.contains("Text(item.displayPath)"))
         XCTAssertEqual(view.components(separatedBy: "Text(neutralisedPath(row.path))").count - 1, 2)
         XCTAssertEqual(view.components(separatedBy: "Text(entry.displayPath)").count - 1, 2)
-        XCTAssertEqual(sheet.components(separatedBy: "Text(item.displayPath)").count - 1, 2)
+        XCTAssertEqual(sheet.components(separatedBy: "Text(item.displayPath)").count - 1, 3)
         XCTAssertTrue(sheet.contains("Text(item.path)"), "WarningRow.path is already neutralised")
         XCTAssertTrue(summary.contains("Text(pair.0.displayPath)"))
         for source in [view, sheet, summary] { XCTAssertFalse(source.contains("String(decoding:")) }
@@ -85,7 +256,7 @@ final class ReclaimViewModelTests: XCTestCase {
         let ui = ReclaimPresentation(log: ReclaimLog(directory: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("unused-task12-log")))
         ui.prepare(vm.items, viewModel: vm)
         XCTAssertTrue(ui.showingConfirmation)
-        vm.setAction(.compress, for: 1)
+        vm.setAction(.trash, for: 1)
         XCTAssertFalse(ui.showingConfirmation)
         ui.prepare(vm.items, viewModel: vm)
         vm.setAction(.archive(.zip), for: 1)
@@ -96,12 +267,20 @@ final class ReclaimViewModelTests: XCTestCase {
         XCTAssertEqual(ui.confirmation.items[0].action, .archive(.zip), "review stays frozen")
     }
 
-    func test_confirmation_groups_by_action_and_lists_all_warnings_and_skips() {
+    func test_confirmation_groups_by_action_and_lists_all_warnings_and_skips() async {
         var a = item(1, .ok, 100); a.action = .compress
         a.archiveFacts = ArchiveItemFacts(containsGitWorkingTree: true, largestFileSize: 5_000_000_000)
-        var b = item(2, .warn(.appContainer), 200); b.action = .archive(.zip)
+        let b = ReclaimItem(nodeIndex: 2, path: Data(URL(fileURLWithPath: #filePath).path.utf8),
+            recorded: Recorded(fileID: 3, device: 1, isDirectory: false), recordedSize: 200,
+            verdict: .warn(.appContainer), action: .archive(.zip))
+        let probe = BlockingArchiveFiles()
+        probe.release.signal()
         let vm = ReclaimViewModel(items: [a, b, item(3, .denied(.restricted), nil)],
-            volumes: [1: appleVolume, 2: appleVolume, 3: appleVolume], defaults: nil)
+            volumes: [1: appleVolume, 2: appleVolume, 3: appleVolume], defaults: nil,
+            archiveFiles: probe, archiveSafety: { _, _ in true }, compressionEstimate: { _ in 0 })
+        await vm.waitForInspection(2)
+        XCTAssertFalse(vm.items[1].isCheckingArchive, "precondition: the Archive item was inspected")
+        XCTAssertEqual(probe.calls, 1)
         let c = TrashConfirmation(items: vm.items)
         XCTAssertEqual(c.groupedForConfirmation.map { $0.0 }, [.compress, .archive(.zip)])
         XCTAssertEqual(c.groupedForConfirmation.flatMap { $0.1 }.count, 2)
@@ -112,18 +291,27 @@ final class ReclaimViewModelTests: XCTestCase {
     }
 
     func test_estimate_texts() async {
-        let vm = ReclaimViewModel(items: [item(1, .ok, 1_000_000_000)],
-            volumes: [1: appleVolume], defaults: nil)
+        let probe = BlockingArchiveFiles()
+        defer { probe.release.signal() }
+        let path = Data(URL(fileURLWithPath: #filePath).path.utf8)
+        let staged = ReclaimItem(nodeIndex: 1, path: path, recorded: Recorded(fileID: 1, device: 1, isDirectory: false),
+            recordedSize: 1_000_000_000, verdict: .ok)
+        let vm = ReclaimViewModel(items: [staged], volumes: [1: appleVolume], defaults: nil,
+            archiveFiles: probe, archiveSafety: { _, _ in true }, compressionEstimate: { _ in 0 })
         let locale = Locale(identifier: "en_US")
+        vm.setAction(.trash, for: 1)
         XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: locale), "1 GB")
         vm.setAction(.compress, for: 1)
-        XCTAssertTrue(vm.preparing, "review waits for the read-only estimate")
+        XCTAssertTrue(vm.estimating.contains(1), "estimate runs without blocking review")
+        XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
         vm.setEstimate(500_000_000, for: 1)
         XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: locale), "Saves about 500 MB (estimated)")
-        vm.setAction(.archive(.zip), for: 1); vm.setEstimate(400_000_000, for: 1)
+        vm.setAction(.archive(.zip), for: 1)
+        probe.release.signal()
+        await vm.waitForInspection(1)
+        vm.setEstimate(400_000_000, for: 1)
         XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: locale), "Saves about 400 MB once you empty the Trash (estimated)")
-        await vm.waitForEstimate()
-        XCTAssertFalse(vm.preparing)
+        XCTAssertTrue(vm.checking.isEmpty)
     }
 
     func test_archive_format_choice_persists() throws {
@@ -256,7 +444,7 @@ final class ReclaimViewModelTests: XCTestCase {
             reclaim.stage([node], in: snapshot, context: context, stat: probe)
             XCTAssertEqual(reclaim.viewModel.items, frozen)
             XCTAssertFalse(reclaim.viewModel.needsPreparation)
-            XCTAssertFalse(reclaim.viewModel.preparing)
+            XCTAssertTrue(reclaim.viewModel.checking.isEmpty)
             XCTAssertEqual(reclaim.viewModel.items[0].actionAvailability, .available)
         }
     }
@@ -386,14 +574,14 @@ final class ReclaimViewModelTests: XCTestCase {
         let reclaim = Reclaim()
         let staged = item(1, .ok, 100)
         reclaim.publish([staged])
-        var reviewed = staged; reviewed.action = .archive(.zip)
+        var reviewed = staged; reviewed.action = .compress
         reclaim.viewModel.replace([reviewed], volumes: [1: appleVolume])
         let frozen = reclaim.viewModel.items
         XCTAssertEqual(frozen.count, 1)
-        XCTAssertFalse(reclaim.viewModel.preparing)
+        XCTAssertTrue(reclaim.viewModel.checking.isEmpty)
         reclaim.unstage([])
         XCTAssertEqual(reclaim.viewModel.items, frozen, "a refused batch unstages no nodes and must preserve its review")
-        XCTAssertFalse(reclaim.viewModel.preparing, "no changed items means no new preparation event")
+        XCTAssertTrue(reclaim.viewModel.checking.isEmpty, "no changed items means no new preparation event")
         reclaim.unstage([999])
         XCTAssertEqual(reclaim.viewModel.items, frozen)
         XCTAssertEqual(reclaim.items.count, 1)
@@ -667,5 +855,41 @@ private final class HistoryProbe: @unchecked Sendable {
         }
         return [LogEntry(ts: Date(), action: "trash", path: "/fixture/entry", pathB64: nil,
             inode: UInt64(number), bytes: 1, trashURL: "file:///fixture/Trash/entry", result: "ok")]
+    }
+}
+
+private final class BlockingArchiveFiles: ArchiveFileSystem, @unchecked Sendable {
+    let release = DispatchSemaphore(value: 0)
+    let started = DispatchSemaphore(value: 0)
+    let laterRelease = DispatchSemaphore(value: 0)
+    var facts = ArchiveItemFacts()
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.withLock { count } }
+    func inspect(_ path: Data) throws -> ArchiveInspection {
+        let call = lock.withLock { count += 1; return count }
+        started.signal()
+        if call == 2 { laterRelease.wait() } else { release.wait() }
+        return ArchiveInspection(facts: facts, files: [], stamps: [:])
+    }
+    func lstat(_ path: Data) -> StatResult { .error(errno: ENOENT) }
+    func volumeUUID(_ path: Data) -> String? { nil }
+    func freeSpace(_ path: Data) -> UInt64? { nil }
+    func readArchive(_ path: Data, matching fd: Int32) throws -> Int32 { throw archiveError(EIO) }
+    func archiveStamp(_ fd: Int32) throws -> ArchiveStamp { throw archiveError(EIO) }
+    func usage(_ fd: Int32) throws -> (allocated: UInt64, logical: UInt64) { throw archiveError(EIO) }
+    func digest(_ fd: Int32) throws -> String { throw archiveError(EIO) }
+    func syncParent(_ path: Data, recorded: Recorded) throws { throw archiveError(EIO) }
+}
+
+private final class VolumeProbe: @unchecked Sendable {
+    let result: VolumeCapabilities
+    init(result: VolumeCapabilities = VolumeCapabilities(isLocal: true, isWritable: true, fsType: "apfs")) { self.result = result }
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.withLock { count } }
+    func load(_ path: Data) -> VolumeCapabilities {
+        lock.withLock { count += 1 }
+        return result
     }
 }

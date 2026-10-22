@@ -64,6 +64,8 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
     public let warnings: [Reason]
     public let hasUnknownContent: Bool
     public let descendants: StagedDescendants
+    public var compressionSkipReason: SkipReason?
+    public var isCheckingArchive: Bool
     public var actionAvailability: Availability
     public var action: ReclaimAction
     public var archiveFacts: ArchiveItemFacts
@@ -71,7 +73,10 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
     public init(nodeIndex: UInt32, path: Data, recorded: Recorded, recordedSize: UInt64?,
                 verdict: Verdict, warnings: [Reason] = [], hasUnknownContent: Bool = false,
                 descendants: StagedDescendants = StagedDescendants(), overlayRevision: UInt64 = 0, sessionID: UUID? = nil,
-                action: ReclaimAction = .trash, actionAvailability: Availability = .available, archiveFacts: ArchiveItemFacts = ArchiveItemFacts()) {
+                action: ReclaimAction = .trash, actionAvailability: Availability = .available, archiveFacts: ArchiveItemFacts = ArchiveItemFacts(),
+                compressionSkipReason: SkipReason? = nil, isCheckingArchive: Bool = false) {
+        self.compressionSkipReason = compressionSkipReason
+        self.isCheckingArchive = isCheckingArchive
         self.actionAvailability = actionAvailability
         self.action = action
         self.archiveFacts = archiveFacts
@@ -126,7 +131,7 @@ public final class Reclaim: ObservableObject {
         self.context = context ?? self.context
         guard prepared != items else { return }
         items = prepared
-        viewModel.replace(prepared, volumes: [:])
+        viewModel.prepare(prepared, context: self.context)
     }
 
     nonisolated static func prepare(_ nodes: [UInt32], in snapshot: Snapshot, context: GuardContext,
@@ -134,6 +139,13 @@ public final class Reclaim: ObservableObject {
         let source = OverlaySource(snapshot, overlay)
         var next = existing
         var staged = Set(next.map(\.nodeIndex))
+        var gitParents: [UInt32: Bool] = [:]
+        func containsGit(_ parent: UInt32) -> Bool {
+            if let cached = gitParents[parent] { return cached }
+            let found = source.children(parent).contains { snapshot.nameBytes($0) == Data(".git".utf8) }
+            gitParents[parent] = found
+            return found
+        }
         for node in nodes {
             if Task.isCancelled { return [] }
             guard Int(node) < snapshot.nodes.count, !overlay.isDeleted(node, in: snapshot) else { continue }
@@ -146,6 +158,7 @@ public final class Reclaim: ObservableObject {
                                     isDirectory: snapshot.isDirectory(node))
             var verdict: Verdict
             var freshDataless = false
+            var compressionSkipReason: SkipReason?
             var warnings: [Reason] = []
             if fileID == nil {
                 verdict = .denied(.noRecordedIdentity)
@@ -156,6 +169,7 @@ public final class Reclaim: ObservableObject {
                 case .same:
                     guard case .ok(let info, _, _) = observed else { preconditionFailure("Verified identity requires a stat") }
                     freshDataless = info.flags & UInt32(SF_DATALESS) != 0
+                    if !info.isDirectory && info.flags & UInt32(UF_COMPRESSED) != 0 { compressionSkipReason = .alreadyCompressed }
                     let verdicts = allVerdicts(path, info, context)
                     verdict = verdicts.first ?? .ok
                     warnings = verdicts.compactMap { if case .warn(let reason) = $0 { return reason }; return nil }
@@ -166,6 +180,28 @@ public final class Reclaim: ObservableObject {
             let unknown = snapshot.isPermissionDenied(node) || snapshot.isDataless(node) || snapshot.isSkippedByRequest(node) || freshDataless
             var hasUnknown = unknown
             var descendants: [UInt32] = []
+            var facts = ArchiveItemFacts()
+            func snapshotFacts(_ index: UInt32) {
+                let name = foldedComponents(snapshot.nameBytes(index)).last ?? Data()
+                if name == Data(".git".utf8) { facts.containsGitWorkingTree = true }
+                if name.suffix(4) == Data(".app".utf8) { facts.containsAppBundle = true }
+                if !snapshot.isDirectory(index) {
+                    let bytes = snapshot.nodes[Int(index)].logical
+                    facts.largestFileSize = max(facts.largestFileSize, bytes)
+                    let (sum, overflow) = facts.eligibleBytes.addingReportingOverflow(bytes)
+                    facts.eligibleBytes = overflow ? UInt64.max : sum
+                }
+            }
+            snapshotFacts(node)
+            var ancestor = snapshot.nodes[Int(node)].parent
+            while ancestor != Tile.noNode {
+                let name = foldedComponents(snapshot.nameBytes(ancestor)).last ?? Data()
+                if name.suffix(4) == Data(".app".utf8) { facts.containsAppBundle = true }
+                if containsGit(ancestor) {
+                    facts.containsGitWorkingTree = true
+                }
+                ancestor = snapshot.nodes[Int(ancestor)].parent
+            }
             func warn(_ reason: Reason) {
                 if !warnings.contains(reason) { warnings.append(reason) }
             }
@@ -179,6 +215,7 @@ public final class Reclaim: ObservableObject {
                     if childUnknown { hasUnknown = true; warn(.containsUnknownSize) }
                     if snapshot.isDataless(child) { warn(.containsCloudOnly) }
                     if snapshot.nodes[Int(child)].flags & UInt16(TESS_FLAG_HARDLINK_DUP) != 0 { warn(.containsHardLinks) }
+                    snapshotFacts(child)
                     descendants.append(child)
                     pending.append(contentsOf: source.children(child))
                 }
@@ -200,7 +237,7 @@ public final class Reclaim: ObservableObject {
             staged.insert(node)
             next.append(ReclaimItem(nodeIndex: node, path: path, recorded: recorded,
                                    recordedSize: unknown ? nil : source.allocated(node), verdict: verdict, warnings: warnings,
-                                   hasUnknownContent: hasUnknown, descendants: StagedDescendants(snapshot: snapshot, overlay: overlay, nodes: descendants), overlayRevision: overlay.revision, sessionID: sessionID))
+                                   hasUnknownContent: hasUnknown, descendants: StagedDescendants(snapshot: snapshot, overlay: overlay, nodes: descendants), overlayRevision: overlay.revision, sessionID: sessionID, archiveFacts: facts, compressionSkipReason: compressionSkipReason))
         }
         return next
     }

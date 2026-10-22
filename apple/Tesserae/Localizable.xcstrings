@@ -618,17 +618,6 @@
         }
       }
     },
-    "reclaimView.preparing": {
-      "comment": "ReclaimView: Preparing….",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing…"
-          }
-        }
-      }
-    },
     "reclaimView.put.back": {
       "comment": "ReclaimView: Put Back.",
       "localizations": {

@@ -160,8 +160,10 @@ final class ReclaimSnapshotTests: XCTestCase {
         let items = [item(1, .compress), item(2, .archive(.appleArchiveFast)), item(3, .trash)]
         let volume = VolumeCapabilities(isLocal: true, isWritable: true, fsType: "apfs")
         let vm = ReclaimViewModel(items: items, volumes: [1: volume, 2: volume, 3: volume], defaults: nil)
-        vm.setEstimate(500_000_000, for: 1); vm.setEstimate(400_000_000, for: 2)
-        XCTAssertEqual(vm.groupedForConfirmation.count, 3)
+        vm.setAction(.trash, for: 3)
+        vm.setEstimate(500_000_000, for: 1)
+        XCTAssertEqual(vm.groupedForConfirmation.count, 2, "ready Compress and Trash items can be reviewed")
+        XCTAssertEqual(vm.checking, [2], "the Archive row alone is still checking")
         try snapshot("task12-mixed", ReclaimView(items: vm.items, viewModel: vm, remove: { _ in }, confirm: {}).frame(width: 760))
         try snapshot("task12-advanced", ReclaimView(items: [vm.items[1]], viewModel: vm,
             advancedExpanded: true, remove: { _ in }, confirm: {}).frame(width: 760))

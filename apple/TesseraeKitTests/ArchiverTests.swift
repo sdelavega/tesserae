@@ -196,10 +196,10 @@ final class ArchiverTests: XCTestCase, @unchecked Sendable {
     @MainActor
     private func waitForArchiveReview(_ vm: ReclaimViewModel) async throws {
         for _ in 0..<3000 {
-            if !vm.preparing { break }
+            if vm.checking.isEmpty { break }
             try await Task.sleep(for: .milliseconds(5))
         }
-        XCTAssertFalse(vm.preparing)
+        XCTAssertTrue(vm.checking.isEmpty)
     }
 
     private final class ArchiveTrashProbe: Trasher, @unchecked Sendable {

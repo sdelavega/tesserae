@@ -384,8 +384,8 @@ struct SessionView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             ReclaimPane(reclaim: session.reclaim, unavailable: appModel.stagingUnavailable,
-                                unavailableMessage: session.changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.unavailable, preparing: appModel.isPreparingReclaim || session.isPreparingReclaim,
-                                busy: reclaimUI.showingConfirmation || appModel.isScanning || appModel.reclaimBusy, confirm: { reclaimUI.prepare(session.reclaim.viewModel.items, model: appModel) })
+                                unavailableMessage: session.changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.unavailable,
+                                busy: reclaimUI.showingConfirmation || appModel.isScanning || appModel.reclaimBusy || session.isPreparingReclaim, confirm: { reclaimUI.prepare(session.reclaim.viewModel.items, model: appModel) })
                             ReclaimStatusView(rescanCount: session.needsRescan ? session.overlay.deleted.count : nil,
                                 logFailed: reclaimUI.logFailed)
                             if let result = reclaimUI.result {
@@ -537,12 +537,11 @@ private struct ReclaimPane: View {
     @ObservedObject var reclaim: Reclaim
     var unavailable: Bool
     var unavailableMessage = ReclaimCopy.unavailable
-    var preparing: Bool
     var busy: Bool
     var confirm: () -> Void
     var body: some View {
         ReclaimPreparedPane(model: reclaim.viewModel, unavailable: unavailable, unavailableMessage: unavailableMessage,
-            preparing: preparing, busy: busy, remove: { reclaim.unstage([$0]) }, confirm: confirm)
+            busy: busy, remove: { reclaim.unstage([$0]) }, confirm: confirm)
             .onAppear { reclaim.prepareReview() }
             .onChange(of: reclaim.items) { _ in reclaim.prepareReview() }
     }
@@ -551,12 +550,11 @@ private struct ReclaimPreparedPane: View {
     @ObservedObject var model: ReclaimViewModel
     var unavailable: Bool
     var unavailableMessage: String
-    var preparing: Bool
     var busy: Bool
     var remove: (UInt32) -> Void
     var confirm: () -> Void
     var body: some View {
-        ReclaimView(items: model.items, viewModel: model, unavailable: unavailable, unavailableMessage: unavailableMessage, preparing: preparing || model.preparing, busy: busy,
+        ReclaimView(items: model.items, viewModel: model, unavailable: unavailable, unavailableMessage: unavailableMessage, busy: busy,
             remove: remove, confirm: confirm)
     }
 }

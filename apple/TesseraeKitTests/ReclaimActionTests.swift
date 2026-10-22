@@ -26,6 +26,37 @@ final class ReclaimActionTests: XCTestCase, @unchecked Sendable {
                     recordedSize: 512, verdict: .ok, warnings: warnings, hasUnknownContent: unknown, archiveFacts: facts)
     }
 
+    func test_default_action_is_compress_on_apfs_and_trash_elsewhere() {
+        let staged = item(directory: true)
+        XCTAssertEqual(staged.verdict, .ok, "precondition: allowed folder")
+        for kind in ["apfs", "hfs", "exfat", "msdos", "ntfs", "smbfs"] {
+            let disk = VolumeCapabilities(isLocal: true, isWritable: true, fsType: kind)
+            XCTAssertEqual(defaultAction(for: staged, volume: disk, verdict: .ok),
+                ["apfs", "hfs"].contains(kind) ? .compress : .trash, kind)
+        }
+        XCTAssertEqual(defaultAction(for: staged, volume: volume, verdict: .denied(.restricted)), .trash)
+        var denied = staged; denied.verdict = .denied(.restricted)
+        XCTAssertEqual(defaultAction(for: denied, volume: volume, verdict: .ok), .trash)
+        for disk in [VolumeCapabilities(isLocal: false, isWritable: true, fsType: "apfs"),
+                     VolumeCapabilities(isLocal: true, isWritable: false, fsType: "apfs")] {
+            XCTAssertEqual(defaultAction(for: staged, volume: disk, verdict: .ok), .trash)
+        }
+    }
+
+    func test_single_wont_shrink_file_defaults_to_trash() {
+        for ext in "jpg jpeg png heic gif webp mp4 mov m4v mkv avi mp3 m4a aac flac zip gz bz2 xz 7z rar zst icns pdf".split(separator: " ") {
+            let file = item("/Users/x/file.\(ext.uppercased())")
+            XCTAssertEqual(compressEligibility(path: file.path, stat: FileFacts(), context: EligibilityContext()), .wontShrink,
+                "precondition: existing compressibility policy")
+            XCTAssertEqual(defaultAction(for: file, volume: volume, verdict: .ok), .trash)
+            XCTAssertEqual(defaultAction(for: item("/Users/x/folder.\(ext)", directory: true), volume: volume, verdict: .ok), .compress)
+        }
+        var compressed = item("/Users/x/file.txt")
+        compressed.compressionSkipReason = .alreadyCompressed
+        XCTAssertEqual(defaultAction(for: compressed, volume: volume, verdict: .ok), .trash)
+        XCTAssertEqual(defaultAction(for: item("/Users/x/file.txt"), volume: volume, verdict: .ok), .compress)
+    }
+
     func test_production_ancestry_checks_extended_acl_grants_without_mode_changes() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acl-ancestry-\(UUID().uuidString)")
         let parent = root.appendingPathComponent("parent")
@@ -103,8 +134,9 @@ final class ReclaimActionTests: XCTestCase, @unchecked Sendable {
         let review = ReclaimViewModel(defaults: nil)
         func prepare() async throws -> ReclaimItem {
             review.prepare([staged], context: context)
-            for _ in 0..<500 where review.preparing { try await Task.sleep(for: .milliseconds(10)) }
-            XCTAssertFalse(review.preparing, "precondition: preparation completed")
+            review.setAction(.archive(.zip), for: 1)
+            await review.waitForInspection(1)
+            XCTAssertTrue(review.checking.isEmpty, "precondition: archive inspection completed")
             return try XCTUnwrap(review.items.first)
         }
         XCTAssertEqual(chmod(directory.path, 0o755), 0)

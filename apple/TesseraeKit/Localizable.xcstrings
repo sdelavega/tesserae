@@ -3114,17 +3114,6 @@
         }
       }
     },
-    "reclaim.preparingEstimate": {
-      "comment": "Read-only estimate has not completed.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing estimate…"
-          }
-        }
-      }
-    },
     "reclaim.review": {
       "comment": "Open the confirmation for all staged actions.",
       "localizations": {
@@ -3402,17 +3391,6 @@
         }
       }
     },
-    "reclaim.preparingActions": {
-      "comment": "Volume capabilities are being prepared before action selection.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing actions…"
-          }
-        }
-      }
-    },
     "archive.freeSpaceUnknown": {
       "comment": "Archive refused because the available disk space could not be read.",
       "extractionState": "manual",
@@ -3509,6 +3487,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Another user can change files in this folder, so Tesserae can't safely compress or archive here."
+          }
+        }
+      }
+    },
+    "reclaim.estimating": {
+      "comment": "A background savings estimate is pending; the item is ready to review.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimating…"
+          }
+        }
+      }
+    },
+    "reclaim.checking": {
+      "comment": "Only this Archive item is waiting for its safety inspection.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking…"
           }
         }
       }

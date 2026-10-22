@@ -150,7 +150,9 @@ struct ArchiveTree {
     var facts = ArchiveItemFacts()
     var verificationFlags: UInt32 = 0
     var excludedSidecars: Set<Data> = []
-    static func scan(_ item: Data, hashFiles: Bool, flags: UInt32 = 0) throws -> ArchiveTree {
+    var isCancelled: @Sendable () -> Bool = { false }
+    static func scan(_ item: Data, hashFiles: Bool, flags: UInt32 = 0,
+                     isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> ArchiveTree {
         let parts = try archiveParts(item)
         let parent = archiveCString(parts.parent) { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC) }
         guard parent >= 0 else { throw ArchiveFailure(code: 7, path: item, reason: .parentOpen, systemError: errno) }
@@ -161,6 +163,7 @@ struct ArchiveTree {
         }
         var tree = ArchiveTree()
         tree.verificationFlags = flags
+        tree.isCancelled = isCancelled
         try tree.walk(parent: parent, name: parts.name, relative: parts.name, absolute: item, device: s.st_dev, depth: 0, hashFiles: hashFiles)
         tree.facts.isSidecar = tree.excludedSidecars.contains(parts.name)
         tree.facts.mutationAncestrySafe = mutationAncestryIsSafe(item)
@@ -170,6 +173,7 @@ struct ArchiveTree {
         func bad(_ reason: ArchiveFailureReason, _ systemError: Int32? = nil) -> ArchiveFailure {
             ArchiveFailure(code: 7, path: relative, reason: reason, systemError: systemError)
         }
+        if isCancelled() { throw CancellationError() }
         var s = Darwin.stat()
         guard depth <= 256 else { throw bad(.depthLimit) }
         guard archiveCString(name, { fstatat(parent, $0, &s, AT_SYMLINK_NOFOLLOW) }) == 0 else { throw bad(.entryStat, errno) }

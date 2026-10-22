@@ -54,15 +54,20 @@ public protocol ArchiveFileSystem: FileStat {
 public struct ProductionArchiveFileSystem: ArchiveFileSystem {
     private let syncDirectory: @Sendable (Int32) -> Int32
     private let verificationFlags: @Sendable (Data) throws -> UInt32
-    public init() { self.init(syncDirectory: { fsync($0) }) }
+    private let isCancelled: @Sendable () -> Bool
+    public init(isCancelled: @escaping @Sendable () -> Bool = { false }) {
+        self.init(syncDirectory: { fsync($0) }, isCancelled: isCancelled)
+    }
     init(syncDirectory: @escaping @Sendable (Int32) -> Int32 = { fsync($0) },
-         verificationFlags: @escaping @Sendable (Data) throws -> UInt32 = { try archiveVerificationFlags($0) }) {
+         verificationFlags: @escaping @Sendable (Data) throws -> UInt32 = { try archiveVerificationFlags($0) },
+         isCancelled: @escaping @Sendable () -> Bool = { false }) {
         self.syncDirectory = syncDirectory; self.verificationFlags = verificationFlags
+        self.isCancelled = isCancelled
     }
     public func lstat(_ path: Data) -> StatResult { ProductionFileStat().lstat(path) }
     public func volumeUUID(_ path: Data) -> String? { ProductionFileStat().volumeUUID(path) }
     public func inspect(_ path: Data) throws -> ArchiveInspection {
-        let tree = try ArchiveTree.scan(path, hashFiles: false, flags: try verificationFlags(path))
+        let tree = try ArchiveTree.scan(path, hashFiles: false, flags: try verificationFlags(path), isCancelled: isCancelled)
         return ArchiveInspection(facts: tree.facts, files: tree.files, stamps: tree.stamps)
     }
     public func freeSpace(_ path: Data) -> UInt64? { ProductionCompressionFileSystem().freeSpace(path) }

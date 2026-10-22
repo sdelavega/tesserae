@@ -70,6 +70,13 @@ struct ConfirmReclaimSheet: View {
                     }
                 }
             }
+            if let first = confirmation.checkingItems.first {
+                Text(first.action.title).font(.headline)
+                ForEach(confirmation.checkingItems) { item in
+                    Text(item.displayPath).bold()
+                    Text(ReclaimCopy.checking).foregroundStyle(.secondary)
+                }
+            }
             if !confirmation.deniedItems.isEmpty {
                 Text(String(
                     localized: "confirmTrashSheet.will.be.skipped",
