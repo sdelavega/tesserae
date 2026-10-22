@@ -151,6 +151,70 @@ final class DegradedModeTests: XCTestCase {
         }
     }
 
+    private func nativeSnapshot<V: View>(_ label: String, _ view: V) async throws {
+        for dark in [false, true] {
+            let name = "degraded-" + label + (dark ? "-dark" : "-light")
+            let content = view.frame(width: 960, height: 520, alignment: .topLeading)
+                .background(dark ? Color(red: 0.10, green: 0.10, blue: 0.11) : Color.white)
+                .environment(\.colorScheme, dark ? .dark : .light)
+                .environment(\.locale, locale).environment(\.timeZone, zone).tint(.blue)
+            let host = NSHostingView(rootView: content)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 960, height: 520),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = host
+            host.frame = CGRect(x: 0, y: 0, width: 960, height: 520)
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 960, pixelsHigh: 520,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 960 * 4, bitsPerPixel: 32))
+            bitmap.size = host.bounds.size
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let actual = try XCTUnwrap(bitmap.cgImage)
+            let reference = Self.references.appendingPathComponent(name + ".png")
+            let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("build/task-2-review/" + name + ".actual.png")
+            try png(actual, output)
+            let recordNames = ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOT_NAMES"]?.split(separator: ",").map(String.init)
+            if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1",
+               recordNames == nil || recordNames!.contains(name) { try png(actual, reference) }
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(reference as CFURL, nil))
+            let expected = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(actual.width, expected.width); XCTAssertEqual(actual.height, expected.height)
+            XCTAssertTrue(try pixels(actual) == pixels(expected), "Native snapshot changed: " + name)
+        }
+    }
+
+    func test_task2_banner_and_partial_sheet_snapshots() async throws {
+        var stats = TessScanStats()
+        stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED); stats.unreadable_count = 2
+        let tree = TestSnapshot(.dir("/Fixture", []), stats: stats,
+            unreadable: [Data("/Fixture/locked".utf8), Data("/Fixture/protected".utf8)],
+            skipped: [.init(path: Data("/Fixture/cloud".utf8), reason: "dataless directory")],
+            stalledAt: Data("/Fixture/unresponsive".utf8))
+        let session = AppSession(snapshot: tree.snapshot, access: .granted)
+        XCTAssertEqual(session.scanReport.unreadable.count, 2)
+        let presentation = PartialResultPresentation()
+        presentation.explain()
+        let sheet = PartialResultSheet(stats: stats, report: session.scanReport, showReport: {}, done: presentation.done)
+        for level in [DetailLevel.simple, .detailed] {
+            DetailSettings.shared.current = level
+            let warning = try XCTUnwrap(session.warnings(for: level, locale: locale).first)
+            XCTAssertTrue(warning.explainsPartial)
+            try await nativeSnapshot("task2-banner-" + level.rawValue,
+                ScanWarningView(text: warning.text, explain: {}, dismiss: {}))
+            try await nativeSnapshot("task2-sheet-" + level.rawValue,
+                sheet)
+            XCTAssertTrue(presentation.showingExplanation)
+            XCTAssertEqual(session.snapshot.stats.incomplete, UInt32(TESS_INCOMPLETE_STALLED))
+        }
+    }
+
     func test_main_window_all_panes_fit_at_1440_by_900() async throws {
         var stats = TessScanStats(); stats.files = 3; stats.dirs = 2
         let tree = TestSnapshot(.dir("/Fixture", [

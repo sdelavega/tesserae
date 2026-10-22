@@ -117,3 +117,109 @@ public enum ScanBanner {
         }
     }
 }
+
+/// Identity is independent of translated text and the presentation detail setting.
+public struct BannerID: Hashable, Sendable {
+    private enum Payload: Hashable, Sendable {
+        case partial(code: UInt32, counters: [UInt64], paths: [Data], reasons: [String])
+        case droppedTiles(Int)
+        case rescan(revision: UInt64, changed: Bool)
+        case limitedScan
+    }
+    private let payload: Payload
+
+    public static func partial(code: UInt32, counters: [UInt64], paths: [Data], reasons: [String]) -> Self {
+        Self(payload: .partial(code: code, counters: counters, paths: paths, reasons: reasons))
+    }
+    public static func droppedTiles(_ count: Int) -> Self { Self(payload: .droppedTiles(count)) }
+    public static func rescan(revision: UInt64, changed: Bool) -> Self {
+        Self(payload: .rescan(revision: revision, changed: changed))
+    }
+    public static let limitedScan = Self(payload: .limitedScan)
+
+    var isDroppedTiles: Bool {
+        if case .droppedTiles = payload { return true }
+        return false
+    }
+}
+
+public struct SessionWarning: Identifiable {
+    public let id: BannerID
+    public let text: String
+    public let explainsPartial: Bool
+}
+
+public struct PartialResultLine: Equatable {
+    public let text: String
+    public var location: Data? = nil
+    public var count: Int? = nil
+}
+
+/// Unscanned locations have no reliable size. Rank recorded occurrences by
+/// count, retaining raw identity until the final display boundary.
+public func PartialResultExplanation(stats: TessScanStats, report: ScanReport, detail: DetailLevel,
+                                     locale: Locale = .current) -> [PartialResultLine] {
+    let reason: String
+    switch stats.incomplete {
+    case UInt32(TESS_INCOMPLETE_NONE):
+        reason = String(localized: "partial.finished", defaultValue: "The scan finished, but some locations couldn't be included.",
+            bundle: L10n.bundle, comment: "Explanation when the scan completed with omissions.")
+    case UInt32(TESS_INCOMPLETE_CANCELLED):
+        reason = String(localized: "partial.cancelled", defaultValue: "The scan was cancelled before it finished.",
+            bundle: L10n.bundle, comment: "Plain explanation of a cancelled scan.")
+    case UInt32(TESS_INCOMPLETE_NODE_BUDGET):
+        reason = String(localized: "partial.nodeLimit", defaultValue: "The scan stopped because it reached the maximum number of items it can hold.",
+            bundle: L10n.bundle, comment: "Plain explanation of the scan item limit.")
+    case UInt32(TESS_INCOMPLETE_OUT_OF_MEMORY):
+        reason = String(localized: "partial.memory", defaultValue: "The scan stopped because there wasn't enough memory to continue.",
+            bundle: L10n.bundle, comment: "Plain explanation of memory exhaustion.")
+    case UInt32(TESS_INCOMPLETE_STALLED):
+        reason = String(localized: "partial.stalled", defaultValue: "The scan stopped because a folder wasn't responding.",
+            bundle: L10n.bundle, comment: "Plain explanation of a stalled scan.")
+    case UInt32(TESS_INCOMPLETE_FD_EXHAUSTED):
+        reason = String(localized: "partial.openFiles", defaultValue: "The scan stopped because too many files or folders were open at once.",
+            bundle: L10n.bundle, comment: "Plain explanation of file descriptor exhaustion.")
+    case UInt32(TESS_INCOMPLETE_MALFORMED_BATCH):
+        reason = String(localized: "partial.filesystem", defaultValue: "The scan stopped because the filesystem returned information it couldn't read.",
+            bundle: L10n.bundle, comment: "Plain explanation of malformed filesystem data.")
+    case UInt32(TESS_INCOMPLETE_VOLUME_LOST):
+        reason = String(localized: "partial.diskUnavailable", defaultValue: "The scan stopped because the disk became unavailable.",
+            bundle: L10n.bundle, comment: "Plain explanation of a lost scan volume.")
+    default:
+        reason = String(localized: "partial.unknown", defaultValue: "The scan stopped before it finished.",
+            bundle: L10n.bundle, comment: "Plain explanation for a future scan stop code.")
+    }
+    var lines = [PartialResultLine(text: reason)]
+    if let raw = report.stalledPath, stats.incomplete == UInt32(TESS_INCOMPLETE_STALLED) {
+        lines.append(PartialResultLine(text: DisplayPath.text(raw)))
+    }
+    if detail == .detailed {
+        lines.append(PartialResultLine(text: String(localized: "partial.stopCode", defaultValue: "Stop code: \(stats.incomplete)",
+            bundle: L10n.bundle, locale: locale, comment: "Numeric scan stop code in Detailed mode.")))
+    }
+    var grouped: [Data: [ScanReport.Location]] = [:]
+    for location in report.unreadable + report.skipped { grouped[location.rawPath, default: []].append(location) }
+    let ranked = grouped.sorted {
+        $0.value.count != $1.value.count ? $0.value.count > $1.value.count : $0.key.lexicographicallyPrecedes($1.key)
+    }
+    for (raw, locations) in ranked.prefix(10) {
+        let path = DisplayPath.text(raw)
+        var text = path
+        if detail == .detailed {
+            let count = locations.count
+            let reasons = Array(Set(locations.compactMap(\.reason))).sorted().map(singleLine).joined(separator: "; ")
+            text = String(localized: "partial.locationCount", defaultValue: "\(path) — \(count) recorded omissions",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Location with the count of recorded skipped or unreadable occurrences.")
+            if !reasons.isEmpty { text += " — " + reasons }
+        }
+        lines.append(PartialResultLine(text: text, location: raw, count: locations.count))
+    }
+    if !ranked.isEmpty {
+        lines.append(PartialResultLine(text: String(localized: "partial.ranking", defaultValue: "Up to ten locations are shown, with the most recorded omissions first. Sizes of unscanned items are unknown.",
+            bundle: L10n.bundle, comment: "Explains location ranking and unavailable unscanned sizes.")))
+    } else {
+        lines.append(PartialResultLine(text: String(localized: "partial.noLocations", defaultValue: "No skipped or unreadable locations were recorded. Items beyond where the scan stopped may also be missing.",
+            bundle: L10n.bundle, comment: "Explains why a partial scan may have no recorded skipped paths.")))
+    }
+    return lines
+}

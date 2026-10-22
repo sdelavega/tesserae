@@ -3813,6 +3813,204 @@
           }
         }
       }
+    },
+    "partial.cancelled": {
+      "comment": "Plain explanation of a cancelled scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan was cancelled before it finished."
+          }
+        }
+      }
+    },
+    "partial.diskUnavailable": {
+      "comment": "Plain explanation of a lost scan volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because the disk became unavailable."
+          }
+        }
+      }
+    },
+    "partial.filesystem": {
+      "comment": "Plain explanation of malformed filesystem data.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because the filesystem returned information it couldn't read."
+          }
+        }
+      }
+    },
+    "partial.finished": {
+      "comment": "Explanation when the scan completed with omissions.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan finished, but some locations couldn't be included."
+          }
+        }
+      }
+    },
+    "partial.locationCount": {
+      "comment": "Location with the count of recorded skipped or unreadable occurrences.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ — %#@count@"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 2,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld recorded omission"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld recorded omissions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "partial.memory": {
+      "comment": "Plain explanation of memory exhaustion.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because there wasn't enough memory to continue."
+          }
+        }
+      }
+    },
+    "partial.noLocations": {
+      "comment": "Explains why a partial scan may have no recorded skipped paths.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No skipped or unreadable locations were recorded. Items beyond where the scan stopped may also be missing."
+          }
+        }
+      }
+    },
+    "partial.nodeLimit": {
+      "comment": "Plain explanation of the scan item limit.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because it reached the maximum number of items it can hold."
+          }
+        }
+      }
+    },
+    "partial.openFiles": {
+      "comment": "Plain explanation of file descriptor exhaustion.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because too many files or folders were open at once."
+          }
+        }
+      }
+    },
+    "partial.ranking": {
+      "comment": "Explains location ranking and unavailable unscanned sizes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Up to ten locations are shown, with the most recorded omissions first. Sizes of unscanned items are unknown."
+          }
+        }
+      }
+    },
+    "partial.stalled": {
+      "comment": "Plain explanation of a stalled scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped because a folder wasn't responding."
+          }
+        }
+      }
+    },
+    "partial.stopCode": {
+      "comment": "Numeric scan stop code in Detailed mode.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop code: %u"
+          }
+        }
+      }
+    },
+    "partial.unknown": {
+      "comment": "Plain explanation for a future scan stop code.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped before it finished."
+          }
+        }
+      }
+    },
+    "scan.rendering.limit": {
+      "comment": "Warning with number of tiles omitted by the rendering budget.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rendering limit: %#@count1@ could not be displayed."
+          },
+          "substitutions": {
+            "count1": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld tile"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld tiles"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "version": "1.0"

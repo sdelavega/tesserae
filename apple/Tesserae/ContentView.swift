@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var phaseGate: PhaseGateRunner? = FrameTimer.shared.isEnabled ? PhaseGateRunner() : nil
     #endif
     @State private var showScanReport = false
+    @State private var limitedDismissed = false
     @Environment(\.locale) private var locale
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
@@ -39,7 +40,11 @@ struct ContentView: View {
             if let phaseGate { PhaseGateStatus(runner: phaseGate) }
             #endif
             if model.onboarding.showsLimitedAffordance {
-                LimitedAccessView { model.sendOnboarding(.reopen) }
+                if let session = model.session {
+                    SessionLimitedAccessView(session: session, reopen: { model.sendOnboarding(.reopen) })
+                } else if !limitedDismissed {
+                    LimitedAccessView(reopen: { model.sendOnboarding(.reopen) }, dismiss: { limitedDismissed = true })
+                }
             }
             if model.colourChoice == 2 { focusControls }
             if model.startScreenPresented {
@@ -47,7 +52,7 @@ struct ContentView: View {
             } else if let session = model.session {
                 SessionView(session: session, mode: model.colourMode, dark: dark, grantAccess: { model.sendOnboarding(.openSettings) },
                     stage: stage, stagingDisabled: model.stagingUnavailable || model.isScanning || model.reclaimBusy || reclaimUI.showingConfirmation,
-                    reclaimUI: reclaimUI, showReclaim: showReclaim, showScanReport: showScanReport, appModel: model, sheetOpen: reclaimUI.showingConfirmation || model.onboardingPresented)
+                    reclaimUI: reclaimUI, showReclaim: showReclaim, showScanReport: showScanReport, appModel: model, openScanReport: { showScanReport = true }, sheetOpen: reclaimUI.showingConfirmation || model.onboardingPresented)
                     .id(session.id)
             } else {
                 HSplitView {
@@ -61,6 +66,9 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        .onChange(of: model.isScanning) { scanning in
+            if scanning { limitedDismissed = false }
         }
         .onChange(of: model.session?.id) { _ in
             if !reclaimUI.running { reclaimUI.showingConfirmation = false }
@@ -278,6 +286,8 @@ struct SessionView: View {
     var useMetal = true
     var reportLayout: ScanReportLayout? = nil
     let appModel: AppModel
+    var openScanReport: () -> Void = {}
+    @StateObject private var partial = PartialResultPresentation()
     var sheetOpen = false
     @AppStorage("showFolderNames") private var showFolderNames = true
     @Environment(\.locale) private var locale
@@ -285,15 +295,7 @@ struct SessionView: View {
     var body: some View {
         let generation = session.layoutGeneration
         VStack(spacing: 0) {
-            if let banner = session.banner(for: detail.current) { ScanWarningView(text: banner) }
-            if session.droppedTileCount > 0 {
-                ScanWarningView(text: String(
-                    localized: "scan.rendering.limit",
-                    defaultValue: "Rendering limit: \(session.droppedTileCount) tiles could not be displayed.",
-                    locale: L10n.pluralLocale(locale),
-                    comment: "Warning with number of tiles omitted by the rendering budget."
-                ))
-            }
+            warningBanners
             HStack(spacing: 6) {
                 Button { session.navigator.ascend() } label: { Image(systemName: "arrow.up") }
                     .help(String(
@@ -357,7 +359,7 @@ struct SessionView: View {
                                         .allowsHitTesting(false)
                                 }.opacity(session.zoomRunning ? 0 : 1)
                                 deniedBadges
-                                HoverCalloutOverlay(model: session.hoverCallout, hidden: session.zoomRunning || sheetOpen)
+                                HoverCalloutOverlay(model: session.hoverCallout, hidden: session.zoomRunning || sheetOpen || partial.showingExplanation)
                             }
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
@@ -404,6 +406,18 @@ struct SessionView: View {
                 }
                 if showScanReport { ScanReportView(report: session.scanReport, layout: reportLayout) }
             }
+        }
+        .sheet(isPresented: $partial.showingExplanation) {
+            PartialResultSheet(stats: session.snapshot.stats, report: session.scanReport,
+                showReport: { partial.showReport(openScanReport) }, done: partial.done)
+        }
+    }
+
+    private var warningBanners: some View {
+        ForEach(session.warnings(for: detail.current, locale: locale)) { warning in
+            ScanWarningView(text: warning.text,
+                explain: warning.explainsPartial ? { partial.explain() } : nil,
+                dismiss: { session.dismiss(warning.id) })
         }
     }
 

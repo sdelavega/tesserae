@@ -1408,6 +1408,72 @@
           }
         }
       }
+    },
+    "partial.done": {
+      "comment": "Close the partial scan explanation sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
+    "partial.link": {
+      "comment": "Link from the partial-result banner to an explanation sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What wasn't scanned?"
+          }
+        }
+      }
+    },
+    "partial.showReport": {
+      "comment": "Open the full scan report pane from the explanation sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Scan Report"
+          }
+        }
+      }
+    },
+    "partial.title": {
+      "comment": "Title of the partial scan explanation sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What wasn't scanned?"
+          }
+        }
+      }
+    },
+    "warning.dismiss": {
+      "comment": "Accessibility label for a warning banner close button.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss"
+          }
+        }
+      }
+    },
+    "warning.dismissHelp": {
+      "comment": "Help for a warning banner close button.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss this warning"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

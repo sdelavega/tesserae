@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A20220000000000000000003 /* PartialResultSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000005; };
+        A20220000000000000000004 /* PartialResultSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000005; };
+        A20220000000000000000001 /* ScanBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000002; };
 		F60700000000000000000006 /* FolderOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000005 /* FolderOutlineView.swift */; };
 		F60700000000000000000004 /* FolderTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000003 /* FolderTreeModel.swift */; };
 		F60700000000000000000002 /* FolderTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000001 /* FolderTreeTests.swift */; };
@@ -217,6 +220,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        A20220000000000000000005 /* PartialResultSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialResultSheet.swift; sourceTree = "<group>"; };
+        A20220000000000000000002 /* ScanBannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanBannerTests.swift; sourceTree = "<group>"; };
 		F60700000000000000000005 /* FolderOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderOutlineView.swift; sourceTree = "<group>"; };
 		F60700000000000000000003 /* FolderTreeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderTreeModel.swift; sourceTree = "<group>"; };
 		F60700000000000000000001 /* FolderTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderTreeTests.swift; sourceTree = "<group>"; };
@@ -454,6 +459,7 @@
 				E60300000000000000000002 /* ToolbarHelpTests.swift */,
 				E60400000000000000000002 /* VolumeListTests.swift */,
 				E04000000000000000000002 /* DegradedModeTests.swift */,
+                A20220000000000000000002 /* ScanBannerTests.swift */,
 				E08000000000000000000006 /* ReclaimSnapshotTests.swift */,
 				E08000000000000000000001 /* ReclaimViewModelTests.swift */,
 				E09000000000000000000001 /* LiveTrashCheckTests.swift */,
@@ -526,6 +532,7 @@
 				E03600000000000000000004 /* OnboardingView.swift */,
 				E60400000000000000000105 /* StartView.swift */,
 				E04000000000000000000004 /* ScanStatusViews.swift */,
+                A20220000000000000000005 /* PartialResultSheet.swift */,
 				C2143F348021411D5954085B /* ContentView.swift */,
 				E08000000000000000000005 /* ReclaimSummaryView.swift */,
 				E08000000000000000000004 /* ConfirmReclaimSheet.swift */,
@@ -926,6 +933,7 @@
 				E03600000000000000000003 /* OnboardingView.swift in Sources */,
 				E60400000000000000000005 /* StartView.swift in Sources */,
 				E04000000000000000000003 /* ScanStatusViews.swift in Sources */,
+                A20220000000000000000003 /* PartialResultSheet.swift in Sources */,
 				434DDC8E332E0EE5E1372929 /* ContentView.swift in Sources */,
 				E03900000000000000000003 /* ScanReportView.swift in Sources */,
 				B41FDD4DF9CD58338B9470A8 /* TesseraeApp.swift in Sources */,
@@ -947,12 +955,14 @@
 				E08100000000000000000001 /* ReclaimViewModelTests.swift in Sources */,
 				E09100000000000000000001 /* LiveTrashCheckTests.swift in Sources */,
 				E04000000000000000000001 /* DegradedModeTests.swift in Sources */,
+                A20220000000000000000001 /* ScanBannerTests.swift in Sources */,
 				E12000000000000000000001 /* ContentView.swift in Sources */,
 				E12000000000000000000002 /* AppChrome.swift in Sources */,
 				E04000000000000000000005 /* OnboardingView.swift in Sources */,
 				E60400000000000000000006 /* StartView.swift in Sources */,
 				E04000000000000000000006 /* ScanReportView.swift in Sources */,
 				E04000000000000000000007 /* ScanStatusViews.swift in Sources */,
+                A20220000000000000000004 /* PartialResultSheet.swift in Sources */,
 				E03100000000000000000003 /* VolumeFactsTests.swift in Sources */,
 				E03300000000000000000001 /* ReconcileTests.swift in Sources */,
 				E03600000000000000000005 /* OnboardingTests.swift in Sources */,

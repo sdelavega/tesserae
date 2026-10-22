@@ -74,6 +74,7 @@ public struct ScanReport: Equatable, Sendable {
         bundle: L10n.bundle,
         comment: "ScanReport: This report contains file and folder names from your Mac. Review it before sharing."
     )
+    public let stalledPath: Data?
     public let unreadable: [Location]
     public let skipped: [Location]
     public let incomplete: [String]
@@ -94,6 +95,10 @@ public struct ScanReport: Equatable, Sendable {
 
     private init(snapshot: Snapshot, caveats: [ReportCaveat], access: AccessState, scanTime: Date,
                  appVersion: String, engineVersion: String, locale: Locale, timeZone: TimeZone, displayPaths: Bool) {
+        stalledPath = snapshot.stalledAt ?? caveats.compactMap { caveat -> Data? in
+            if case .stalled(_, let raw) = caveat { return raw }
+            return nil
+        }.first
         func path(_ location: Location) -> String { displayPaths ? location.displayPath : location.diagnosticsPath }
         unreadable = snapshot.unreadable.map { Location(rawPath: $0, reason: String(
             localized: "scanReport.permission.denied",

@@ -178,15 +178,40 @@ public final class AppSession: ObservableObject, Identifiable {
         snapshot.root == Tile.noNode || (source.allocated(root) == 0 && !snapshot.isPermissionDenied(root))
     }
 
+    @Published public private(set) var dismissedBanners: Set<BannerID> = []
+
+    public func dismiss(_ id: BannerID) { dismissedBanners.insert(id) }
+    public func isVisible(_ id: BannerID) -> Bool { !dismissedBanners.contains(id) }
+
     public var banner: String? { banner(for: .detailed) }
     public func banner(for detailLevel: DetailLevel) -> String? {
-        if changedSinceScan { return ReclaimCopy.changedSinceScan }
-        let path = snapshot.stalledAt.map { DisplayPath.text($0) }
-        let scan = ScanBanner.text(for: snapshot.stats, stalledAt: path,
-            volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath, detailLevel: detailLevel)
-        guard needsRescan else { return scan }
-        let prompt = ReclaimCopy.rescan(overlay.deleted.count)
-        return scan.map { $0 + " " + prompt } ?? prompt
+        let text = warnings(for: detailLevel).filter { !$0.id.isDroppedTiles }.map(\.text)
+        return text.isEmpty ? nil : text.joined(separator: " ")
+    }
+
+    public func warnings(for detailLevel: DetailLevel, locale: Locale = .current) -> [SessionWarning] {
+        let stats = snapshot.stats
+        var warnings: [SessionWarning] = []
+        if let text = ScanBanner.text(for: stats, stalledAt: scanReport.stalledPath.map { DisplayPath.text($0) },
+            volumePath: DisplayPath.text(snapshot.rawPath(snapshot.root)), locale: locale, detailLevel: detailLevel) {
+            let locations = scanReport.unreadable + scanReport.skipped
+            let id = BannerID.partial(code: stats.incomplete,
+                counters: [stats.errors, stats.unreadable_count, stats.lost_entries, stats.depth_capped],
+                paths: locations.map(\.rawPath) + (scanReport.stalledPath.map { [$0] } ?? []),
+                reasons: locations.compactMap(\.reason))
+            warnings.append(SessionWarning(id: id, text: text, explainsPartial: true))
+        }
+        if changedSinceScan || needsRescan {
+            warnings.append(SessionWarning(id: .rescan(revision: overlay.revision, changed: changedSinceScan),
+                text: changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.rescan(overlay.deleted.count), explainsPartial: false))
+        }
+        if droppedTileCount > 0 {
+            warnings.append(SessionWarning(id: .droppedTiles(droppedTileCount), text: String(
+                localized: "scan.rendering.limit", defaultValue: "Rendering limit: \(droppedTileCount) tiles could not be displayed.",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale),
+                comment: "Warning with number of tiles omitted by the rendering budget."), explainsPartial: false))
+        }
+        return warnings.filter { isVisible($0.id) }
     }
 
     public func execute(using executor: Executor, confirmedWarnings: Set<UInt32>,

@@ -59,20 +59,44 @@ struct ScanFailureViewModel {
 
 struct LimitedAccessView: View {
     let reopen: () -> Void
+    var dismiss: (() -> Void)? = nil
     var body: some View {
         HStack {
             Text(LimitedAccessViewModel.title).font(.caption)
             Spacer()
             Button(LimitedAccessViewModel.reopen, action: reopen)
+            if let dismiss { WarningDismissButton(dismiss: dismiss) }
         }.padding(10)
+    }
+}
+
+struct WarningDismissButton: View {
+    let dismiss: () -> Void
+    var body: some View {
+        Button(action: dismiss) { Image(systemName: "xmark") }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(String(localized: "warning.dismiss", defaultValue: "Dismiss",
+                comment: "Accessibility label for a warning banner close button."))
+            .help(String(localized: "warning.dismissHelp", defaultValue: "Dismiss this warning",
+                comment: "Help for a warning banner close button."))
     }
 }
 
 struct ScanWarningView: View {
     let text: String
+    var explain: (() -> Void)? = nil
+    var dismiss: (() -> Void)? = nil
     var body: some View {
-        Label(text, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        HStack {
+            Label(text, systemImage: "exclamationmark.triangle.fill")
+            if let explain {
+                Button(String(localized: "partial.link", defaultValue: "What wasn't scanned?",
+                    comment: "Link from the partial-result banner to an explanation sheet."), action: explain)
+                    .buttonStyle(.link)
+            }
+            Spacer(minLength: 8)
+            if let dismiss { WarningDismissButton(dismiss: dismiss) }
+        }.font(.callout).padding(10).frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.yellow.opacity(0.16))
     }
 }
@@ -126,5 +150,15 @@ struct FolderBadge {
             defaultValue: "Unreadable folder",
             comment: "ScanStatusViews: Unreadable folder."
         )
+    }
+}
+
+struct SessionLimitedAccessView: View {
+    @ObservedObject var session: AppSession
+    let reopen: () -> Void
+    var body: some View {
+        if session.isVisible(.limitedScan) {
+            LimitedAccessView(reopen: reopen, dismiss: { session.dismiss(.limitedScan) })
+        }
     }
 }
