@@ -140,8 +140,10 @@
 		E60200000000000000000005 /* applesauce in Copy Helpers */ = {isa = PBXBuildFile; fileRef = E60200000000000000000006 /* applesauce */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		F62000000000000000000000 /* LayoutHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000000 /* LayoutHeaderTests.swift */; };
 		F62000000000000000000001 /* RelativePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000001 /* RelativePathTests.swift */; };
+		F72000000000000000000001 /* DisplayPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71000000000000000000001 /* DisplayPathTests.swift */; };
 		F62000000000000000000002 /* HoverCalloutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000002 /* HoverCalloutTests.swift */; };
 		F64000000000000000000000 /* RelativePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63000000000000000000000 /* RelativePath.swift */; };
+		F74000000000000000000000 /* DisplayPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = F73000000000000000000000 /* DisplayPath.swift */; };
 		F64000000000000000000001 /* HoverCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63000000000000000000001 /* HoverCallout.swift */; };
 		E60900000000000000000001 /* CompressEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000002; };
 		E60900000000000000000011 /* ReclaimActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000012; };
@@ -339,8 +341,10 @@
 		E60200000000000000000006 /* applesauce */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = build/applesauce; sourceTree = SOURCE_ROOT; };
 		F61000000000000000000000 /* LayoutHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutHeaderTests.swift; sourceTree = "<group>"; };
 		F61000000000000000000001 /* RelativePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativePathTests.swift; sourceTree = "<group>"; };
+		F71000000000000000000001 /* DisplayPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPathTests.swift; sourceTree = "<group>"; };
 		F61000000000000000000002 /* HoverCalloutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverCalloutTests.swift; sourceTree = "<group>"; };
 		F63000000000000000000000 /* RelativePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativePath.swift; sourceTree = "<group>"; };
+		F73000000000000000000000 /* DisplayPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPath.swift; sourceTree = "<group>"; };
 		F63000000000000000000001 /* HoverCallout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverCallout.swift; sourceTree = "<group>"; };
 		E60900000000000000000002 /* CompressEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressEligibilityTests.swift; sourceTree = "<group>"; };
 		E60900000000000000000012 /* ReclaimActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimActionTests.swift; sourceTree = "<group>"; };
@@ -495,6 +499,7 @@
 				F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */,
 				F61000000000000000000002 /* HoverCalloutTests.swift */,
 				F61000000000000000000001 /* RelativePathTests.swift */,
+				F71000000000000000000001 /* DisplayPathTests.swift */,
 				F61000000000000000000000 /* LayoutHeaderTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
@@ -622,6 +627,7 @@
 				F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */,
 				F63000000000000000000001 /* HoverCallout.swift */,
 				F63000000000000000000000 /* RelativePath.swift */,
+				F73000000000000000000000 /* DisplayPath.swift */,
 				F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */,
 			);
 			path = Labels;
@@ -891,6 +897,7 @@
 				F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */,
 				F64000000000000000000001 /* HoverCallout.swift in Sources */,
 				F64000000000000000000000 /* RelativePath.swift in Sources */,
+				F74000000000000000000000 /* DisplayPath.swift in Sources */,
 				F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */,
 				F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */,
 				F60700000000000000000004 /* FolderTreeModel.swift in Sources */,
@@ -987,6 +994,7 @@
 				F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */,
 				F62000000000000000000002 /* HoverCalloutTests.swift in Sources */,
 				F62000000000000000000001 /* RelativePathTests.swift in Sources */,
+				F72000000000000000000001 /* DisplayPathTests.swift in Sources */,
 				F62000000000000000000000 /* LayoutHeaderTests.swift in Sources */,
 				F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */,
 			);

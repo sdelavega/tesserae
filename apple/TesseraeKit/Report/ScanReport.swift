@@ -26,11 +26,11 @@ public struct ScanReport: Equatable, Sendable {
             self.rawPath = rawPath
             self.reason = reason
         }
-        public var displayPath: String {
+        public var displayPath: String { DisplayPath.text(rawPath) }
+        var diagnosticsPath: String {
             rawPath.split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: false)
-                .map { part in
-                    part.isEmpty ? "" : Snapshot.displayName(bytes: Data(part))
-                }.joined(separator: "/")
+                .map { part in part.isEmpty ? "" : Snapshot.displayName(bytes: Data(part)) }
+                .joined(separator: "/")
         }
     }
 
@@ -45,9 +45,18 @@ public struct ScanReport: Equatable, Sendable {
     public let incomplete: [String]
     public let caveats: [String]
     public let text: String
+    private let diagnosticsText: String
 
     public init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
                 appVersion: String, engineVersion: String, locale: Locale = .current, timeZone: TimeZone = .current) {
+        self.init(snapshot: snapshot, caveats: caveats, access: access, scanTime: scanTime,
+                  appVersion: appVersion, engineVersion: engineVersion, locale: locale, timeZone: timeZone,
+                  displayPaths: true)
+    }
+
+    private init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
+                 appVersion: String, engineVersion: String, locale: Locale, timeZone: TimeZone, displayPaths: Bool) {
+        func path(_ location: Location) -> String { displayPaths ? location.displayPath : location.diagnosticsPath }
         unreadable = snapshot.unreadable.map { Location(rawPath: $0, reason: String(
             localized: "scanReport.permission.denied",
             defaultValue: "permission denied",
@@ -55,17 +64,23 @@ public struct ScanReport: Equatable, Sendable {
             comment: "ScanReport: permission denied."
         )) }
         skipped = snapshot.skipped.map { Location(rawPath: $0.path, reason: $0.reason) }
-        self.caveats = caveats
         let stats = snapshot.stats
+        let displayReason = ScanBanner.incompleteReason(for: stats,
+            stalledAt: snapshot.stalledAt.map { DisplayPath.text($0) })
+        let rawReason = ScanBanner.incompleteReason(for: stats,
+            stalledAt: snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) })
+        // Reconciliation receives a display reason from AppModel. Diagnostics
+        // rebuild that exact reason from the snapshot's original stalled path.
+        self.caveats = caveats.map { !displayPaths && $0 == displayReason ? (rawReason ?? $0) : $0 }
         var reasons = ScanBanner.incompleteReason(for: stats,
-            stalledAt: snapshot.stalledAt.map { Location(rawPath: $0, reason: nil).displayPath }).map { [$0] } ?? []
+            stalledAt: snapshot.stalledAt.map { path(Location(rawPath: $0, reason: nil)) }).map { [$0] } ?? []
         if snapshot.noMaterializeFailed { reasons.append(ReconciliationViewModel.downloadProtectionWarning) }
         incomplete = reasons
         let formatter = DateFormatter()
         formatter.locale = locale; formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
         func number(_ value: UInt64) -> String { value.formatted(.number.locale(locale)) }
-        let root = Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath
+        let root = path(Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil))
         var summary = [String(
             localized: "scanReport.root",
             defaultValue: "Root: \(root)",
@@ -229,7 +244,7 @@ public struct ScanReport: Equatable, Sendable {
                 defaultValue: "Reconciliation caveats",
                 bundle: L10n.bundle,
                 comment: "ScanReport: Reconciliation caveats."
-            ), caveats), section(String(
+            ), self.caveats), section(String(
                 localized: "scanReport.access",
                 defaultValue: "Access",
                 bundle: L10n.bundle,
@@ -240,7 +255,7 @@ public struct ScanReport: Equatable, Sendable {
                 defaultValue: "Unreadable locations",
                 bundle: L10n.bundle,
                 comment: "ScanReport: Unreadable locations."
-            ), unreadable.map { $0.displayPath + String(
+            ), unreadable.map { path($0) + String(
                 localized: "scanReport.permission.denied.v2",
                 defaultValue: " — permission denied",
                 bundle: L10n.bundle,
@@ -251,7 +266,7 @@ public struct ScanReport: Equatable, Sendable {
                 defaultValue: "Skipped locations",
                 bundle: L10n.bundle,
                 comment: "ScanReport: Skipped locations."
-            ), skipped.map { $0.displayPath + " — " + ($0.reason ?? String(
+            ), skipped.map { path($0) + " — " + ($0.reason ?? String(
                 localized: "snapshot.unknown",
                 defaultValue: "unknown",
                 bundle: L10n.bundle,
@@ -276,12 +291,15 @@ public struct ScanReport: Equatable, Sendable {
                 comment: "Scan report row: Engine: The placeholder is its formatted value."
             )])]
             .joined(separator: "\n\n")
+        diagnosticsText = displayPaths ? Self(snapshot: snapshot, caveats: caveats, access: access, scanTime: scanTime,
+            appVersion: appVersion, engineVersion: engineVersion, locale: locale, timeZone: timeZone,
+            displayPaths: false).text : text
     }
 
     @MainActor
     @discardableResult
     public func copyDiagnostics(to pasteboard: any DiagnosticsPasteboard) -> Bool {
-        pasteboard.writePlaintext(text)
+        pasteboard.writePlaintext(diagnosticsText)
     }
 }
 

@@ -458,9 +458,9 @@ struct ConfirmDecompressSheet: View {
                         if confirmation.warningRows.contains(row) {
                             Toggle(isOn: Binding(get: { confirmation.confirmedPaths.contains(row.path) },
                                 set: { confirmation.setConfirmed(row.path, $0) })) {
-                                Text(neutralisedPath(row.path))
+                                Text(DisplayPath.text(row.path))
                             }.toggleStyle(.checkbox)
-                        } else { Text(neutralisedPath(row.path)) }
+                        } else { Text(DisplayPath.text(row.path)) }
                         ForEach(confirmation.warnings[row.path] ?? [], id: \.self) { reason in
                             Text(reasonText(reason)).fixedSize(horizontal: false, vertical: true)
                         }

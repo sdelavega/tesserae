@@ -71,7 +71,7 @@ public final class Navigator: ObservableObject {
     /// The `breadcrumb` with each folder's name as the user reads it
     /// (`Snapshot.displayName`), for the breadcrumb bar.
     public var breadcrumbItems: [BreadcrumbItem] {
-        breadcrumb.map { BreadcrumbItem(node: $0, title: $0 == snapshot.root ? (rootDisplayName ?? snapshot.displayName($0)) : snapshot.displayName($0)) }
+        breadcrumb.map { BreadcrumbItem(node: $0, title: $0 == snapshot.root ? (rootDisplayName ?? DisplayPath.text(snapshot.rawPath($0))) : snapshot.displayName($0)) }
     }
 
     /// Whether `descend(into: node)` would change `root`.

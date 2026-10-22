@@ -18,7 +18,8 @@ import AppKit
 import Combine
 import Foundation
 
-enum StartupDisk {
+public enum StartupDisk {
+    public static let dataRoot = Data("/System/Volumes/Data".utf8)
     static let root = URL(fileURLWithPath: "/System/Volumes/Data")
     static var displayName: String {
         loadDisplayName { (try? $0.resourceValues(forKeys: [.volumeLocalizedNameKey]))?.volumeLocalizedName }
@@ -179,7 +180,7 @@ public final class AppSession: ObservableObject, Identifiable {
 
     public var banner: String? {
         if changedSinceScan { return ReclaimCopy.changedSinceScan }
-        let path = snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }
+        let path = snapshot.stalledAt.map { DisplayPath.text($0) }
         let scan = ScanBanner.text(for: snapshot.stats, stalledAt: path,
             volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath)
         guard needsRescan else { return scan }
@@ -781,7 +782,7 @@ public final class AppModel: ObservableObject {
             let scan = ScanFacts(allocatedSum: snapshot.root == Tile.noNode ? 0 : snapshot.allocated(snapshot.root),
                 unreadableLocations: Int(clamping: snapshot.stats.unreadable_count),
                 incompleteReason: ScanBanner.incompleteReason(for: snapshot.stats,
-                    stalledAt: snapshot.stalledAt.map { String(decoding: $0, as: UTF8.self) }),
+                    stalledAt: snapshot.stalledAt.map { DisplayPath.text($0) }),
                 limited: limited, datalessItems: snapshot.datalessItems, access: state,
                 datalessLogicalBytes: snapshot.datalessLogicalBytes, noMaterializeFailed: snapshot.noMaterializeFailed)
             return (loader(root, scan), state, loadContext(snapshot))

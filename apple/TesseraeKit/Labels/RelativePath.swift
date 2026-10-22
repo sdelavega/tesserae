@@ -35,6 +35,7 @@ public func joinedForDisplay(_ parts: [String]) -> String { parts.joined(separat
 extension Snapshot {
     /// The final raw component of the scan root; never trim an absolute display path.
     public var scanRootName: String {
+        if rawPath(root) == StartupDisk.dataRoot, DisplayPath.text(rawPath(root)) == "/" { return "/" }
         let parts = nameBytes(root).split(separator: UInt8(ascii: "/"))
         return parts.last.map { Self.displayName(bytes: Data($0)) } ?? "/"
     }

@@ -955,8 +955,8 @@ extension Outcome {
 
 extension LogEntry {
     public var displayPath: String {
-        if let path { return neutralisedPath(Data(path.utf8)) }
-        if let pathB64, let bytes = Data(base64Encoded: pathB64) { return neutralisedPath(bytes) }
+        if let path { return DisplayPath.text(Data(path.utf8)) }
+        if let pathB64, let bytes = Data(base64Encoded: pathB64) { return DisplayPath.text(bytes) }
         return String(localized: "reclaim.pathBytes", defaultValue: "Path bytes: ",
             bundle: L10n.bundle, comment: "Label for a base64-encoded path that is not valid UTF-8.") + (pathB64 ?? "")
     }

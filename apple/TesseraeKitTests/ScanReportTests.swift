@@ -82,7 +82,7 @@ final class ScanReportTests: XCTestCase {
 
         Unreadable locations
         /root/zero/locked — permission denied
-        /� � ⟨/wp/⟩ — permission denied
+        /� � ⟨L/8Kfw==⟩ — permission denied
 
         Skipped locations
         /limited — limited scan
@@ -146,12 +146,12 @@ final class ScanReportTests: XCTestCase {
         XCTAssertTrue(value.text.contains("Unreadable locations\n/root/zero/locked"))
     }
 
-    func test_display_sanitization_matches_table_for_each_path_component_and_keeps_raw_bytes() {
+    func test_display_sanitization_matches_reclaim_and_keeps_raw_bytes() {
         let bytes: [UInt8] = [32, 255, 10, 127, 0, 32]
         let tree = TestSnapshot(.dir("/root", [.rawFile(bytes, key: "raw", 0)]))
         let raw = tree.snapshot.rawPath(tree["raw"])
         let location = ScanReport.Location(rawPath: raw, reason: nil)
-        XCTAssertEqual(location.displayPath, "/root/" + tree.snapshot.displayName(tree["raw"]))
+        XCTAssertEqual(location.displayPath, "/root/ � ��  ⟨L3Jvb3QvIP8KfwAg⟩")
         XCTAssertEqual(location.rawPath, raw)
     }
 

@@ -67,7 +67,7 @@ public struct StagedDescendants: Equatable, Sendable, RandomAccessCollection {
 
 public struct ReclaimItem: Equatable, Identifiable, Sendable {
     public var id: UInt32 { nodeIndex }
-    public var displayPath: String { neutralisedPath(path) }
+    public var displayPath: String { DisplayPath.text(path) }
     public let overlayRevision: UInt64
     public let sessionID: UUID?
     public let nodeIndex: UInt32

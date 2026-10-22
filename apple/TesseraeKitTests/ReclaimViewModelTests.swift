@@ -221,7 +221,7 @@ final class ReclaimViewModelTests: XCTestCase {
         let summary = try String(contentsOf: apple.appendingPathComponent("Tesserae/ReclaimSummaryView.swift"), encoding: .utf8)
         let content = try String(contentsOf: apple.appendingPathComponent("Tesserae/ContentView.swift"), encoding: .utf8)
         XCTAssertTrue(view.contains("Text(item.displayPath)"))
-        XCTAssertEqual(view.components(separatedBy: "Text(neutralisedPath(row.path))").count - 1, 2)
+        XCTAssertEqual(view.components(separatedBy: "Text(DisplayPath.text(row.path))").count - 1, 2)
         XCTAssertEqual(view.components(separatedBy: "Text(entry.displayPath)").count - 1, 2)
         XCTAssertEqual(sheet.components(separatedBy: "Text(item.displayPath)").count - 1, 3)
         XCTAssertTrue(sheet.contains("Text(item.path)"), "WarningRow.path is already neutralised")

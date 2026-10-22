@@ -389,22 +389,16 @@ public final class Snapshot {
         }
     }
 
-    /// The path of node `i` for display: the root's name (the scan root as
-    /// given) joined with each name down to `i`, each decoded by `name(_:)`.
+    /// The path of node `i` for display, with startup firmlinks shortened and
+    /// the same neutralisation as other displayed paths.
     ///
-    /// Display text only: it is lossy (invalid UTF-8 and C0 controls become
-    /// U+FFFD), so it may name no file, or a different one. Anything that acts
+    /// Display text only: it is lossy, so it may name no file, or a different
+    /// one. Anything that acts
     /// on a file (reveal, copy, stage, delete) uses `rawPath(_:)` and the node
     /// index, never this.
     public func displayPath(_ i: UInt32) -> String {
         if root == UInt32.max { return "" }
-        var parts = ancestry(i).map { name($0) }
-        var result = parts.removeLast()
-        for p in parts.reversed() {
-            if !result.hasSuffix("/") { result += "/" }
-            result += p
-        }
-        return result
+        return DisplayPath.text(rawPath(i))
     }
 
     /// The path of node `i` as the filesystem knows it: the root's name bytes
