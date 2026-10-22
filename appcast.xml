@@ -91,8 +91,38 @@ If you already use Tesserae 0.1.0, choose **Tesserae → Check for Updates…** 
 Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bugs, confusing numbers or ideas. For scan problems, **Scan report → Copy Diagnostics** gives the details; check it for file names you'd rather not share first.
 </description>
             <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.1.1/Tesserae-0.1.1.dmg" length="10329310" type="application/octet-stream" ns0:edSignature="xYKcr8OBn/gtFrB7QjTOhoaZsBjJ6AeWN+w8zmITKqeAaD/SLAorUhuuv5YfWCTOdg4N6TqXmDuACH3R2CdfBg==" />
+        </item><item xmlns:ns0="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <title>0.1.2</title>
+            <pubDate>Thu, 22 Oct 2026 15:07:43 -0400</pubDate>
+            <ns0:version>102</ns0:version>
+            <ns0:shortVersionString>0.1.2</ns0:shortVersionString>
+            <ns0:minimumSystemVersion>13.0</ns0:minimumSystemVersion>
+            <description ns0:format="markdown"># Tesserae 0.1.2
+
+A crash fix release for Tesserae, a disk-space visualiser for macOS.
+
+## Fixes
+
+- Scanning a disk with a folder containing many unreadable folders no longer crashes.
+
+## Install
+
+- **Download:** `Tesserae-0.1.2.dmg` below. Open it and drag Tesserae to Applications. The app is signed, notarized and stapled.
+- **Homebrew:** `brew tap sdelavega/tap`, then `brew install --cask sdelavega/tap/tesserae`.
+
+Requires macOS 13 Ventura or later, on Apple Silicon or Intel.
+
+## Updates
+
+If you already use Tesserae, choose **Tesserae → Check for Updates…** to install this release. Tesserae updates itself with [Sparkle](https://sparkle-project.org). It checks a signed feed once a day, sending only the app and macOS versions. You can turn automatic checks off in **Settings**.
+
+## Feedback
+
+Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bugs, confusing numbers or ideas. For scan problems, **Scan report → Copy Diagnostics** gives the details; check it for file names you'd rather not share first.
+</description>
+            <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.1.2/Tesserae-0.1.2.dmg" length="10329933" type="application/octet-stream" ns0:edSignature="c7m1S16hWD9/kfFKYUQ5Rtgxz3mzOdWSFK160m1S+tClWL/bCvlwM5m7DugIA2OyN4USobCHz1AVWUnkDvlIBg==" />
         </item></channel>
 </rss><!-- sparkle-signatures:
-edSignature: PguDMmX7W6nX7wW78+F2FFY2B86WUusSJPo5QAjaLEUiXOnfNZvdxOCRrEAOcGM+bfe9dvoFOBugOIbW12eBAw==
-length: 7938
+edSignature: QN4rzhlDEMjYWGc2x4T94Z2KapWpwscqLr8DZkNxh+4BlXMGeA9SaeMQDUnMxxC4t1G2Ife/+mQP+NWiEykKBQ==
+length: 9679
 -->
