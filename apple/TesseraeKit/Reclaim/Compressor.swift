@@ -393,6 +393,9 @@ public actor Compressor {
         var result = CompressOutcome(runID: UUID())
         guard !busy else { result.refusal = refusal(); return result }
         busy = true; defer { busy = false }
+        guard mutationAncestryIsSafe(item.path, volumeRoot: context.volumeRoot, stat: files) else {
+            result.refusal = unsafeMutationFolderReason(); return result
+        }
         let start = Date()
         var statuses: [Int32] = []
         var nodes: [Data: UInt32] = [item.path: item.nodeIndex]
@@ -446,6 +449,9 @@ public actor Compressor {
             for batch in batches(candidates, flags: Self.compressFlags, outcome: &result) {
                 if Task.isCancelled { result.cancelled = true; break }
                 guard files.canCompress(item.path), allowed(item.path, recorded: item.recorded, confirmed: confirmedWarnings) else { result.refusal = refusal(); break }
+                guard batch.allSatisfy({ mutationAncestryIsSafe($0.path, volumeRoot: context.volumeRoot, stat: files) }) else {
+                    result.refusal = unsafeMutationFolderReason(); break
+                }
                 var fresh: [Candidate] = []
                 for c in batch {
                     guard ancestorsMatch(c.path, recorded: recordedByPath, confirmed: confirmedWarnings),

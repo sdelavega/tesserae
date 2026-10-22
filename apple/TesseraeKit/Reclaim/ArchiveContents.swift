@@ -163,6 +163,7 @@ struct ArchiveTree {
         tree.verificationFlags = flags
         try tree.walk(parent: parent, name: parts.name, relative: parts.name, absolute: item, device: s.st_dev, depth: 0, hashFiles: hashFiles)
         tree.facts.isSidecar = tree.excludedSidecars.contains(parts.name)
+        tree.facts.mutationAncestrySafe = mutationAncestryIsSafe(item)
         return tree
     }
     mutating func walk(parent: Int32, name: Data, relative: Data, absolute: Data, device: Int32, depth: Int, hashFiles: Bool) throws {

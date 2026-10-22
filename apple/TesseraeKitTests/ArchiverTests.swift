@@ -25,6 +25,7 @@ final class ArchiverTests: XCTestCase, @unchecked Sendable {
         var status: Int32 = 0, verdict = ArchiveVerdict(files: 1, bytes: 100)
         var free: UInt64? = UInt64.max
         var changed = false, tamperArchive = false, failTrash = false, afterVerify = false
+        var unsafeParent = false, makeParentUnsafeOnInspect = false
         var originalCalls = 0
         var syncError: Int32?
         func syncParent(_ path: Data, recorded: Recorded) throws {
@@ -34,12 +35,13 @@ final class ArchiverTests: XCTestCase, @unchecked Sendable {
         var directory = false, facts = ArchiveItemFacts(eligibleBytes: 100)
         var recorded: Recorded { Recorded(fileID: 5, device: 1, isDirectory: directory) }
         func lstat(_ path: Data) -> StatResult {
-            .ok(Observed(device: 1, flags: 0, isDirectory: path != Data("/scan/root/a".utf8) || directory, linkCount: 1),
+            .ok(Observed(device: 1, flags: 0, isDirectory: path != Data("/scan/root/a".utf8) || directory, linkCount: 1, permissions: unsafeParent && path == Data("/scan/root".utf8) ? 0o777 : 0o755),
                 fileID: path == Data("/scan/root/a".utf8) ? 5 : 2, isSymlink: false)
         }
         func volumeUUID(_ path: Data) -> String? { "fixture" }
         func inspect(_ path: Data) throws -> ArchiveInspection {
             events.append("inspect")
+            if makeParentUnsafeOnInspect { unsafeParent = true }
             return ArchiveInspection(facts: facts, files: [(path, 100)],
                 stamps: [path: ArchiveStamp(recorded: recorded, size: changed ? 101 : 100)])
         }
@@ -75,8 +77,24 @@ final class ArchiverTests: XCTestCase, @unchecked Sendable {
     }
     func engine(_ p: Probe) -> Archiver {
         Archiver(creator: p, runner: p, verifier: p, files: p, trasher: p, log: p,
-            context: GuardContext(scanRoot: Data("/scan/root".utf8), volumeRoot: Data("/volume".utf8), scanRootDevice: 1, appBundle: URL(fileURLWithPath: "/app"), home: Data("/home".utf8)))
+            context: GuardContext(scanRoot: Data("/scan/root".utf8), volumeRoot: Data("/".utf8), scanRootDevice: 1, appBundle: URL(fileURLWithPath: "/app"), home: Data("/home".utf8)))
     }
+    func test_archive_refuses_unsafe_ancestry_at_start_and_after_inspection() async throws {
+        for becomesUnsafeLater in [false, true] {
+            let probe = Probe()
+            probe.unsafeParent = !becomesUnsafeLater
+            probe.makeParentUnsafeOnInspect = becomesUnsafeLater
+            let worker = engine(probe)
+            let result = await worker.archive(item(probe), format: .zip, trashOriginal: probe.original)
+            guard case .failed(let reason, _) = result else { return XCTFail("unsafe archive accepted") }
+            XCTAssertEqual(reason, "Another user can change files in this folder, so Tesserae can't safely compress or archive here.")
+            XCTAssertFalse(probe.events.contains("create"))
+            XCTAssertFalse(probe.events.contains("write"))
+            XCTAssertEqual(probe.originalCalls, 0)
+            XCTAssertEqual(probe.events.contains("inspect"), becomesUnsafeLater, "precondition: intended boundary reached")
+        }
+    }
+
     func test_archive_inspection_records_raw_symlink_target() throws {
         let f = DiskImageFixture(); try f.setUp(); defer { XCTAssertNoThrow(try f.tearDown()) }
         let file = try f.file("file"), raw = Data(file.deletingLastPathComponent().appendingPathComponent("link").path.utf8)

@@ -135,7 +135,7 @@ final class IdentityTests: XCTestCase {
         var info = Darwin.stat()
         XCTAssertEqual(fstat(fd, &info), 0)
         let stat = ProductionFileStat()
-        let expected = Observed(device: info.st_dev, flags: info.st_flags, isDirectory: false, linkCount: info.st_nlink)
+        let expected = Observed(device: info.st_dev, flags: info.st_flags, isDirectory: false, linkCount: info.st_nlink, owner: info.st_uid, permissions: UInt16(info.st_mode & 0o7777))
         XCTAssertEqual(stat.lstat(raw), .ok(expected, fileID: info.st_ino, isSymlink: false))
         XCTAssertEqual(verifyIdentity(raw, Recorded(fileID: info.st_ino, device: info.st_dev, isDirectory: false), stat: stat), .same)
         guard case .ok(let directory, _, let isLink) = stat.lstat(rootBytes) else {

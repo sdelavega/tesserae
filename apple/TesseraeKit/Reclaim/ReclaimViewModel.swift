@@ -719,6 +719,7 @@ public final class ReclaimViewModel: ObservableObject {
                         item.archiveFacts.largestFileSize = facts.largestFileSize
                         item.archiveFacts.eligibleBytes = facts.eligibleBytes
                     }
+                    item.archiveFacts.mutationAncestrySafe = mutationAncestryIsSafe(item.path, volumeRoot: context?.volumeRoot)
                     if let parent = try? archiveParts(item.path).parent {
                         item.archiveFacts.parentWritable = archiveCString(parent) { access($0, W_OK) == 0 }
                     }

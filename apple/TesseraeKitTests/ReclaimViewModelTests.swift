@@ -345,7 +345,7 @@ final class ReclaimViewModelTests: XCTestCase {
         var stats = TessScanStats(); stats.root_device = 1
         let tree = TestSnapshot(.dir("/scan/root", [.file("b", 200), .file("c", 200), .file("d", 200), .file("a", 100)]), stats: stats, fileIDs: true)
         let probe = ArchiverTests.Probe(); probe.status = 3
-        let context = GuardContext(scanRoot: Data("/scan/root".utf8), volumeRoot: Data("/volume".utf8),
+        let context = GuardContext(scanRoot: Data("/scan/root".utf8), volumeRoot: Data("/".utf8),
             scanRootDevice: 1, appBundle: URL(fileURLWithPath: "/app"), home: Data("/home".utf8))
         let app = AppModel(coordinator: ScanCoordinator(), accessLoader: { .granted }, stagingStat: probe, contextLoader: { _ in context })
         app.replaceSnapshot(tree.snapshot)

@@ -207,6 +207,7 @@ public actor Archiver {
         var discardedStamp: ArchiveStamp?, parentSyncError: Int32?
         defer { if let descriptor { close(descriptor) } }
         do {
+            guard mutationAncestryIsSafe(item.path, volumeRoot: context.volumeRoot, stat: files) else { throw ArchiveMessage(unsafeMutationFolderReason()) }
             let parts = try archiveParts(item.path)
             guard verifyIdentity(item.path, item.recorded, stat: files) == .same,
                   case .ok(let observation, _, false) = files.lstat(item.path),
@@ -247,6 +248,7 @@ public actor Archiver {
                     bundle: L10n.bundle, comment: "Archive refusal with formatted required and available free space, in that order.")
                 throw ArchiveMessage(message)
             }
+            guard mutationAncestryIsSafe(item.path, volumeRoot: context.volumeRoot, stat: files) else { throw ArchiveMessage(unsafeMutationFolderReason()) }
             let made = try creator.create(parent: parts.parent,
                 parentRecorded: Recorded(fileID: parentID, device: parentInfo.device, isDirectory: true), baseName: parts.name, ext: format.fileExtension)
             descriptor = made.fd; path = parts.parent + (parts.parent == Data([47]) ? Data() : Data([47])) + made.name
@@ -268,9 +270,10 @@ public actor Archiver {
             let usage = try files.usage(readFD)
             // Check ALL original identities, timestamps and directory membership again,
             // including changes after verification, before entering §10's unchanged path.
-            let reservedPath = path!
+            let reservedPath = path!, mutationRoot = context.volumeRoot
             let validate: @Sendable () -> Bool = { [files] in
-                guard (try? files.inspect(item.path).stamps) == tree.stamps,
+                guard mutationAncestryIsSafe(item.path, volumeRoot: mutationRoot, stat: files),
+                      (try? files.inspect(item.path).stamps) == tree.stamps,
                       (try? files.archiveStamp(readFD)) == archiveStamp else { return false }
                 guard let current = try? files.readArchive(reservedPath, matching: made.fd) else { return false }
                 close(current); return true

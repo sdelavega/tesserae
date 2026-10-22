@@ -35,6 +35,7 @@ final class DegradedModeTests: XCTestCase {
     }
 
     private func png(_ image: CGImage, _ url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let dest = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(dest, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(dest))

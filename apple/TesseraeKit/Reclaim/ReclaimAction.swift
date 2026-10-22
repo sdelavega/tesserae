@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import Darwin
 import Foundation
 
 public enum ReclaimAction: Hashable, Sendable {
@@ -38,6 +39,7 @@ public struct VolumeCapabilities: Sendable {
 // native and unknown filesystems; only strictly recognized sidecars are excluded.
 public struct ArchiveItemFacts: Equatable, Sendable {
     public var containsCloudOnly, containsUnknownContent, containsOtherVolume, parentWritable: Bool
+    public var mutationAncestrySafe = true
     public var containsAppBundle = false
     public var isSidecar = false
     public var hasResourceFork, containsRealAppleDouble, containsGitWorkingTree: Bool
@@ -55,6 +57,7 @@ public struct ArchiveItemFacts: Equatable, Sendable {
 }
 
 public func formatSupports(_ f: ArchiveFormat, itemFacts: ArchiveItemFacts) -> Availability {
+    if !itemFacts.mutationAncestrySafe { return .unavailable(unsafeMutationFolderReason()) }
     if itemFacts.isSidecar {
         return .unavailable(String(localized: "archive.sidecarItem",
             defaultValue: "This item is a macOS metadata sidecar. Archive its sibling instead.", bundle: L10n.bundle,
@@ -82,6 +85,7 @@ public func availableActions(for item: ReclaimItem, volume: VolumeCapabilities, 
         .compress: volume.canCompress ? .available : .unavailable(String(localized: "reclaimAction.cannotCompress",
             defaultValue: "This disk can't compress files in place. Archive instead?", bundle: L10n.bundle,
             comment: "Disabled in-place compression on an unsupported volume."))]
+    if !item.archiveFacts.mutationAncestrySafe { actions[.compress] = .unavailable(unsafeMutationFolderReason()) }
     var facts = item.archiveFacts
     let warnings = itemWarnings(item) + { if case .warn(let r) = verdict { return [r] }; return [] }()
     facts.containsCloudOnly = facts.containsCloudOnly || warnings.contains(.cloudOnly) || warnings.contains(.containsCloudOnly)
@@ -91,7 +95,8 @@ public func availableActions(for item: ReclaimItem, volume: VolumeCapabilities, 
     let isArchive = !item.recorded.isDirectory && [".zip", ".tar.xz", ".tar.zst", ".aar"].contains { name.suffix($0.utf8.count) == Data($0.utf8) }
     for format in ArchiveFormat.allCases {
         let availability: Availability
-        if !volume.canArchive { availability = .unavailable(readOnly) }
+        if !facts.mutationAncestrySafe { availability = .unavailable(unsafeMutationFolderReason()) }
+        else if !volume.canArchive { availability = .unavailable(readOnly) }
         else if !facts.parentWritable {
             availability = .unavailable(String(localized: "reclaimAction.parentNotWritable",
                 defaultValue: "The item's parent folder isn't writable.", bundle: L10n.bundle,
@@ -111,4 +116,49 @@ public func actionWarnings(for item: ReclaimItem, action: ReclaimAction, facts: 
     if facts.largestFileSize > 4 * 1024 * 1024 * 1024 { reasons.append(.largeFile) }
     if facts.eligibleBytes > 100_000_000_000 { reasons.append(.largeCompressRun) }
     return reasons
+}
+
+func unsafeMutationFolderReason() -> String {
+    String(localized: "reclaimAction.unsafeMutationFolder",
+        defaultValue: "Another user can change files in this folder, so Tesserae can't safely compress or archive here.",
+        bundle: L10n.bundle, comment: "Compress and Archive are disabled when another local user can replace path entries.")
+}
+
+// The superuser is trusted: ordinary home paths have root-owned system ancestors.
+// Sticky protection applies only when neither the directory owner nor the child
+// entry owner is a different unprivileged user. All observations are fresh lstat.
+func mutationAncestryIsSafe(_ path: Data, volumeRoot suppliedRoot: Data? = nil,
+                           user: UInt32 = geteuid(), stat: any FileStat = ProductionFileStat()) -> Bool {
+    func canonical(_ p: Data) -> Bool {
+        p.first == 47 && !p.contains(0) && !p.split(separator: 47).contains { $0 == Data(".".utf8) || $0 == Data("..".utf8) }
+    }
+    guard canonical(path) else { return false }
+    var root: Data
+    if let suppliedRoot { root = suppliedRoot }
+    else {
+        var info = statfs()
+        guard (path + Data([0])).withUnsafeBytes({ statfs($0.baseAddress!.assumingMemoryBound(to: CChar.self), &info) }) == 0 else { return false }
+        root = withUnsafeBytes(of: &info.f_mntonname) { Data($0.prefix { $0 != 0 }) }
+    }
+    let physicalRoot = root
+    let dataRoot = Data("/System/Volumes/Data".utf8)
+    if root == dataRoot && !path.starts(with: dataRoot + Data([47])) { root = Data([47]) }
+    guard canonical(root), path.starts(with: root == Data([47]) ? root : root + Data([47])),
+          case .ok(var childInfo, _, false) = stat.lstat(path) else { return false }
+    var child = path
+    while child != root {
+        guard let slash = child.lastIndex(of: 47) else { return false }
+        let parent = slash == child.startIndex ? Data([47]) : Data(child[..<slash])
+        let probe = parent == root ? physicalRoot : parent
+        guard case .ok(let info, _, false) = stat.lstat(probe), info.isDirectory,
+              info.owner == user || info.owner == 0 else { return false }
+        let permissions = mode_t(info.permissions)
+        if permissions & (S_IWGRP | S_IWOTH) != 0 {
+            guard permissions & S_ISVTX != 0, childInfo.owner == user || childInfo.owner == 0 else { return false }
+        }
+        child = parent
+        childInfo = info
+        if child == Data([47]) && root != child { return false }
+    }
+    return true
 }

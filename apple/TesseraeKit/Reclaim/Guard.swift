@@ -75,12 +75,17 @@ public struct Observed: Equatable, Sendable {
     public let flags: UInt32
     public let isDirectory: Bool
     public let linkCount: UInt16
+    public let owner: UInt32
+    public let permissions: UInt16
 
-    public init(device: Int32, flags: UInt32, isDirectory: Bool, linkCount: UInt16) {
+    public init(device: Int32, flags: UInt32, isDirectory: Bool, linkCount: UInt16,
+                owner: UInt32 = 0, permissions: UInt16 = 0o755) {
         self.device = device
         self.flags = flags
         self.isDirectory = isDirectory
         self.linkCount = linkCount
+        self.owner = owner
+        self.permissions = permissions
     }
 }
 

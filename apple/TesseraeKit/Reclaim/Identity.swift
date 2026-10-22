@@ -72,7 +72,8 @@ public struct ProductionFileStat: FileStat {
             }
             let kind = info.st_mode & mode_t(S_IFMT)
             return .ok(Observed(device: info.st_dev, flags: info.st_flags,
-                                isDirectory: kind == mode_t(S_IFDIR), linkCount: info.st_nlink),
+                                isDirectory: kind == mode_t(S_IFDIR), linkCount: info.st_nlink,
+                                owner: info.st_uid, permissions: UInt16(info.st_mode & 0o7777)),
                        fileID: info.st_ino, isSymlink: kind == mode_t(S_IFLNK))
         }
     }

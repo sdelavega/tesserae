@@ -32,6 +32,7 @@ final class CompressorTests: XCTestCase {
         var trashPaths: [Data] = []
         var free: UInt64 = 20 * 1024 * 1024 * 1024
         var unchanged = false, growing = false, logSucceeds = true
+        var unsafeParent = false
         var sweepCount = 0
         var beforeRun: (@Sendable () async -> Void)?
         var afterRun: (@Sendable () -> Void)?
@@ -43,7 +44,7 @@ final class CompressorTests: XCTestCase {
             if gone.contains(path) { return .error(errno: ENOENT) }
             guard let f = files[path] else {
                 if ["/.git", "-wal", "-shm", "/Contents/_MASReceipt/receipt"].contains(where: { path.suffix($0.utf8.count) == Data($0.utf8) }) { return .error(errno: ENOENT) }
-                return .ok(Observed(device: 7, flags: 0, isDirectory: true, linkCount: 1), fileID: 1, isSymlink: false)
+                return .ok(Observed(device: 7, flags: 0, isDirectory: true, linkCount: 1, permissions: unsafeParent ? 0o777 : 0o755), fileID: 1, isSymlink: false)
             }
             return .ok(Observed(device: f.facts.key.dev, flags: f.facts.flags, isDirectory: f.recorded.isDirectory,
                 linkCount: UInt16(f.facts.nlink)), fileID: f.recorded.fileID, isSymlink: !f.facts.isRegular && !f.recorded.isDirectory)
@@ -99,6 +100,19 @@ final class CompressorTests: XCTestCase {
         w.manifestDirectory = directory
         return Compressor(helper: URL(fileURLWithPath: "/fixture/Contents/Helpers/applesauce"), runner: w,
             files: w, openFiles: w, log: w, manifests: CompressManifest(directory: directory), context: context, argvLimit: limit)
+    }
+
+    func test_compress_refuses_fresh_unsafe_ancestry_before_starting_helper() async throws {
+        let world = World()
+        let staged = item(world)
+        let runner = try compressor(world)
+        XCTAssertEqual(staged.archiveFacts.mutationAncestrySafe, true, "precondition: review was safe")
+        world.unsafeParent = true
+        let result = await runner.compress(staged)
+        XCTAssertEqual(result.refusal, "Another user can change files in this folder, so Tesserae can't safely compress or archive here.")
+        XCTAssertEqual(result.compressed, 0)
+        XCTAssertTrue(world.calls.isEmpty)
+        XCTAssertEqual(world.files[root]?.allocated, 131072)
     }
 
     func test_presentation_cancel_accounts_batch_keeps_staging_and_stops_mixed_actions() async throws {
