@@ -99,7 +99,7 @@ apple/TesseraeKit/Render/TreemapView.swift	20131	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Report/ScanReport.swift	13331	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/ScanBanner.swift	5136	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/ScanCoordinator.swift	14888	2026-10-22T08:21:01-04:00
-apple/TesseraeKit/Snapshot.swift	17511	2026-10-22T08:21:01-04:00
+apple/TesseraeKit/Snapshot.swift	17621	2026-10-22T11:52:11-04:00
 apple/TesseraeKit/Table/FileTableModel.swift	9213	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Table/FileTableView.swift	15770	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Table/FolderOutlineView.swift	17779	2026-10-22T08:21:01-04:00
@@ -112,10 +112,10 @@ apple/TesseraeKit/Version.swift	1171	2026-10-20T15:54:03-04:00
 apple/TesseraeKit/Volumes/VolumeList.swift	6120	2026-10-22T08:21:01-04:00
 apple/TesseraeKit/Volumes/VolumeSource.swift	8136	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/AccessReportTests.swift	9131	2026-10-22T08:58:26-04:00
-apple/TesseraeKitTests/AppModelTests.swift	105348	2026-10-22T08:58:26-04:00
+apple/TesseraeKitTests/AppModelTests.swift	106592	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/AppleArchiveTests.swift	40493	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/ArchiverTests.swift	30951	2026-10-22T10:23:21-04:00
-apple/TesseraeKitTests/ColourTests.swift	11436	2026-10-22T08:21:01-04:00
+apple/TesseraeKitTests/ColourTests.swift	11416	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/CommandRunnerTests.swift	5583	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/CompressEligibilityTests.swift	5883	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/CompressorTests.swift	27278	2026-10-22T10:23:21-04:00
@@ -151,12 +151,12 @@ apple/TesseraeKitTests/ReconcileTests.swift	8382	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/ReconciliationViewModelTests.swift	20927	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/RelativePathTests.swift	1938	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/RenderSnapshotTests.swift	24469	2026-10-22T08:21:01-04:00
-apple/TesseraeKitTests/ScanCoordinatorTests.swift	14190	2026-10-22T08:21:01-04:00
+apple/TesseraeKitTests/ScanCoordinatorTests.swift	14240	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/ScanReportTests.swift	9030	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/SizeOverlayTests.swift	16358	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/SnapshotFactsTests.swift	4755	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/SnapshotIdentityTests.swift	2782	2026-10-20T23:59:55-04:00
-apple/TesseraeKitTests/SnapshotTests.swift	21753	2026-10-20T08:10:57-04:00
+apple/TesseraeKitTests/SnapshotTests.swift	23180	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/SnapshotTests/degraded-cancelled-dark.png	59473	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/SnapshotTests/degraded-cancelled-light.png	53252	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/SnapshotTests/degraded-cloud-folder-badge-dark.png	27180	2026-10-22T08:21:01-04:00
@@ -245,7 +245,7 @@ apple/TesseraeKitTests/Support/ContainedTrasher.swift	1350	2026-10-20T23:59:55-0
 apple/TesseraeKitTests/Support/DiskImageFixture.swift	4807	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/Support/SplitMix64.swift	1371	2026-10-20T08:10:57-04:00
 apple/TesseraeKitTests/Support/SyntheticTree.swift	6998	2026-10-20T23:59:55-04:00
-apple/TesseraeKitTests/Support/TestSnapshot.swift	6184	2026-10-22T08:21:01-04:00
+apple/TesseraeKitTests/Support/TestSnapshot.swift	7014	2026-10-22T11:52:11-04:00
 apple/TesseraeKitTests/TableTests.swift	26992	2026-10-20T15:54:03-04:00
 apple/TesseraeKitTests/ToolbarHelpTests.swift	4592	2026-10-22T08:21:01-04:00
 apple/TesseraeKitTests/VolumeFactsTests.swift	5431	2026-10-20T23:59:55-04:00
