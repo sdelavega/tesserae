@@ -25,6 +25,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -340,7 +341,7 @@ class PublishingTests(unittest.TestCase):
     def test_publish_order_orphan_cask_and_checksums(self):
         out = self.run_script("publish.sh", input="0.1.0\n")
         calls = self.trace()
-        markers = ["git tag -a", "git push origin refs/tags/v0.1.0", "gh release create", "git worktree add", "git push origin HEAD:refs/heads/gh-pages", "git push origin HEAD", "curl --fail", "brew fetch --cask sdelavega/tap/tesserae"]
+        markers = ["git tag -a", "git push origin refs/tags/v0.1.0", "gh release create", "git worktree add", "git push origin HEAD:refs/heads/gh-pages", "git push origin HEAD", "curl --fail", "brew tap sdelavega/tap", "brew fetch --cask sdelavega/tap/tesserae"]
         positions = [calls.index(m) for m in markers]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(self.git("--git-dir", str(self.origin), "show", "gh-pages:appcast.xml"), (self.repo / "dist/appcast.xml").read_text().strip())
@@ -353,6 +354,16 @@ class PublishingTests(unittest.TestCase):
         self.assertIn("Skipping brew style/audit", out)
         self.assertNotIn("LEAK", calls)
         self.assertIn("GH_AUTH_OK", calls)
+
+    def test_publish_skips_homebrew_when_unavailable(self):
+        (self.bin / "brew").unlink()
+        (self.bin / "python3").symlink_to(sys.executable)
+        self.env["PATH"] = str(self.bin) + ":/usr/bin:/bin"
+        self.assertIsNone(shutil.which("brew", path=self.env["PATH"]))
+        out = self.run_script("publish.sh", input="0.1.0\n")
+        self.assertIn("Skipping brew fetch: brew is unavailable", out)
+        self.assertNotIn("brew ", self.trace())
+        self.assertIn("Post-publish checks passed", out)
 
     def test_pages_retry_fetches_fresh_feed_before_confirmation(self):
         old = b'<rss><channel><title>Fresh remote feed</title></channel></rss>'
@@ -584,7 +595,11 @@ elif name == "sleep":
     assert args in (["5"], ["10"], ["20"])
 elif name == "brew":
     if fault == "brew": sys.exit(42)
-    assert args == ["fetch", "--cask", "sdelavega/tap/tesserae"]
+    if args == ["tap", "sdelavega/tap"]:
+        (base / "brew-tapped").touch()
+    else:
+        assert args == ["fetch", "--cask", "sdelavega/tap/tesserae"]
+        assert (base / "brew-tapped").exists(), "Cask must be tapped before fetch"
 else:
     sys.exit(88)
 '''

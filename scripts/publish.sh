@@ -198,7 +198,12 @@ CASK
         actual=$(tool shasum -a 256 "$work/$file")
         [[ ${expected%% *} == "${actual%% *}" ]] || { echo "Published checksum mismatch: $file" >&2; exit 1; }
     done
-    if command -v brew >/dev/null; then tool brew fetch --cask sdelavega/tap/tesserae; else echo 'Skipping brew fetch: brew is unavailable'; fi
+    if command -v brew >/dev/null; then
+        tool brew tap sdelavega/tap
+        tool brew fetch --cask sdelavega/tap/tesserae
+    else
+        echo 'Skipping brew fetch: brew is unavailable'
+    fi
     echo 'Post-publish checks passed'
 )
 
