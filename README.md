@@ -4,7 +4,7 @@ Tesserae is a GPL-3 disk-space visualizer for macOS 13 Ventura and later,
 with a Rust scan engine and a SwiftUI/Metal treemap. Explore what uses space,
 inspect files, and reclaim space with reviewed Trash, Compress and Archive actions.
 
-![Tesserae showing a 21 GB drive as a treemap, coloured by age, with the space breakdown beside it](docs/images/overview.png)
+![Tesserae showing a 21 GB drive as a treemap, each top-level folder in its own colour with name strips, the folder tree below and the space breakdown beside it](docs/images/overview.png)
 
 ## Install
 
@@ -51,6 +51,8 @@ the read-only system volume appears in the space breakdown. Progress counts
 files as they are scanned. For a complete picture, grant Full Disk Access
 (see below).
 
+![The start screen listing the startup disk, a USB drive and a network volume, each with its format, used and free space and a Scan button](docs/images/welcome.png)
+
 ### Explore the map
 
 Each tile is a file or folder, sized by its space on disk. Click to zoom one
@@ -72,6 +74,8 @@ folder to enter it. Selection follows between the tree and map. Switch to
 **Largest Files** for the top 1,000 files under the current view; column sorts
 reorder that list.
 
+![The pointer resting on a video tile: a pop-up and the Inspector both show its path from the scanned drive, USB321FD › Movies › Coast road trip.mov, with its size and date](docs/images/inspect.png)
+
 ### Check the scan
 
 For a whole-volume scan, the **space breakdown** compares what the scan found
@@ -82,6 +86,8 @@ means shared blocks were counted twice.
 **Scan report** lists unreadable and skipped locations, cloud-only files and
 anything that made the scan partial. **Copy Diagnostics** copies it to your
 clipboard for a bug report.
+
+![The scan report beside the space breakdown, listing what the scan skipped and why](docs/images/report.png)
 
 ### Reclaim space
 
@@ -133,17 +139,14 @@ disabled when they can't keep them. On APFS/HFS+, every real `._` file is
 content and likewise needs Apple Archive. If you select a recognised sidecar
 itself, archive its sibling instead.
 
+![Two items staged in Reclaim Space on an exFAT drive: a video set to Move to Trash, and a backup set to Archive with ZIP chosen and the Advanced formats expanded](docs/images/staging.png)
+
 ### Decompress
 
 In **Reclaim Space → Recently compressed**, choose **Decompress…** and review
 the current warnings. This restores ordinary storage for files Tesserae
 compressed in that run, provided their identities still match. It needs
 additional free space and doesn't act on files compressed by other apps.
-
-![A photo selected in the treemap, with its details in the Inspector](docs/images/inspect.png)
-
-![The scan report, listing what the scan skipped and why](docs/images/report.png)
-![Items staged in Reclaim Space, with their sizes, before actions are confirmed](docs/images/staging.png)
 
 ## Feedback
 
