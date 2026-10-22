@@ -59,6 +59,7 @@ struct ReclaimView: View {
                             comment: "ReclaimView: Remove from Reclaim Space."
                         )) { remove(item.id) }.disabled(busy)
                     }
+                    if let reason = item.outcomeReason { Text(reason).font(.callout).lineLimit(1).help(reason) }
                     if let viewModel {
                         ReclaimActionPicker(model: viewModel, item: item, advancedExpanded: advancedExpanded)
                             .disabled(busy)

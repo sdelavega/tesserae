@@ -19,6 +19,19 @@ import Foundation
 import Darwin
 import TesseraeFFI
 
+public func actedOn(_ outcome: Outcome) -> Bool {
+    switch outcome {
+    case .trashed: return true
+    case .compressed(let result): return result.compressed > 0
+    case .archived(let run):
+        switch run.outcome {
+        case .archivedAndTrashed, .archivedOriginalsKept: return true
+        case .failed: return false
+        }
+    default: return false
+    }
+}
+
 // Compact references retain the immutable snapshot; paths are materialised only
 // by the execution actor, never during the subtree preparation walk.
 public struct StagedDescendants: Equatable, Sendable, RandomAccessCollection {
@@ -66,6 +79,7 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
     public let descendants: StagedDescendants
     public var compressionSkipReason: SkipReason?
     public var isCheckingArchive: Bool
+    public var outcomeReason: String?
     public var actionAvailability: Availability
     public var action: ReclaimAction
     public var archiveFacts: ArchiveItemFacts
@@ -74,7 +88,8 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
                 verdict: Verdict, warnings: [Reason] = [], hasUnknownContent: Bool = false,
                 descendants: StagedDescendants = StagedDescendants(), overlayRevision: UInt64 = 0, sessionID: UUID? = nil,
                 action: ReclaimAction = .trash, actionAvailability: Availability = .available, archiveFacts: ArchiveItemFacts = ArchiveItemFacts(),
-                compressionSkipReason: SkipReason? = nil, isCheckingArchive: Bool = false) {
+                compressionSkipReason: SkipReason? = nil, isCheckingArchive: Bool = false, outcomeReason: String? = nil) {
+        self.outcomeReason = outcomeReason
         self.compressionSkipReason = compressionSkipReason
         self.isCheckingArchive = isCheckingArchive
         self.actionAvailability = actionAvailability
@@ -137,7 +152,12 @@ public final class Reclaim: ObservableObject {
     nonisolated static func prepare(_ nodes: [UInt32], in snapshot: Snapshot, context: GuardContext,
                                    stat: FileStat, overlay: SizeOverlay, existing: [ReclaimItem], sessionID: UUID? = nil) -> [ReclaimItem] {
         let source = OverlaySource(snapshot, overlay)
-        var next = existing
+        let restaged = Set(nodes)
+        var next = existing.map { item in
+            var item = item
+            if restaged.contains(item.id) { item.outcomeReason = nil }
+            return item
+        }
         var staged = Set(next.map(\.nodeIndex))
         var gitParents: [UInt32: Bool] = [:]
         func containsGit(_ parent: UInt32) -> Bool {
@@ -251,6 +271,15 @@ public final class Reclaim: ObservableObject {
         guard items.contains(where: { nodes.contains($0.nodeIndex) }) else { return }
         items.removeAll { nodes.contains($0.nodeIndex) }
         viewModel.replace(items, volumes: [:])
+    }
+    func recordOutcomes(_ result: ExecutionResult) {
+        var next = items
+        for (item, outcome) in result.outcomes where !actedOn(outcome) {
+            if let index = next.firstIndex(where: { $0.id == item.id }) {
+                next[index].outcomeReason = keptOutcomeReason(outcome)
+            }
+        }
+        publish(next)
     }
     public func clear() { items = []; viewModel.replace([], volumes: [:]) }
     public var stagedNodes: Set<UInt32> { Set(items.map(\.nodeIndex)) }

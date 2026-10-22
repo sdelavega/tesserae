@@ -202,6 +202,12 @@ public final class AppSession: ObservableObject, Identifiable {
         let result = await executor.run(items, confirmedWarnings: confirmedWarnings, progress: progress,
             reviewedVerdicts: reviewedVerdicts, reviewedWarnings: reviewedWarnings,
             currentRevision: revision, currentSessionID: id)
+        await finishReclaim(result, stagingStat: stagingStat)
+        return result
+    }
+
+    func finishReclaim(_ result: ExecutionResult, stagingStat: any FileStat) async {
+        let revision = overlay.revision
         for (item, outcome) in result.outcomes {
             if case .compressed(let compression) = outcome { compression.apply(to: &overlay, snapshot: snapshot) }
             if case .archived(let archive) = outcome {
@@ -214,14 +220,10 @@ public final class AppSession: ObservableObject, Identifiable {
                 trashedNodes[url.absoluteString] = item.nodeIndex
             }
         }
-        reclaim.unstage(Set(result.outcomes.compactMap { item, outcome in
-            if case .trashed = outcome { return item.id }
-            if case .compressed(let result) = outcome, result.refusal == nil && !result.cancelled && result.failed.isEmpty && !result.manifestFailed { return item.id }
-            if case .archived(let run) = outcome, case .archivedAndTrashed = run.outcome { return item.id }; return nil
-        }))
+        reclaim.unstage(Set(result.outcomes.compactMap { item, outcome in actedOn(outcome) ? item.id : nil }))
         if overlay.revision != revision { await reprepareStaged(stat: stagingStat) }
+        reclaim.recordOutcomes(result)
         refreshOverlay()
-        return result
     }
 
     public func decompress(run: CompressRunID, using compressor: Compressor,
@@ -246,12 +248,17 @@ public final class AppSession: ObservableObject, Identifiable {
         defer { isPreparingReclaim = false }
         // Accounting must finish even when the execution task was cancelled.
         // Reclaim.prepare treats cancellation as an abandoned staging request.
+        let reasons = Dictionary(uniqueKeysWithValues: reclaim.items.map { ($0.id, $0.outcomeReason) })
         let nodes = reclaim.items.map(\.nodeIndex), snapshot = snapshot, overlay = overlay, sessionID = id
         let prepared = await Task.detached {
             await PutBackExecutor.shared.prepare(nodes, snapshot: snapshot, context: context,
                 stat: stat, overlay: overlay, existing: [], sessionID: sessionID)
         }.value
-        reclaim.publish(prepared, context: context)
+        reclaim.publish(prepared.map { item in
+            var item = item
+            item.outcomeReason = reasons[item.id] ?? nil
+            return item
+        }, context: context)
     }
 
     public func putBack(_ entry: LogEntry, stat: any FileStat, mover: any Mover,

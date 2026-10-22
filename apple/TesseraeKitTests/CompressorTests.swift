@@ -115,7 +115,7 @@ final class CompressorTests: XCTestCase {
         XCTAssertEqual(world.files[root]?.allocated, 131072)
     }
 
-    func test_presentation_cancel_accounts_batch_keeps_staging_and_stops_mixed_actions() async throws {
+    func test_presentation_cancel_accounts_batch_unstages_changed_item_and_stops_mixed_actions() async throws {
         var stats = TessScanStats(); stats.root_device = 7
         let tree = TestSnapshot(.dir("/scan/root", [.dir("item", [.file("a", 131072), .file("b", 131072), .file("c", 131072)]), .file("later", 100)]), stats: stats, fileIDs: true)
         let w = World(), latch = BatchLatch()
@@ -153,7 +153,7 @@ final class CompressorTests: XCTestCase {
         XCTAssertTrue(result.cancelled); XCTAssertEqual(result.compressed, 1)
         XCTAssertEqual(ui.result?.outcomes.count, 1, "later mixed action must never start")
         XCTAssertEqual(w.calls.count, 1); XCTAssertTrue(w.trashPaths.isEmpty)
-        XCTAssertEqual(session.reclaim.stagedNodes, [tree["item"], tree["later"]])
+        XCTAssertEqual(session.reclaim.stagedNodes, [tree["later"]], "changed folder leaves staging; unstarted action stays")
         XCTAssertEqual(session.overlay.replacedIdentities[tree["a"]], tree.snapshot.fileID(tree["a"])! + 1000)
         XCTAssertEqual(session.source.allocated(tree["a"]), 4096)
         XCTAssertFalse(ui.running); XCTAssertNil(ui.executionTask)

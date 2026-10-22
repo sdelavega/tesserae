@@ -26,6 +26,202 @@ final class AppModelTests: XCTestCase {
     private let scanningPutBackMessage = "Put Back is unavailable while scanning — try again when the scan finishes, or use Finder"
     private let changedScanMessage = "Files changed since this scan — rescan to stage items"
 
+    private func reclaimPublicationFixture(directory: Bool = false) -> (TestSnapshot, AppSession, ReclaimItem, ExecutorTests.Probe) {
+        var stats = TessScanStats(); stats.root_device = 7
+        let tree = TestSnapshot(.dir("/scan/root", [.dir("parent", [.file("sibling", 20)]), .file("other", 40)]),
+            stats: stats, fileIDs: true)
+        let snapshot = tree.snapshot
+        let node = tree[directory ? "parent" : "sibling"]
+        let context = GuardContext(scanRoot: snapshot.rawPath(0), volumeRoot: Data("/".utf8), scanRootDevice: 7,
+            appBundle: URL(fileURLWithPath: "/app"), home: Data("/home".utf8))
+        let session = AppSession(snapshot: snapshot, guardContext: context)
+        let stat = ExecutorTests.Probe()
+        for index in 0..<UInt32(snapshot.nodes.count) {
+            stat.entries[snapshot.rawPath(index)] = .ok(Observed(device: 7, flags: 0, isDirectory: snapshot.isDirectory(index), linkCount: 1),
+                fileID: snapshot.fileID(index)!, isSymlink: false)
+        }
+        let item = ReclaimItem(nodeIndex: node, path: snapshot.rawPath(node),
+            recorded: Recorded(fileID: snapshot.fileID(node)!, device: 7, isDirectory: directory),
+            recordedSize: snapshot.allocated(node), verdict: .ok, sessionID: session.id)
+        session.reclaim.publish([item])
+        XCTAssertEqual(session.reclaim.items.map(\.id), [node], "precondition: item is staged")
+        return (tree, session, item, stat)
+    }
+
+    func test_partially_compressed_folder_is_unstaged() async {
+        let (tree, session, item, stat) = reclaimPublicationFixture(directory: true)
+        var compression = CompressOutcome(runID: CompressRunID())
+        compression.compressed = 1
+        compression.failed = [Data("/scan/root/parent/failed".utf8)]
+        compression.skipped = [.alreadyCompressed: 1]
+        compression.cancelled = true
+        compression.manifestFailed = true
+        let result = ExecutionResult(outcomes: [(item, .compressed(compression))], reclaimableBytes: 0, unknownSizeTrashed: 0)
+        XCTAssertTrue(item.recorded.isDirectory)
+        XCTAssertGreaterThan(compression.compressed, 0)
+        await session.finishReclaim(result, stagingStat: stat)
+        XCTAssertTrue(session.reclaim.items.isEmpty)
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_archive_with_originals_kept_is_unstaged() async {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        let run = ArchiveRun(outcome: .archivedOriginalsKept(archive: URL(fileURLWithPath: "/scan/root/sibling.zip"),
+            reason: "Originals could not be moved to Trash."))
+        let result = ExecutionResult(outcomes: [(item, .archived(run))], reclaimableBytes: 0, unknownSizeTrashed: 0)
+        await session.finishReclaim(result, stagingStat: stat)
+        XCTAssertTrue(session.reclaim.items.isEmpty)
+        XCTAssertFalse(session.overlay.isDeleted(item.id, in: tree.snapshot), "original stays in the map")
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_trashed_item_is_unstaged() async {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        let url = URL(fileURLWithPath: "/fake-trash/sibling")
+        let result = ExecutionResult(outcomes: [(item, .trashed(trashURL: url))], reclaimableBytes: 20, unknownSizeTrashed: 0)
+        await session.finishReclaim(result, stagingStat: stat)
+        XCTAssertTrue(session.reclaim.items.isEmpty)
+        XCTAssertTrue(session.overlay.isDeleted(item.id, in: tree.snapshot))
+        XCTAssertEqual(result.outcomes.first?.1.trashDestination, url)
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_compress_with_nothing_compressed_stays_with_reason() async throws {
+        for kind in 0..<5 {
+            let (tree, session, item, stat) = reclaimPublicationFixture()
+            var compression = CompressOutcome(runID: CompressRunID())
+            let expected: String
+            switch kind {
+            case 0: compression.refusal = "Not enough free space."; expected = compression.refusal!
+            case 1: compression.failed = [item.path]; expected = ReclaimCopy.failedFiles(1)
+            case 2: compression.skipped = [.alreadyCompressed: 1]; expected = SkipReason.alreadyCompressed.localizedDescription
+            case 3: compression.cancelled = true; expected = "Cancelled between batches."
+            default: expected = compression.summary
+            }
+            XCTAssertEqual(compression.compressed, 0, "precondition: no files changed")
+            let result = ExecutionResult(outcomes: [(item, .compressed(compression))], reclaimableBytes: 0, unknownSizeTrashed: 0)
+            await session.finishReclaim(result, stagingStat: stat)
+            XCTAssertEqual(session.reclaim.items.map(\.id), [item.id])
+            XCTAssertEqual(try XCTUnwrap(session.reclaim.items.first).outcomeReason, expected)
+            XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, expected)
+            withExtendedLifetime(tree) {}
+        }
+    }
+
+    func test_failed_archive_stays_with_reason() async throws {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        let run = ArchiveRun(outcome: .failed("Verification failed.", archiveTrashed: URL(fileURLWithPath: "/fake-trash/partial")))
+        let result = ExecutionResult(outcomes: [(item, .archived(run))], reclaimableBytes: 0, unknownSizeTrashed: 0)
+        await session.finishReclaim(result, stagingStat: stat)
+        XCTAssertEqual(session.reclaim.items.map(\.id), [item.id])
+        XCTAssertEqual(try XCTUnwrap(session.reclaim.items.first).outcomeReason, "Archive failed: Verification failed.")
+        XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, "Archive failed: Verification failed.")
+        XCTAssertNotNil(result.outcomes.first?.1.trashDestination, "incomplete archive retains Put Back")
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_changed_since_review_stays() async throws {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        let result = await session.execute(using: Executor(trasher: stat, stat: stat, log: stat,
+            context: GuardContext(scanRoot: tree.snapshot.rawPath(0), volumeRoot: Data("/".utf8), scanRootDevice: 7,
+                appBundle: URL(fileURLWithPath: "/app"), home: Data("/home".utf8))),
+            confirmedWarnings: [], reviewedItems: [ReclaimItem(nodeIndex: item.id, path: item.path,
+                recorded: item.recorded, recordedSize: 20, verdict: .ok, overlayRevision: 999, sessionID: session.id)], stagingStat: stat)
+        XCTAssertEqual(result.outcomes.first?.1, .skipped(.changedSinceReview))
+        XCTAssertEqual(session.reclaim.items.map(\.id), [item.id])
+        XCTAssertEqual(try XCTUnwrap(session.reclaim.items.first).outcomeReason, outcomeText(.skipped(.changedSinceReview)))
+        XCTAssertTrue(stat.trashPaths.isEmpty)
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_summary_still_lists_removed_items_with_undo() async throws {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        var compression = CompressOutcome(runID: CompressRunID()); compression.compressed = 1
+        let url = URL(fileURLWithPath: "/fake-trash/sibling")
+        let entry = LogEntry(ts: Date(), action: "trash", path: "fixture", pathB64: nil, inode: 1, device: 7, bytes: 20, trashURL: url.absoluteString, result: "ok")
+        let other = ReclaimItem(nodeIndex: tree["other"], path: tree.snapshot.rawPath(tree["other"]),
+            recorded: Recorded(fileID: tree.snapshot.fileID(tree["other"])!, device: 7, isDirectory: false),
+            recordedSize: 40, verdict: .ok, sessionID: session.id, action: .compress)
+        session.reclaim.publish([item, other])
+        XCTAssertEqual(session.reclaim.items.count, 2, "precondition: two distinct staged items")
+        var result = ExecutionResult(outcomes: [(item, .trashed(trashURL: url)), (other, .compressed(compression))],
+            reclaimableBytes: 20, unknownSizeTrashed: 0)
+        result.auditEntries = [entry]
+        await session.finishReclaim(result, stagingStat: stat)
+        XCTAssertTrue(session.reclaim.items.isEmpty)
+        XCTAssertEqual(result.outcomes.count, 2)
+        XCTAssertEqual(result.outcomes[0].0, item)
+        XCTAssertEqual(result.outcomes[0].1.trashDestination, url)
+        XCTAssertEqual(result.auditEntries, [entry])
+        XCTAssertNotNil(result.summary(locale: Locale(identifier: "en_US")))
+        guard case .compressed(let kept) = result.outcomes[1].1 else { return XCTFail("compression must remain in summary") }
+        XCTAssertEqual(kept.runID, compression.runID, "Decompress retains its run identity")
+        XCTAssertEqual(kept.compressed, 1)
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_acted_on_classifies_only_changes() {
+        let archive = URL(fileURLWithPath: "/scan/root/a.zip"), trash = URL(fileURLWithPath: "/fake-trash/a")
+        XCTAssertTrue(actedOn(.trashed(trashURL: trash)))
+        XCTAssertTrue(actedOn(.archived(ArchiveRun(outcome: .archivedAndTrashed(archive: archive, bytes: 1, trashURL: trash)))))
+        XCTAssertTrue(actedOn(.archived(ArchiveRun(outcome: .archivedOriginalsKept(archive: archive, reason: "kept")))))
+        for discarded in [nil, trash] {
+            XCTAssertFalse(actedOn(.archived(ArchiveRun(outcome: .failed("failed", archiveTrashed: discarded)))))
+        }
+        let untouched: [Outcome] = [.skipped(.changedSinceReview), .skipped(.changedSinceScan), .skippedUnavailable("unavailable"),
+            .notConfirmed(.cloudOnly), .identityChanged(.inodeChanged), .failed(errno: EIO, message: "failure")]
+        for outcome in untouched { XCTAssertFalse(actedOn(outcome), "\(outcome)") }
+        for count in [0, 1] {
+            for kind in 0..<7 {
+                var result = CompressOutcome(runID: CompressRunID()); result.compressed = count
+                switch kind {
+                case 1: result.failed = [Data("failed".utf8)]
+                case 2: result.skipped = [.alreadyCompressed: 1]
+                case 3: result.cancelled = true
+                case 4: result.manifestFailed = true
+                case 5: result.auditFailed = true
+                case 6: result.refusal = "refused"
+                default: break
+                }
+                XCTAssertEqual(actedOn(.compressed(result)), count > 0, "count=\(count), kind=\(kind)")
+            }
+        }
+    }
+
+    func test_kept_reason_survives_refresh_until_restaged_or_removed() async throws {
+        let (tree, session, item, stat) = reclaimPublicationFixture()
+        let failed = ExecutionResult(outcomes: [(item, .failed(errno: EIO, message: "First line.\nSecond line."))],
+            reclaimableBytes: 0, unknownSizeTrashed: 0)
+        await session.finishReclaim(failed, stagingStat: stat)
+        let reason = try XCTUnwrap(session.reclaim.items.first?.outcomeReason)
+        XCTAssertFalse(reason.contains("\n"))
+        XCTAssertTrue(reason.contains("First line. Second line."))
+        var compression = CompressOutcome(runID: CompressRunID()); compression.compressed = 1
+        compression.allocatedDeltas = [tree["other"]: -1]
+        let other = ReclaimItem(nodeIndex: tree["other"], path: tree.snapshot.rawPath(tree["other"]),
+            recorded: Recorded(fileID: tree.snapshot.fileID(tree["other"])!, device: 7, isDirectory: false), recordedSize: 40, verdict: .ok)
+        let revision = session.overlay.revision
+        await session.finishReclaim(ExecutionResult(outcomes: [(other, .compressed(compression))],
+            reclaimableBytes: 0, unknownSizeTrashed: 0), stagingStat: stat)
+        XCTAssertGreaterThan(session.overlay.revision, revision, "precondition: overlay triggered re-preparation")
+        XCTAssertEqual(session.reclaim.items.first?.outcomeReason, reason)
+        XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, reason)
+        session.reclaim.viewModel.setAction(.trash, for: item.id)
+        XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, reason)
+        let prepared = Reclaim.prepare([item.id], in: tree.snapshot, context: try XCTUnwrap(session.guardContext),
+            stat: stat, overlay: session.overlay, existing: session.reclaim.items, sessionID: session.id)
+        session.reclaim.publish(prepared)
+        XCTAssertEqual(session.reclaim.items.count, 1)
+        XCTAssertNil(session.reclaim.items.first?.outcomeReason)
+        session.reclaim.recordOutcomes(failed)
+        XCTAssertNotNil(session.reclaim.items.first?.outcomeReason, "precondition: removal clears an actual reason")
+        session.reclaim.unstage([item.id])
+        session.reclaim.publish([item])
+        XCTAssertNil(session.reclaim.items.first?.outcomeReason)
+        XCTAssertNil(session.reclaim.viewModel.items.first?.outcomeReason)
+        withExtendedLifetime(tree) {}
+    }
+
     func test_start_screen_preserves_session_until_a_scan_begins() async throws {
         let tree = missingChildSnapshot(), driver = CrossingScan(snapshot: tree.snapshot)
         let app = AppModel(coordinator: ScanCoordinator(progressInterval: 0.001, factory: { root, _ in

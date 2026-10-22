@@ -383,6 +383,28 @@ public func outcomeText(_ outcome: Outcome) -> String {
     }
 }
 
+func keptOutcomeReason(_ outcome: Outcome) -> String {
+    let text: String
+    switch outcome {
+    case .compressed(let result):
+        if let refusal = result.refusal { text = refusal }
+        else if !result.failed.isEmpty { text = ReclaimCopy.failedFiles(result.failed.count) }
+        else if let reason = result.skipped.keys.sorted(by: { String(describing: $0) < String(describing: $1) }).first {
+            text = reason.localizedDescription
+        } else if result.cancelled {
+            text = String(localized: "reclaim.cancelled", defaultValue: "Cancelled between batches.", bundle: L10n.bundle,
+                comment: "Cancellation preserves completed compression changes.")
+        } else { text = result.summary }
+    case .archived(let run):
+        if case .failed(let reason, _) = run.outcome {
+            text = String(localized: "reclaim.archiveFailed", defaultValue: "Archive failed: \(reason)",
+                bundle: L10n.bundle, comment: "Archive failure and its reason.")
+        } else { text = outcomeText(outcome) }
+    default: text = outcomeText(outcome)
+    }
+    return text.components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: " ")
+}
+
 public func putBackText(_ result: PutBackResult) -> String {
     switch result {
     case .restored: return String(
@@ -715,7 +737,7 @@ public final class ReclaimViewModel: ObservableObject {
                 hasUnknownContent: item.hasUnknownContent, descendants: item.descendants,
                 overlayRevision: item.overlayRevision, sessionID: item.sessionID, action: item.action,
                 actionAvailability: available, archiveFacts: item.archiveFacts, compressionSkipReason: item.compressionSkipReason,
-                isCheckingArchive: checking.contains(item.id))
+                isCheckingArchive: checking.contains(item.id), outcomeReason: item.outcomeReason)
         }
     }
     public func replace(_ items: [ReclaimItem], volumes: [UInt32: VolumeCapabilities]) {
