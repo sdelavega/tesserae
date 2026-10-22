@@ -44,8 +44,9 @@ public final class Snapshot {
     public let unreadable: [Data]
     public let skipped: [RequestedSkip]
 
-    /// nil only for snapshots built over caller-owned buffers by the test seam.
+    /// nil only for snapshots built over Swift-owned buffers by the test seam.
     private let handle: OpaquePointer?
+    private let testingOwner: AnyObject?
     private let testingFileIDs: [UInt64]
     private let _nodes: UnsafeBufferPointer<TessNode>
     private let _names: UnsafeRawBufferPointer
@@ -102,6 +103,7 @@ public final class Snapshot {
     /// Takes ownership of `handle`, a snapshot from `tess_scan_finish`.
     init(handle: OpaquePointer) {
         self.handle = handle
+        testingOwner = nil
         testingFileIDs = []
         var view = TessView()
         tess_snapshot_view(handle, &view)
@@ -205,10 +207,11 @@ public final class Snapshot {
         #endif
     }
 
-    /// Test seam: a snapshot over caller-owned buffers (no Rust handle), so
+    /// Test seam: retains the owner of its buffers (no Rust handle), so
     /// tests can present malformed nodes to the accessors' bounds checks.
-    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, root: UInt32, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [RequestedSkip] = [], stalledAt: Data? = nil, fileIDs: [UInt64] = []) {
+    init(testingNodes nodes: UnsafeBufferPointer<TessNode>, names: UnsafeRawBufferPointer, owner: AnyObject, root: UInt32, stats: TessScanStats = TessScanStats(), unreadable: [Data] = [], skipped: [RequestedSkip] = [], stalledAt: Data? = nil, fileIDs: [UInt64] = []) {
         handle = nil
+        testingOwner = owner
         precondition(fileIDs.isEmpty || fileIDs.count == nodes.count)
         testingFileIDs = fileIDs
         _nodes = nodes

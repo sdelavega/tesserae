@@ -255,6 +255,30 @@ final class AppModelTests: XCTestCase {
         withExtendedLifetime((tree, app)) {}
     }
 
+    func test_restoration_broadcast_after_fixture_release_keeps_snapshot_buffers_alive() async throws {
+        var tree: TestSnapshot? = missingChildSnapshot()
+        weak var releasedTree = tree
+        let probe = ExecutorTests.Probe()
+        let app = await crossingApp(probe, driver: CrossingScan(snapshot: tree!.snapshot))
+        app.replaceSnapshot(tree!.snapshot)
+        let session = try XCTUnwrap(app.session)
+        let expected = (0..<UInt32(session.snapshot.nodes.count)).map { session.snapshot.nameBytes($0) }
+        XCTAssertEqual(expected.count, 3)
+        XCTAssertFalse(session.changedSinceScan)
+        tree = nil
+        XCTAssertNil(releasedTree)
+        ReclaimCoordinator.shared.recordRestoration(Data("/scan/rootish/child".utf8), fileID: 99)
+        XCTAssertFalse(session.changedSinceScan)
+        ReclaimCoordinator.shared.recordRestoration(Data("/scan/root/parent/child".utf8), fileID: 99)
+        XCTAssertTrue(session.changedSinceScan)
+        XCTAssertTrue(app.stagingUnavailable)
+        XCTAssertTrue(probe.trashPaths.isEmpty)
+        for index in expected.indices {
+            XCTAssertEqual(session.snapshot.nameBytes(UInt32(index)), expected[index])
+        }
+        withExtendedLifetime(app) {}
+    }
+
     func test_restoration_registry_does_not_retain_models() async throws {
         let tree = missingChildSnapshot(), probe = ExecutorTests.Probe()
         weak var released: AppModel?
@@ -699,10 +723,9 @@ final class AppModelTests: XCTestCase {
             nodes[0].child_start = 1; nodes[0].child_count = 1_000_000
             var stats = TessScanStats(); stats.root_device = 7
             snapshot = Snapshot(testingNodes: UnsafeBufferPointer(start: nodes, count: count),
-                names: UnsafeRawBufferPointer(start: names, count: root.count + 1), root: 0, stats: stats,
+                names: UnsafeRawBufferPointer(start: names, count: root.count + 1), owner: TestSnapshotBuffers(nodes: nodes, names: names), root: 0, stats: stats,
                 fileIDs: (0..<count).map { UInt64($0 + 1) })
         }
-        deinit { nodes.deallocate(); names.deallocate() }
     }
 
     func test_restored_ordinary_child_reprepares_ancestor_and_stale_review_never_moves() async throws {

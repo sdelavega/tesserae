@@ -323,6 +323,6 @@ private final class FakeScan: ScanDriving, @unchecked Sendable {
     func finish() -> Snapshot? {
         Snapshot(
             testingNodes: UnsafeBufferPointer<TessNode>(start: nil, count: 0),
-            names: UnsafeRawBufferPointer(start: nil, count: 0), root: tag)
+            names: UnsafeRawBufferPointer(start: nil, count: 0), owner: TestSnapshotBuffers(nodes: [], names: []), root: tag)
     }
 }

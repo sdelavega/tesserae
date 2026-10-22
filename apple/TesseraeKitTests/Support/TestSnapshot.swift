@@ -19,11 +19,35 @@ import TesseraeFFI
 
 @testable import TesseraeKit
 
+/// Owns allocations used by a synthetic snapshot.
+final class TestSnapshotBuffers {
+    let nodes: UnsafeMutablePointer<TessNode>
+    let names: UnsafeMutablePointer<UInt8>
+
+    init(nodes: UnsafeMutablePointer<TessNode>, names: UnsafeMutablePointer<UInt8>) {
+        self.nodes = nodes
+        self.names = names
+    }
+
+    convenience init(nodes: [TessNode], names: [UInt8]) {
+        let nodeStorage = UnsafeMutablePointer<TessNode>.allocate(capacity: max(nodes.count, 1))
+        nodeStorage.initialize(from: nodes, count: nodes.count)
+        let nameStorage = UnsafeMutablePointer<UInt8>.allocate(capacity: max(names.count, 1))
+        nameStorage.initialize(from: names, count: names.count)
+        self.init(nodes: nodeStorage, names: nameStorage)
+    }
+
+    deinit {
+        nodes.deallocate()
+        names.deallocate()
+    }
+}
+
 /// A `Snapshot` over buffers this object owns, built breadth-first from a
 /// nested description as a freeze would lay it out: each directory's
 /// children contiguous and sorted by `allocated` descending (stable), sizes
 /// rolled up, a directory's `modified` the given one (tests state the rollup
-/// they want). Keep the `TestSnapshot` alive while using `snapshot`.
+/// they want). The snapshot retains its buffer owner.
 final class TestSnapshot {
     struct Spec {
         var name: String
@@ -61,8 +85,7 @@ final class TestSnapshot {
         }
     }
 
-    private let nodes: UnsafeMutablePointer<TessNode>
-    private let names: UnsafeMutablePointer<UInt8>
+    let buffers: TestSnapshotBuffers
     let snapshot: Snapshot
     /// Node index by name (names must be unique for this to be useful).
     let index: [String: UInt32]
@@ -109,24 +132,20 @@ final class TestSnapshot {
                 queue.append(k)
             }
         }
-        nodes = .allocate(capacity: out.count)
+        let nodes = UnsafeMutablePointer<TessNode>.allocate(capacity: out.count)
         nodes.initialize(from: out, count: out.count)
-        names = .allocate(capacity: max(bytes.count, 1))
+        let names = UnsafeMutablePointer<UInt8>.allocate(capacity: max(bytes.count, 1))
         names.initialize(from: bytes, count: bytes.count)
+        buffers = TestSnapshotBuffers(nodes: nodes, names: names)
         snapshot = Snapshot(
             testingNodes: UnsafeBufferPointer(start: nodes, count: out.count),
-            names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0, stats: stats, unreadable: unreadable, skipped: skipped, stalledAt: stalledAt, fileIDs: fileIDs ? out.indices.map { UInt64($0 + 1) } : [])
+            names: UnsafeRawBufferPointer(start: names, count: bytes.count), owner: buffers, root: 0, stats: stats, unreadable: unreadable, skipped: skipped, stalledAt: stalledAt, fileIDs: fileIDs ? out.indices.map { UInt64($0 + 1) } : [])
         index = byName
     }
 
     subscript(_ name: String) -> UInt32 {
         guard let i = index[name] else { preconditionFailure("no node named \(name)") }
         return i
-    }
-
-    deinit {
-        nodes.deallocate()
-        names.deallocate()
     }
 }
 

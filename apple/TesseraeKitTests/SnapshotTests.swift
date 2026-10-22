@@ -253,6 +253,28 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(Snapshot.releasedCount, before + 1)
     }
 
+    func test_testing_buffers_survive_the_fixture_and_release_with_snapshot() throws {
+        var fixture: TestSnapshot? = TestSnapshot(.dir("/lifetime", [
+            .file("plain", 20), .rawFile([0xff, 0x0a, 0x78], key: "raw", 10), .dir("empty", [])
+        ]))
+        weak var owner = fixture!.buffers
+        weak var releasedFixture = fixture
+        var snapshot: Snapshot? = fixture!.snapshot
+        let expected = (0..<UInt32(snapshot!.nodes.count)).map { snapshot!.nameBytes($0) }
+        XCTAssertEqual(expected.count, 4)
+        XCTAssertTrue(expected.contains(Data([0xff, 0x0a, 0x78])))
+        fixture = nil
+        XCTAssertNil(releasedFixture)
+        XCTAssertNotNil(owner, "Snapshot must retain its buffer owner after the fixture is released")
+        // Avoid dereferencing freed pointers on the deterministic red run.
+        guard owner != nil else { return }
+        for index in expected.indices {
+            XCTAssertEqual(snapshot!.nameBytes(UInt32(index)), expected[index])
+        }
+        snapshot = nil
+        XCTAssertNil(owner, "The last snapshot reference must release its buffers")
+    }
+
     // MARK: Use after release (spec §12)
 
     private static let childEnv = "TESSERAE_SNAPSHOT_TRAP_CHILD"
@@ -284,14 +306,14 @@ final class SnapshotTests: XCTestCase {
             (names + 1).initialize(to: 0x63)
             let snap = Snapshot(
                 testingNodes: UnsafeBufferPointer(start: nodes, count: 2),
-                names: UnsafeRawBufferPointer(start: names, count: 2), root: 0)
+                names: UnsafeRawBufferPointer(start: names, count: 2), owner: TestSnapshotBuffers(nodes: nodes, names: names), root: 0)
             if kind == "cycle-raw" {
                 XCTAssertEqual(snap.rawPath(1), Data("r/c".utf8))
             } else {
                 XCTAssertEqual(snap.displayPath(1), "r/c")
             }
         } else {
-            // Hand-built nodes (leaked on purpose; the child is short-lived).
+            // Hand-built malformed nodes owned by the snapshot.
             let nodes = UnsafeMutablePointer<TessNode>.allocate(capacity: 1)
             var node = TessNode()
             node.parent = UInt32.max
@@ -308,7 +330,7 @@ final class SnapshotTests: XCTestCase {
             names.initialize(to: 0x72)
             let snap = Snapshot(
                 testingNodes: UnsafeBufferPointer(start: nodes, count: 1),
-                names: UnsafeRawBufferPointer(start: names, count: 1), root: 0)
+                names: UnsafeRawBufferPointer(start: names, count: 1), owner: TestSnapshotBuffers(nodes: nodes, names: names), root: 0)
             switch kind {
             case "index": _ = snap.name(trap ? 5 : 0)
             case "name": _ = snap.name(0)
@@ -410,7 +432,7 @@ final class SnapshotTests: XCTestCase {
     func test_path_of_an_empty_snapshot_is_empty() {
         let snap = Snapshot(
             testingNodes: UnsafeBufferPointer(start: nil, count: 0),
-            names: UnsafeRawBufferPointer(start: nil, count: 0), root: UInt32.max)
+            names: UnsafeRawBufferPointer(start: nil, count: 0), owner: TestSnapshotBuffers(nodes: [], names: []), root: UInt32.max)
         XCTAssertEqual(snap.displayPath(0), "")
         XCTAssertEqual(snap.rawPath(0), Data())
     }
@@ -422,15 +444,14 @@ final class SnapshotTests: XCTestCase {
         nodes[0].child_start = 1; nodes[0].child_count = 1; nodes[0].flags = UInt16(TESS_FLAG_DIR)
         nodes[1].name_off = 1; nodes[1].name_len = 3; nodes[1].parent = 0
         let names = Array("/usr".utf8)
-        nodes.withUnsafeBufferPointer { nb in
-            names.withUnsafeBytes { rb in
-                let snap = Snapshot(testingNodes: nb, names: rb, root: 0)
-                XCTAssertEqual(snap.displayPath(0), "/")
-                XCTAssertEqual(snap.displayPath(1), "/usr")
-                XCTAssertEqual(snap.rawPath(0), Data("/".utf8))
-                XCTAssertEqual(snap.rawPath(1), Data("/usr".utf8))
-            }
-        }
+        let buffers = TestSnapshotBuffers(nodes: nodes, names: names)
+        let snap = Snapshot(
+            testingNodes: UnsafeBufferPointer(start: buffers.nodes, count: nodes.count),
+            names: UnsafeRawBufferPointer(start: buffers.names, count: names.count), owner: buffers, root: 0)
+        XCTAssertEqual(snap.displayPath(0), "/")
+        XCTAssertEqual(snap.displayPath(1), "/usr")
+        XCTAssertEqual(snap.rawPath(0), Data("/".utf8))
+        XCTAssertEqual(snap.rawPath(1), Data("/usr".utf8))
     }
 
     /// Final review I1: the raw path is the actionable identity, so it keeps
@@ -447,16 +468,15 @@ final class SnapshotTests: XCTestCase {
         nodes[1].name_off = 2; nodes[1].name_len = UInt16(weird.count); nodes[1].parent = 0
         nodes[1].child_start = 2; nodes[1].child_count = 1; nodes[1].flags = UInt16(TESS_FLAG_DIR)
         nodes[2].name_off = UInt32(2 + weird.count); nodes[2].name_len = UInt16(leaf.count); nodes[2].parent = 1
-        nodes.withUnsafeBufferPointer { nb in
-            names.withUnsafeBytes { rb in
-                let snap = Snapshot(testingNodes: nb, names: rb, root: 0)
-                let expected = Data(Array("/R/".utf8) + weird + [0x2F] + leaf)
-                XCTAssertEqual(snap.rawPath(2), expected)
-                XCTAssertEqual(snap.rawPath(1), Data(Array("/R/".utf8) + weird))
-                XCTAssertNotEqual(
-                    Data(snap.displayPath(2).utf8), expected, "precondition: the display path is lossy")
-            }
-        }
+        let buffers = TestSnapshotBuffers(nodes: nodes, names: names)
+        let snap = Snapshot(
+            testingNodes: UnsafeBufferPointer(start: buffers.nodes, count: nodes.count),
+            names: UnsafeRawBufferPointer(start: buffers.names, count: names.count), owner: buffers, root: 0)
+        let expected = Data(Array("/R/".utf8) + weird + [0x2F] + leaf)
+        XCTAssertEqual(snap.rawPath(2), expected)
+        XCTAssertEqual(snap.rawPath(1), Data(Array("/R/".utf8) + weird))
+        XCTAssertNotEqual(
+            Data(snap.displayPath(2).utf8), expected, "precondition: the display path is lossy")
     }
 
     /// A parent chain that loops (only a malformed snapshot can have one)

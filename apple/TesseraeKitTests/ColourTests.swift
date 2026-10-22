@@ -27,7 +27,7 @@ import XCTest
 final class ColourTests: XCTestCase {
     // MARK: Fixtures
 
-    /// A snapshot over a flat list of hand-built nodes; owns the buffers.
+    /// A snapshot over a flat list of hand-built nodes with retained buffer ownership.
     private final class Fake {
         struct Item {
             var name: String
@@ -57,11 +57,7 @@ final class ColourTests: XCTestCase {
             names.initialize(from: bytes, count: bytes.count)
             snapshot = Snapshot(
                 testingNodes: UnsafeBufferPointer(start: nodes, count: items.count),
-                names: UnsafeRawBufferPointer(start: names, count: bytes.count), root: 0)
-        }
-        deinit {
-            nodes.deallocate()
-            names.deallocate()
+                names: UnsafeRawBufferPointer(start: names, count: bytes.count), owner: TestSnapshotBuffers(nodes: nodes, names: names), root: 0)
         }
     }
 
