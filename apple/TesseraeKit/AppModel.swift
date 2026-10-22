@@ -178,11 +178,12 @@ public final class AppSession: ObservableObject, Identifiable {
         snapshot.root == Tile.noNode || (source.allocated(root) == 0 && !snapshot.isPermissionDenied(root))
     }
 
-    public var banner: String? {
+    public var banner: String? { banner(for: .detailed) }
+    public func banner(for detailLevel: DetailLevel) -> String? {
         if changedSinceScan { return ReclaimCopy.changedSinceScan }
         let path = snapshot.stalledAt.map { DisplayPath.text($0) }
         let scan = ScanBanner.text(for: snapshot.stats, stalledAt: path,
-            volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath)
+            volumePath: ScanReport.Location(rawPath: snapshot.rawPath(snapshot.root), reason: nil).displayPath, detailLevel: detailLevel)
         guard needsRescan else { return scan }
         let prompt = ReclaimCopy.rescan(overlay.deleted.count)
         return scan.map { $0 + " " + prompt } ?? prompt

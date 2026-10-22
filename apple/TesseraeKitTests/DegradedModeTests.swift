@@ -26,7 +26,13 @@ import TesseraeFFI
 /// App-only panes are also compiled into this target to render the shipped views.
 @MainActor
 final class DegradedModeTests: XCTestCase {
+    private var savedDetail: DetailLevel = .simple
+    override func tearDown() async throws { DetailSettings.shared.current = savedDetail }
     private let locale = Locale(identifier: "en_US")
+    override func setUp() async throws {
+        savedDetail = DetailSettings.shared.current
+        DetailSettings.shared.current = .detailed
+    }
     private let zone = TimeZone(secondsFromGMT: 0)!
     private let date = Date(timeIntervalSince1970: 1_800_000_000)
     private let size = CGSize(width: 960, height: 1200)
@@ -490,6 +496,50 @@ final class DegradedModeTests: XCTestCase {
         state.send(.reopen)
         XCTAssertTrue(state.isPresented, "reopen affordance returns to the real sheet")
         try snapshot("onboarding-reopened", OnboardingView(state: state, send: { _ in }))
+    }
+
+    func test_simple_breakdown_light_and_dark() throws {
+        DetailSettings.shared.current = .simple
+        let value = model(scan())
+        XCTAssertEqual(value.rows(for: .simple).map(\.title), ["Used", "Free", "Other"])
+        try snapshot("simple-breakdown", ReconciliationView(model: value).padding(16).frame(width: 320))
+    }
+
+    func test_simple_report_light_and_dark() throws {
+        DetailSettings.shared.current = .simple
+        var stats = TessScanStats(); stats.unreadable_count = 12; stats.dataless_files = 3
+        let tree = TestSnapshot(.dir("/Fixture", []), stats: stats)
+        let report = ScanReport(snapshot: tree.snapshot, caveats: [], access: .granted, scanTime: date,
+            appVersion: "fixture", engineVersion: "fixture", locale: locale, timeZone: zone)
+        XCTAssertEqual(report.summaryLines.count, 2)
+        try snapshot("simple-report", ScanReportView(report: report, scrolls: false))
+    }
+
+    func test_simple_reclaim_light_and_dark() throws {
+        DetailSettings.shared.current = .simple
+        let item = ReclaimItem(nodeIndex: 1, path: Data("/Fixture/Cloud folder".utf8),
+            recorded: Recorded(fileID: 1, device: 1, isDirectory: true), recordedSize: 0,
+            verdict: .warn(.containsCloudOnly), warnings: [.containsCloudOnly, .containsHardLinks])
+        let confirmation = TrashConfirmation(items: [item])
+        XCTAssertEqual(confirmation.warningRows(for: .simple)[0].texts.count, 2)
+        XCTAssertEqual(confirmation.movingCount, 0)
+        let result = ExecutionResult(outcomes: [(item, .failed(errno: 13, message: "Permission denied"))],
+            reclaimableBytes: 0, unknownSizeTrashed: 0)
+        var kept = CompressOutcome(runID: UUID())
+        kept.skipped[.notWritable] = 1
+        var keptItem = ReclaimItem(nodeIndex: 2, path: Data("/Fixture/Kept file".utf8),
+            recorded: Recorded(fileID: 2, device: 1, isDirectory: false), recordedSize: 1,
+            verdict: .ok, action: .compress)
+        keptItem.outcomeReason = keptOutcomeReason(.compressed(kept))
+        keptItem.presentationOutcome = .compressed(kept)
+        XCTAssertEqual(keptOutcomeReason(.compressed(kept), detailLevel: .simple), SkipReason.notWritable.localizedDescription)
+        try snapshot("simple-reclaim", HStack(alignment: .top, spacing: 8) {
+            ConfirmReclaimSheet(confirmation: .constant(confirmation), scrolls: false, cancel: {}, move: {})
+            VStack(alignment: .leading) {
+                ReclaimSummaryView(result: result, restore: { _ in })
+                ReclaimView(items: [keptItem], remove: { _ in }, confirm: {})
+            }.frame(width: 320)
+        }.frame(width: 960))
     }
 
     func test_scan_report_counts_and_locations() throws {

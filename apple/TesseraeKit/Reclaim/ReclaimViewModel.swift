@@ -19,7 +19,24 @@ import Combine
 import Darwin
 import Foundation
 
-public func reasonText(_ r: Reason) -> String {
+public func reasonText(_ r: Reason, detailLevel: DetailLevel = .detailed) -> String {
+    if detailLevel == .simple {
+        switch r {
+        case .cloudOnly: return String(localized: "detail.reclaim.cloud",
+            defaultValue: "Trashing removes this item from iCloud on all devices and frees no space here.",
+            bundle: L10n.bundle, comment: "Simple cloud-only Trash warning; all-device deletion must remain explicit.")
+        case .containsCloudOnly: return String(localized: "detail.reclaim.containsCloud",
+            defaultValue: "Trashing removes this folder's cloud-only items from iCloud on all devices.",
+            bundle: L10n.bundle, comment: "Simple folder cloud-deletion warning.")
+        case .containsHardLinks, .otherHardLinks: return String(localized: "detail.reclaim.links",
+            defaultValue: "Space is freed only when every hard link is gone.", bundle: L10n.bundle,
+            comment: "Simple warning that other hard links retain allocation.")
+        case .containsUnknownSize: return String(localized: "detail.reclaim.unknownSize",
+            defaultValue: "Some content couldn't be read; the size shown is only the known part.", bundle: L10n.bundle,
+            comment: "Simple incomplete-size warning.")
+        default: break
+        }
+    }
     switch r {
     case .appBundleCompress: return String(localized: "reclaimAction.appBundleCompress",
         defaultValue: "Contents are unchanged; Tesserae re-checks the signature afterwards.", bundle: L10n.bundle,
@@ -203,7 +220,11 @@ public struct TrashConfirmation {
     public var groupedForConfirmation: [(ReclaimAction, [ReclaimItem])] { confirmationGroups(items) }
     public var warningRows: [WarningRow] {
         warningItems.map { WarningRow(id: $0.id, path: $0.displayPath,
-                                      texts: itemWarnings($0).map(reasonText)) }
+                                      texts: itemWarnings($0).map { reasonText($0) }) }
+    }
+    public func warningRows(for detailLevel: DetailLevel) -> [WarningRow] {
+        warningItems.map { item in WarningRow(id: item.id, path: item.displayPath,
+            texts: itemWarnings(item).map { reasonText($0, detailLevel: detailLevel) }) }
     }
     public var checkingItems: [ReclaimItem] { items.filter(\.isCheckingArchive) }
     public var deniedItems: [ReclaimItem] { items.filter { if $0.isCheckingArchive { return false }; if case .denied = $0.verdict { return true }; return $0.actionAvailability != .available } }
@@ -278,7 +299,38 @@ public func trashSummaryText(_ result: ExecutionResult, locale: Locale = .curren
         )
 }
 
-public func outcomeText(_ outcome: Outcome) -> String {
+public func outcomeText(_ outcome: Outcome, detailLevel: DetailLevel = .detailed) -> String {
+    if detailLevel == .simple {
+        switch outcome {
+        case .failed: return String(localized: "detail.reclaim.failed",
+            defaultValue: "This item couldn't be changed. Check its permissions and try again.", bundle: L10n.bundle,
+            comment: "Simple filesystem failure without errno or internal message.")
+        case .identityChanged(.unreadable): return String(localized: "detail.reclaim.unreadableIdentity",
+            defaultValue: "Skipped: this item's identity couldn't be checked.", bundle: L10n.bundle,
+            comment: "Simple identity-read refusal without errno.")
+        case .compressed(let result): return result.displayResult(detailLevel: .simple)
+        case .archived(let run):
+            switch run.outcome {
+            case .failed(_, let discarded):
+                return discarded == nil ? String(localized: "detail.reclaim.archiveFailed",
+                    defaultValue: "The archive couldn't be created. Originals were kept.", bundle: L10n.bundle,
+                    comment: "Simple archive failure.") : String(localized: "detail.reclaim.archiveRestorable",
+                    defaultValue: "Archive failed; originals were kept. The incomplete archive is in the Trash; use Put Back to restore it.",
+                    bundle: L10n.bundle, comment: "Simple archive failure retaining recovery advice.")
+            case .archivedOriginalsKept: return String(localized: "detail.reclaim.originalsKept",
+                defaultValue: "Archive created; originals were kept because they couldn't be safely moved to Trash.",
+                bundle: L10n.bundle, comment: "Simple archive refusal to trash originals.")
+            case .archivedAndTrashed: break
+            }
+        case .skipped(let reason): return String(localized: "detail.reclaim.skipped",
+            defaultValue: "Skipped: \(reasonText(reason, detailLevel: .simple))", bundle: L10n.bundle,
+            comment: "Simple skipped-item result with its plain refusal.")
+        case .notConfirmed(let reason): return String(localized: "detail.reclaim.notConfirmed",
+            defaultValue: "Not confirmed: \(reasonText(reason, detailLevel: .simple))", bundle: L10n.bundle,
+            comment: "Simple unconfirmed-item result, keeping its warning.")
+        default: break
+        }
+    }
     switch outcome {
     case .compressed(let result): return result.displayResult
     case .archived(let run):
@@ -383,7 +435,11 @@ public func outcomeText(_ outcome: Outcome) -> String {
     }
 }
 
-func keptOutcomeReason(_ outcome: Outcome) -> String {
+public func keptOutcomeReason(_ outcome: Outcome, detailLevel: DetailLevel = .detailed) -> String {
+    if detailLevel == .simple {
+        // A kept compression row leads with its refusal or skip reason, never its success count.
+        if case .compressed = outcome {} else { return outcomeText(outcome, detailLevel: .simple) }
+    }
     let text: String
     switch outcome {
     case .compressed(let result):
@@ -737,7 +793,7 @@ public final class ReclaimViewModel: ObservableObject {
                 hasUnknownContent: item.hasUnknownContent, descendants: item.descendants,
                 overlayRevision: item.overlayRevision, sessionID: item.sessionID, action: item.action,
                 actionAvailability: available, archiveFacts: item.archiveFacts, compressionSkipReason: item.compressionSkipReason,
-                isCheckingArchive: checking.contains(item.id), outcomeReason: item.outcomeReason)
+                isCheckingArchive: checking.contains(item.id), outcomeReason: item.outcomeReason, presentationOutcome: item.presentationOutcome)
         }
     }
     public func replace(_ items: [ReclaimItem], volumes: [UInt32: VolumeCapabilities]) {

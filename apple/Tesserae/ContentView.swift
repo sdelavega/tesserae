@@ -265,6 +265,7 @@ private struct PhaseGateStatus: View {
 #endif
 
 struct SessionView: View {
+    @ObservedObject private var detail = DetailSettings.shared
     @ObservedObject var session: AppSession
     var mode: ColourMode
     var dark: Bool
@@ -284,7 +285,7 @@ struct SessionView: View {
     var body: some View {
         let generation = session.layoutGeneration
         VStack(spacing: 0) {
-            if let banner = session.banner { ScanWarningView(text: banner) }
+            if let banner = session.banner(for: detail.current) { ScanWarningView(text: banner) }
             if session.droppedTileCount > 0 {
                 ScanWarningView(text: String(
                     localized: "scan.rendering.limit",
@@ -395,7 +396,7 @@ struct SessionView: View {
                             RecentlyCompressedView(entries: reclaimUI.compressedHistory,
                                 busy: appModel.reclaimBusy || appModel.isScanning || reclaimUI.running,
                                 decompress: { entry in Task { await reclaimUI.prepareDecompression(entry, model: appModel) } })
-                            if let text = reclaimUI.decompressResult { Text(text).padding(18) }
+                            if let text = reclaimUI.decompressResult { Text(reclaimUI.decompressOutcome?.displayResult(detailLevel: detail.current) ?? text).padding(18) }
                             RecentlyTrashedView(entries: reclaimUI.history, messages: reclaimUI.messages, restoring: reclaimUI.restoring, canRestore: appModel.canPutBack,
                                 restore: { entry in Task { await reclaimUI.restore(entry, model: appModel) } })
                         }

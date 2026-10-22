@@ -20,6 +20,8 @@ import TesseraeKit
 
 /// A pane in the existing window. Nothing is exported until Copy Diagnostics.
 struct ScanReportView: View {
+    @ObservedObject private var detail = DetailSettings.shared
+    @State private var showDetails = false
     let report: ScanReport
     /// ImageRenderer cannot draw AppKit-backed scroll content. The static form
     /// renders the same report subtree for deterministic reference images.
@@ -49,17 +51,23 @@ struct ScanReportView: View {
                 defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
                 comment: "ScanReportView: The clipboard could not be written. Try Copy Diagnostics again."
             )).foregroundStyle(.red) }
+            if detail.current == .simple {
+                Button(showDetails ? String(localized: "detail.hideDetails", defaultValue: "Hide details",
+                    comment: "Collapse the full scan report.") : String(localized: "detail.showDetails", defaultValue: "Show details",
+                    comment: "Expand the full scan report without rescanning.")) { showDetails.toggle() }
+            }
             if scrolls {
                 ScrollView(.vertical) { reportText.textSelection(.enabled) }
             } else {
                 reportText
             }
         }
+        .onChange(of: detail.current) { _ in showDetails = false }
         .padding(16).frame(minWidth: 300, idealWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var reportText: some View {
-        Text(report.text).font(.system(.body, design: .monospaced))
+        Text(report.text(for: detail.current == .detailed || showDetails ? .detailed : .simple)).font(.system(.body, design: .monospaced))
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

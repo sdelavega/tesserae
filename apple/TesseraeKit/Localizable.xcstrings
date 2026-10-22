@@ -3501,6 +3501,307 @@
           }
         }
       }
+    },
+    "detail.used": {
+      "comment": "Known scanned allocation in the simple breakdown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used"
+          }
+        }
+      }
+    },
+    "detail.other": {
+      "comment": "System, snapshots and signed residual combined.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other"
+          }
+        }
+      }
+    },
+    "detail.other.help": {
+      "comment": "Help for the Other row, including signed clone accounting.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Includes snapshots, system files and space the scan can't account for. Shared blocks can make this negative. Snapshot sizes are not reported separately by macOS."
+          }
+        }
+      }
+    },
+    "detail.report.unreadable": {
+      "comment": "Count of unreadable folders in a simple report.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld folder couldn't be read"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld folders couldn't be read"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "detail.report.cloud": {
+      "comment": "Count of cloud-only items in a simple report.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld item is only in iCloud"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld items are only in iCloud"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "detail.report.errors": {
+      "comment": "Count of scan problems in a simple report.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld problem occurred during the scan"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld problems occurred during the scan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "detail.report.skipped": {
+      "comment": "Skipped locations without internal identifiers.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld location was skipped"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld locations were skipped"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "detail.report.omitted": {
+      "comment": "Lost entries or depth limit in a simple report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some items couldn't be included in the scan."
+          }
+        }
+      }
+    },
+    "detail.report.access": {
+      "comment": "Access limitation in a simple report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access is needed to include protected folders."
+          }
+        }
+      }
+    },
+    "detail.report.complete": {
+      "comment": "Simple report for a complete scan without warnings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan complete. No problems reported."
+          }
+        }
+      }
+    },
+    "detail.reclaim.cloud": {
+      "comment": "Simple cloud-only Trash warning; all-device deletion must remain explicit.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trashing removes this item from iCloud on all devices and frees no space here."
+          }
+        }
+      }
+    },
+    "detail.reclaim.containsCloud": {
+      "comment": "Simple folder cloud-deletion warning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trashing removes this folder's cloud-only items from iCloud on all devices."
+          }
+        }
+      }
+    },
+    "detail.reclaim.links": {
+      "comment": "Simple warning that other hard links retain allocation.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space is freed only when every hard link is gone."
+          }
+        }
+      }
+    },
+    "detail.reclaim.unknownSize": {
+      "comment": "Simple incomplete-size warning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some content couldn't be read; the size shown is only the known part."
+          }
+        }
+      }
+    },
+    "detail.reclaim.failed": {
+      "comment": "Simple filesystem failure without errno or internal message.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item couldn't be changed. Check its permissions and try again."
+          }
+        }
+      }
+    },
+    "detail.reclaim.unreadableIdentity": {
+      "comment": "Simple identity-read refusal without errno.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped: this item's identity couldn't be checked."
+          }
+        }
+      }
+    },
+    "detail.reclaim.archiveFailed": {
+      "comment": "Simple archive failure.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The archive couldn't be created. Originals were kept."
+          }
+        }
+      }
+    },
+    "detail.reclaim.archiveRestorable": {
+      "comment": "Simple archive failure retaining recovery advice.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive failed; originals were kept. The incomplete archive is in the Trash; use Put Back to restore it."
+          }
+        }
+      }
+    },
+    "detail.reclaim.originalsKept": {
+      "comment": "Simple archive refusal to trash originals.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive created; originals were kept because they couldn't be safely moved to Trash."
+          }
+        }
+      }
+    },
+    "detail.reclaim.skipped": {
+      "comment": "Simple skipped-item result with its plain refusal.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped: %@"
+          }
+        }
+      }
+    },
+    "detail.reclaim.notConfirmed": {
+      "comment": "Simple unconfirmed-item result, keeping its warning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not confirmed: %@"
+          }
+        }
+      }
+    },
+    "detail.reclaim.signatureFailed": {
+      "comment": "Simple signature failure without subprocess exit code.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App signature check failed."
+          }
+        }
+      }
+    },
+    "detail.scan.stopped": {
+      "comment": "Simple partial scan caveat without an internal code.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan stopped before it finished."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

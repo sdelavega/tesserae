@@ -121,7 +121,26 @@ struct TesseraeApp: App {
         }
         #endif
         Settings {
-            UpdateSettingsView(updates: updates)
+            TabView {
+                GeneralSettingsView().tabItem { Text(String(localized: "detail.general", defaultValue: "General",
+                    comment: "General settings tab.")) }
+                UpdateSettingsView(updates: updates).tabItem { Text(String(localized: "detail.updates", defaultValue: "Updates",
+                    comment: "Automatic updates settings tab.")) }
+            }.frame(width: 480, height: 210)
         }
+    }
+}
+
+private struct GeneralSettingsView: View {
+    @ObservedObject private var detail = DetailSettings.shared
+    var body: some View {
+        Form {
+            Picker(String(localized: "detail.label", defaultValue: "Detail", comment: "Presentation detail setting."), selection: $detail.current) {
+                Text(String(localized: "detail.simple", defaultValue: "Simple", comment: "Plain presentation option.")).tag(DetailLevel.simple)
+                Text(String(localized: "detail.detailed", defaultValue: "Detailed", comment: "Full technical presentation option.")).tag(DetailLevel.detailed)
+            }.pickerStyle(.segmented)
+            Text(String(localized: "detail.explanation", defaultValue: "Simple uses plain summaries; Detailed shows all technical information.",
+                comment: "One-line explanation of the presentation setting.")).font(.footnote).foregroundStyle(.secondary)
+        }.padding(24)
     }
 }

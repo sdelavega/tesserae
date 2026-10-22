@@ -25,6 +25,8 @@ import TesseraeFFI
 /// Synthetic UI references with a fixed AppKit, locale, time zone and date.
 @MainActor
 final class ReclaimSnapshotTests: XCTestCase {
+    private var savedDetail: DetailLevel = .simple
+    override func tearDown() async throws { DetailSettings.shared.current = savedDetail }
     private let locale = Locale(identifier: "en_US")
     private let zone = TimeZone(secondsFromGMT: 0)!
     private let date = Date(timeIntervalSince1970: 1_800_000_000)
@@ -33,6 +35,8 @@ final class ReclaimSnapshotTests: XCTestCase {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("SnapshotTests")
     }
     override func setUp() async throws {
+        savedDetail = DetailSettings.shared.current
+        DetailSettings.shared.current = .detailed
         _ = NSApplication.shared
     }
 

@@ -19,6 +19,7 @@ import SwiftUI
 import TesseraeKit
 
 struct ReclaimView: View {
+    @ObservedObject private var detail = DetailSettings.shared
     let items: [ReclaimItem]
     var viewModel: ReclaimViewModel?
     var advancedExpanded = false
@@ -59,7 +60,9 @@ struct ReclaimView: View {
                             comment: "ReclaimView: Remove from Reclaim Space."
                         )) { remove(item.id) }.disabled(busy)
                     }
-                    if let reason = item.outcomeReason { Text(reason).font(.callout).lineLimit(1).help(reason) }
+                    if let reason = item.outcomeReason {
+                        let reason = detail.current == .simple ? item.presentationOutcome.map { keptOutcomeReason($0, detailLevel: .simple) } ?? reason : reason
+                        Text(reason).font(.callout).lineLimit(1).help(reason) }
                     if let viewModel {
                         ReclaimActionPicker(model: viewModel, item: item, advancedExpanded: advancedExpanded)
                             .disabled(busy)
@@ -86,14 +89,14 @@ struct ReclaimView: View {
                             defaultValue: "Will be skipped",
                             comment: "ReclaimView: Will be skipped."
                         ), systemImage: "hand.raised")
-                        Text(reasonText(reason))
+                        Text(reasonText(reason, detailLevel: detail.current))
                     }
                     } else if !item.isCheckingArchive {
                         Label(String(localized: "reclaimView.will.be.skipped", defaultValue: "Will be skipped",
                             comment: "ReclaimView: Will be skipped."), systemImage: "hand.raised")
                     }
                     ForEach(Array((viewModel?.previewText(for: item) ?? []).enumerated()), id: \.offset) { _, text in Text(text) }
-                    ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(reasonText(reason)) }
+                    ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(reasonText(reason, detailLevel: detail.current)) }
                 }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
             }
             Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy)
@@ -173,6 +176,7 @@ final class ReclaimPresentation: ObservableObject {
     @Published var compressedHistory: [LogEntry] = []
     @Published var decompression: DecompressConfirmation?
     @Published var decompressResult: String?
+    @Published var decompressOutcome: CompressOutcome?
     private var decompressEngine: Compressor?
     private var decompressSession: UUID?
     private var decompressRevision: UInt64?
@@ -326,6 +330,7 @@ final class ReclaimPresentation: ObservableObject {
         running = true; cancellationRequested = false
         let task = Task {
             let result = await session.decompress(run: run, using: engine, reviewed: review)
+            decompressOutcome = result
             decompressResult = result.displayResult
             running = false; executionTask = nil
             dismissDecompression()
@@ -445,6 +450,7 @@ struct RecentlyCompressedView: View {
 }
 
 struct ConfirmDecompressSheet: View {
+    @ObservedObject private var detail = DetailSettings.shared
     @Binding var confirmation: DecompressConfirmation
     let cancel: () -> Void
     let execute: () -> Void
@@ -462,7 +468,7 @@ struct ConfirmDecompressSheet: View {
                             }.toggleStyle(.checkbox)
                         } else { Text(DisplayPath.text(row.path)) }
                         ForEach(confirmation.warnings[row.path] ?? [], id: \.self) { reason in
-                            Text(reasonText(reason)).fixedSize(horizontal: false, vertical: true)
+                            Text(reasonText(reason, detailLevel: detail.current)).fixedSize(horizontal: false, vertical: true)
                         }
                     }.padding(8)
                 }

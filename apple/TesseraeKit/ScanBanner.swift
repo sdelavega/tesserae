@@ -19,9 +19,9 @@ import TesseraeFFI
 
 public enum ScanBanner {
     /// `stalledAt` is shown as names are (`singleLine`): it is made of them.
-    public static func text(for stats: TessScanStats, stalledAt: String?, volumePath: String? = nil, locale: Locale = .current) -> String? {
+    public static func text(for stats: TessScanStats, stalledAt: String?, volumePath: String? = nil, locale: Locale = .current, detailLevel: DetailLevel = .detailed) -> String? {
         var parts: [String] = []
-        if let reason = incompleteReason(for: stats, stalledAt: stalledAt) {
+        if let reason = incompleteReason(for: stats, stalledAt: stalledAt, detailLevel: detailLevel) {
             parts.append(reason + (stats.incomplete == UInt32(TESS_INCOMPLETE_VOLUME_LOST)
                 ? volumePath.map { ": " + singleLine($0) } ?? "" : ""))
         }
@@ -48,7 +48,11 @@ public enum ScanBanner {
         )
     }
 
-    public static func incompleteReason(for stats: TessScanStats, stalledAt: String?) -> String? {
+    public static func incompleteReason(for stats: TessScanStats, stalledAt: String?, detailLevel: DetailLevel = .detailed) -> String? {
+        if detailLevel == .simple, stats.incomplete > UInt32(TESS_INCOMPLETE_VOLUME_LOST) {
+            return String(localized: "detail.scan.stopped", defaultValue: "The scan stopped before it finished.",
+                bundle: L10n.bundle, comment: "Unknown scan stop reason without an internal code.")
+        }
         switch stats.incomplete {
         case UInt32(TESS_INCOMPLETE_NONE): return nil
         case UInt32(TESS_INCOMPLETE_CANCELLED): return String(

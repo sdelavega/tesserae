@@ -69,7 +69,8 @@ class UpdatesTests(unittest.TestCase):
         self.assertRegex(app, r'Button\(String\(\s*localized: "tesseraeApp.check.for.updates",\s*'
                          r'defaultValue: "Check for Updates…",\s*comment: "[^"\n]+"\s*\)\)\s*'
                          r'\{ updates.checkForUpdates\(\) \}\s*\.disabled\(!updates.canCheckForUpdates\)')
-        self.assertRegex(app, r'Settings\s*\{\s*UpdateSettingsView\(updates: updates\)')
+        self.assertRegex(app, r'Settings\s*\{\s*TabView\s*\{\s*GeneralSettingsView\(\)\.tabItem')
+        self.assertRegex(app, r'Settings\s*\{\s*TabView\s*\{[\s\S]*?UpdateSettingsView\(updates: updates\)\.tabItem')
         model = (APPLE / "Tesserae/Updates.swift").read_text()
         self.assertRegex(model, r'Toggle\(String\(\s*localized: "updates.check.for.updates.automatically",\s*'
                          r'defaultValue: "Check for updates automatically",\s*comment: "[^"\n]+"\s*\),\s*'

@@ -79,6 +79,7 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
     public let descendants: StagedDescendants
     public var compressionSkipReason: SkipReason?
     public var isCheckingArchive: Bool
+    public var presentationOutcome: Outcome?
     public var outcomeReason: String?
     public var actionAvailability: Availability
     public var action: ReclaimAction
@@ -88,7 +89,8 @@ public struct ReclaimItem: Equatable, Identifiable, Sendable {
                 verdict: Verdict, warnings: [Reason] = [], hasUnknownContent: Bool = false,
                 descendants: StagedDescendants = StagedDescendants(), overlayRevision: UInt64 = 0, sessionID: UUID? = nil,
                 action: ReclaimAction = .trash, actionAvailability: Availability = .available, archiveFacts: ArchiveItemFacts = ArchiveItemFacts(),
-                compressionSkipReason: SkipReason? = nil, isCheckingArchive: Bool = false, outcomeReason: String? = nil) {
+                compressionSkipReason: SkipReason? = nil, isCheckingArchive: Bool = false, outcomeReason: String? = nil, presentationOutcome: Outcome? = nil) {
+        self.presentationOutcome = presentationOutcome
         self.outcomeReason = outcomeReason
         self.compressionSkipReason = compressionSkipReason
         self.isCheckingArchive = isCheckingArchive
@@ -155,7 +157,7 @@ public final class Reclaim: ObservableObject {
         let restaged = Set(nodes)
         var next = existing.map { item in
             var item = item
-            if restaged.contains(item.id) { item.outcomeReason = nil }
+            if restaged.contains(item.id) { item.outcomeReason = nil; item.presentationOutcome = nil }
             return item
         }
         var staged = Set(next.map(\.nodeIndex))
@@ -276,6 +278,7 @@ public final class Reclaim: ObservableObject {
         var next = items
         for (item, outcome) in result.outcomes where !actedOn(outcome) {
             if let index = next.firstIndex(where: { $0.id == item.id }) {
+                next[index].presentationOutcome = outcome
                 next[index].outcomeReason = keptOutcomeReason(outcome)
             }
         }

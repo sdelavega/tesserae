@@ -18,6 +18,7 @@ import SwiftUI
 import TesseraeKit
 
 struct ReclaimSummaryView: View {
+    @ObservedObject private var detail = DetailSettings.shared
     let result: ExecutionResult
     var entries: [LogEntry] = []
     var messages: [String: String] = [:]
@@ -40,7 +41,7 @@ struct ReclaimSummaryView: View {
             ForEach(Array(result.outcomes.enumerated()), id: \.offset) { _, pair in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(pair.0.displayPath).font(.headline).textSelection(.enabled)
-                    Text(outcomeText(pair.1))
+                    Text(outcomeText(pair.1, detailLevel: detail.current))
                     if let url = pair.1.trashDestination {
                         if let entry = entries.first(where: { $0.trashURL == url.absoluteString }) {
                             Button(String(

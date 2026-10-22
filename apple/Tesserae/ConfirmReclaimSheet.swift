@@ -18,6 +18,7 @@ import SwiftUI
 import TesseraeKit
 
 struct ConfirmReclaimSheet: View {
+    @ObservedObject private var detail = DetailSettings.shared
     @Binding var confirmation: TrashConfirmation
     var scrolls = true
     var cancel: () -> Void
@@ -59,7 +60,7 @@ struct ConfirmReclaimSheet: View {
             ForEach(Array(confirmation.groupedForConfirmation.enumerated()), id: \.offset) { _, group in
                 Text(group.0.title).font(.headline)
                 ForEach(group.1) { item in
-                    if let row = confirmation.warningRows.first(where: { $0.id == item.id }) {
+                    if let row = warningRow(for: item.id) {
                         warningRow(row)
                     } else {
                         Text(item.displayPath).fixedSize(horizontal: false, vertical: true)
@@ -85,11 +86,15 @@ struct ConfirmReclaimSheet: View {
                 )).font(.headline)
                 ForEach(confirmation.deniedItems) { item in
                     Text(item.displayPath).bold()
-                    if case .denied(let reason) = item.verdict { Text(reasonText(reason)) }
+                    if case .denied(let reason) = item.verdict { Text(reasonText(reason, detailLevel: detail.current)) }
                     else if case .unavailable(let reason) = item.actionAvailability { Text(reason) }
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func warningRow(for id: UInt32) -> WarningRow? {
+        if detail.current == .detailed { return confirmation.warningRows.first(where: { $0.id == id }) }
+        return confirmation.warningRows(for: .simple).first(where: { $0.id == id })
     }
     private func warningRow(_ item: WarningRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {

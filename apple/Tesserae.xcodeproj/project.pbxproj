@@ -161,6 +161,8 @@
 		E5B09A91D4AB4A6397553648 /* ArchiveContents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3ACC4D83664E4485EE9185; };
 		4EDAFFAC853048859939B4BE /* AppleArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E6B6AA57904CCFB72C35DF; };
 		1923A40347E8440CB017B5B8 /* LiveArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DD69098C5246E7A14959DD; };
+		F75000000000000000000002 /* DetailLevelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75000000000000000000001; };
+		F75000000000000000000004 /* DetailLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75000000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -362,6 +364,8 @@
 		CE3ACC4D83664E4485EE9185 /* ArchiveContents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveContents.swift; sourceTree = "<group>"; };
 		18E6B6AA57904CCFB72C35DF /* AppleArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleArchiveTests.swift; sourceTree = "<group>"; };
 		72DD69098C5246E7A14959DD /* LiveArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveArchiveTests.swift; sourceTree = "<group>"; };
+		F75000000000000000000001 /* DetailLevelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailLevelTests.swift; sourceTree = "<group>"; };
+		F75000000000000000000003 /* DetailLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/DetailLevel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -459,6 +463,7 @@
 				E03500000000000000000006 /* FullDiskAccessTests.swift */,
 				E03500000000000000000008 /* AccessReportTests.swift */,
 				E03900000000000000000006 /* ScanReportTests.swift */,
+				F75000000000000000000001 /* DetailLevelTests.swift */,
 				E03400000000000000000006 /* ReconciliationViewModelTests.swift */,
 				E03200000000000000000008 /* SnapshotFactsTests.swift */,
 				E04100000000000000000002 /* SnapshotIdentityTests.swift */,
@@ -556,6 +561,7 @@
 				75C38E56BF70B11E7DBBC176 /* Version.swift */,
 				A1B2C3D4E5F60718293A4B5C /* Snapshot.swift */,
 				E03900000000000000000002 /* ScanReport.swift */,
+				F75000000000000000000003 /* DetailLevel.swift */,
 				A2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift */,
 				E1B2C3D4E5F60718293A4B5C /* Layout */,
 				E6B2C3D4E5F60718293A4B5C /* Colour */,
@@ -878,6 +884,7 @@
 				4578FE5C5643A78DDC6C0B63 /* Version.swift in Sources */,
 				B1B2C3D4E5F60718293A4B5C /* Snapshot.swift in Sources */,
 				E03900000000000000000001 /* ScanReport.swift in Sources */,
+				F75000000000000000000004 /* DetailLevel.swift in Sources */,
 				B2B2C3D4E5F60718293A4B5C /* ScanCoordinator.swift in Sources */,
 				B3B2C3D4E5F60718293A4B5C /* TreeSource.swift in Sources */,
 				B4B2C3D4E5F60718293A4B5C /* SquarifiedLayout.swift in Sources */,
@@ -952,6 +959,7 @@
 				E03500000000000000000005 /* FullDiskAccessTests.swift in Sources */,
 				E03500000000000000000007 /* AccessReportTests.swift in Sources */,
 				E03900000000000000000005 /* ScanReportTests.swift in Sources */,
+				F75000000000000000000002 /* DetailLevelTests.swift in Sources */,
 				E03400000000000000000007 /* ReconciliationViewModelTests.swift in Sources */,
 				E03200000000000000000007 /* SnapshotFactsTests.swift in Sources */,
 				E04100000000000000000001 /* SnapshotIdentityTests.swift in Sources */,

@@ -20,6 +20,7 @@ import SwiftUI
 public struct ReconciliationView: View {
     public let model: ReconciliationViewModel
     public var grantAccess: (() -> Void)?
+    @ObservedObject private var detail = DetailSettings.shared
     @Environment(\.colorScheme) private var scheme
 
     public init(model: ReconciliationViewModel, grantAccess: (() -> Void)? = nil) {
@@ -33,18 +34,18 @@ public struct ReconciliationView: View {
                 Text(message).font(.caption).opacity(0.65)
             } else {
                 Text(model.title).font(.headline)
-                ForEach(Array(model.rows.enumerated()), id: \.offset) { _, row in
+                ForEach(Array(model.rows(for: detail.current).enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
                             Text(row.title)
                             Spacer(minLength: 2)
                             Text(row.value).monospacedDigit()
-                        }.font(.callout)
+                        }.font(.callout).help(row.help ?? "")
                         if let fraction = row.fraction {
                             GeometryReader { geometry in
                                 // One scale for every row keeps clone over-counts proportional,
                                 // even when a summand exceeds capacity. The faint track is capacity.
-                                let scale = max(1, model.rows.compactMap(\.fraction).max() ?? 1)
+                                let scale = max(1, model.rows(for: detail.current).compactMap(\.fraction).max() ?? 1)
                                 let capacityWidth = geometry.size.width / scale
                                 Rectangle().fill(Color.accentColor.opacity(0.1))
                                     .frame(width: capacityWidth)
@@ -65,11 +66,11 @@ public struct ReconciliationView: View {
                         }
                     }
                 }
-                if let text = model.purgeable { Text(text).font(.caption).opacity(0.7) }
+                if detail.current == .detailed, let text = model.purgeable { Text(text).font(.caption).opacity(0.7) }
                 if let text = model.warning {
                     Label(text, systemImage: "exclamationmark.triangle").font(.caption)
                 }
-                ForEach(Array(model.breakdownCaveats.enumerated()), id: \.offset) { _, text in
+                ForEach(Array(model.breakdownCaveats(for: detail.current).enumerated()), id: \.offset) { _, text in
                     Text(text).font(.caption).opacity(0.7)
                 }
                 if model.showGrantAccess {

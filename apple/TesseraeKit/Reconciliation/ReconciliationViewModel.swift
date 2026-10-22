@@ -24,6 +24,7 @@ public struct ReconciliationViewModel: Equatable, Sendable {
         public let fraction: Double?
         public let negative: Bool
         public var annotation: String? = nil
+        public var help: String? = nil
     }
     public let title = String(
         localized: "reconciliationViewModel.space.breakdown",
@@ -39,12 +40,19 @@ public struct ReconciliationViewModel: Equatable, Sendable {
     )
     public let scopeMessage: String?
     public let rows: [Row]
+    private let simpleRows: [Row]
+    public func rows(for detailLevel: DetailLevel) -> [Row] {
+        detailLevel == .simple ? simpleRows : rows
+    }
     public let purgeable: String?
     public let warning: String?
     public let showGrantAccess: Bool
     public let reportCaveats: [ScanReport.ReportCaveat]
     public var caveats: [String] { reportCaveats.map(\.displayText) }
     /// The report keeps `caveats`; the breakdown omits the Residual row’s explanation.
+    public func breakdownCaveats(for detailLevel: DetailLevel) -> [String] {
+        detailLevel == .simple ? reportCaveats.map(\.simpleText) : breakdownCaveats
+    }
     public var breakdownCaveats: [String] {
         Self.breakdownCaveats(rows: rows, caveats: caveats)
     }
@@ -136,6 +144,19 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             if index < sourceCaveats.count, case .partialScan = sourceCaveats[index], let raw = scan.stalledAt {
                 return .stalled(display: text, rawPath: raw)
             }
+            if index < sourceCaveats.count {
+                switch sourceCaveats[index] {
+                case .partialScan:
+                    return .presented(detailed: text, simple: String(localized: "detail.scan.stopped",
+                        defaultValue: "The scan stopped before it finished.", bundle: L10n.bundle,
+                        comment: "Simple partial scan caveat without an internal code."))
+                case .datalessNotCounted(let count):
+                    return .presented(detailed: text, simple: String(localized: "detail.report.cloud",
+                        defaultValue: "\(count) items are only in iCloud", bundle: L10n.bundle,
+                        locale: L10n.pluralLocale(locale), comment: "Simple count of cloud-only items."))
+                default: break
+                }
+            }
             return .text(text)
         }
         scopeMessage = wholeVolume ? nil : String(
@@ -145,7 +166,7 @@ public struct ReconciliationViewModel: Equatable, Sendable {
             comment: "ReconciliationViewModel: Space breakdown is available when you scan a whole volume."
         )
         guard wholeVolume else {
-            rows = []; purgeable = nil; warning = nil
+            simpleRows = []; rows = []; purgeable = nil; warning = nil
             showGrantAccess = false; return
         }
         func fraction(_ bytes: UInt64?) -> Double? {
@@ -254,6 +275,28 @@ public struct ReconciliationViewModel: Equatable, Sendable {
                 bundle: L10n.bundle,
                 comment: "ReconciliationViewModel: Free."
             ), value: size(r?.free), detail: nil, fraction: fraction(r?.free), negative: false)]
+        // Snapshot sizes are already inside the signed residual; never add them twice.
+        let other: (magnitude: UInt64, negative: Bool)? = r.flatMap { r in
+            guard let residual = r.residual else { return nil }
+            let system = r.systemVolume ?? 0
+            if residual < 0 {
+                return system >= residual.magnitude ? (system - residual.magnitude, false) : (residual.magnitude - system, true)
+            }
+            let (sum, overflow) = system.addingReportingOverflow(UInt64(residual))
+            return overflow ? nil : (sum, false)
+        }
+        simpleRows = [
+            Row(title: String(localized: "detail.used", defaultValue: "Used", bundle: L10n.bundle,
+                comment: "Known scanned allocation in the simple breakdown."), value: size(scan.allocatedSum), detail: nil,
+                fraction: fraction(scan.allocatedSum), negative: false),
+            rows[4],
+            Row(title: String(localized: "detail.other", defaultValue: "Other", bundle: L10n.bundle,
+                comment: "System, snapshots and signed residual combined."),
+                value: other.map { ($0.negative ? "−" : "") + size($0.magnitude) } ?? "—", detail: nil,
+                fraction: fraction(other?.magnitude), negative: other?.negative ?? false,
+                help: String(localized: "detail.other.help",
+                    defaultValue: "Includes snapshots, system files and space the scan can't account for. Shared blocks can make this negative. Snapshot sizes are not reported separately by macOS.",
+                    bundle: L10n.bundle, comment: "Help for the Other row, including signed clone accounting."))]
         purgeable = r?.purgeableEstimate.map { String(
             localized: "reconciliationViewModel.about.purgeable.derived",
             defaultValue: "about \(size($0)) purgeable (derived)",

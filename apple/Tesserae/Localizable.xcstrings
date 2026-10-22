@@ -1320,6 +1320,94 @@
           }
         }
       }
+    },
+    "detail.general": {
+      "comment": "General settings tab.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "General"
+          }
+        }
+      }
+    },
+    "detail.updates": {
+      "comment": "Automatic updates settings tab.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updates"
+          }
+        }
+      }
+    },
+    "detail.label": {
+      "comment": "Presentation detail setting.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detail"
+          }
+        }
+      }
+    },
+    "detail.simple": {
+      "comment": "Plain presentation option.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simple"
+          }
+        }
+      }
+    },
+    "detail.detailed": {
+      "comment": "Full technical presentation option.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detailed"
+          }
+        }
+      }
+    },
+    "detail.explanation": {
+      "comment": "One-line explanation of the presentation setting.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simple uses plain summaries; Detailed shows all technical information."
+          }
+        }
+      }
+    },
+    "detail.showDetails": {
+      "comment": "Expand the full scan report without rescanning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show details"
+          }
+        }
+      }
+    },
+    "detail.hideDetails": {
+      "comment": "Collapse the full scan report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide details"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -166,7 +166,8 @@ public struct CompressOutcome: Equatable, Sendable {
             bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Measured compression result with signed formatted savings.")
     }
     public var displayResult: String { displayResult(locale: .current) }
-    public func displayResult(locale: Locale) -> String {
+    public func displayResult(locale: Locale) -> String { displayResult(detailLevel: .detailed, locale: locale) }
+    public func displayResult(detailLevel: DetailLevel, locale: Locale = .current) -> String {
         var lines = [summary(locale: locale)]
         if let refusal { lines.append(refusal) }
         if cancelled { lines.append(String(localized: "reclaim.cancelled", defaultValue: "Cancelled between batches.",
@@ -186,14 +187,16 @@ public struct CompressOutcome: Equatable, Sendable {
             lines.append(signatureStatus == 0
                 ? String(localized: "reclaim.signaturePassed", defaultValue: "App signature check passed.",
                     bundle: L10n.bundle, comment: "Successful app signature verification after compression.")
-                : String(localized: "reclaim.signatureFailed", defaultValue: "App signature check failed (exit code \(signatureStatus)).",
+                : detailLevel == .simple ? String(localized: "detail.reclaim.signatureFailed",
+                    defaultValue: "App signature check failed.", bundle: L10n.bundle,
+                    comment: "Simple signature failure without subprocess exit code.") : String(localized: "reclaim.signatureFailed", defaultValue: "App signature check failed (exit code \(signatureStatus)).",
                     bundle: L10n.bundle, comment: "Failed app signature verification with the labelled exit code."))
         }
         if manifestFailed { lines.append(String(localized: "reclaim.manifestFailed",
             defaultValue: "The compression manifest could not be written. Some files may be unavailable for Decompress.",
             bundle: L10n.bundle, comment: "Compression manifest failure.")) }
         if auditFailed { lines.append(ReclaimCopy.logFailure) }
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: detailLevel == .simple ? "; " : "\n")
     }
     public func apply(to overlay: inout SizeOverlay, snapshot: Snapshot) {
         for (node, id) in replaced { overlay.replaceIdentity(node: node, newFileID: id) }

@@ -22,17 +22,22 @@ import TesseraeFFI
 public struct ScanReport: Equatable, Sendable {
     public enum ReportCaveat: Equatable, Sendable {
         case text(String)
+        case presented(detailed: String, simple: String)
         case stalled(display: String, rawPath: Data)
 
         public var displayText: String {
             switch self {
-            case .text(let text), .stalled(let text, _): return text
+            case .text(let text), .stalled(let text, _), .presented(let text, _): return text
             }
         }
 
+        var simpleText: String {
+            if case .presented(_, let simple) = self { return simple }
+            return displayText
+        }
         var diagnosticsText: String {
             switch self {
-            case .text(let text): return text
+            case .text(let text), .presented(let text, _): return text
             case .stalled(_, let raw):
                 var stats = TessScanStats()
                 stats.incomplete = UInt32(TESS_INCOMPLETE_STALLED)
@@ -68,6 +73,10 @@ public struct ScanReport: Equatable, Sendable {
     public let incomplete: [String]
     public let caveats: [String]
     public let text: String
+    public let summaryLines: [String]
+    public func text(for detailLevel: DetailLevel) -> String {
+        detailLevel == .simple ? summaryLines.joined(separator: "\n") : text
+    }
     private let diagnosticsText: String
 
     public init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
@@ -88,11 +97,49 @@ public struct ScanReport: Equatable, Sendable {
         )) }
         skipped = snapshot.skipped.map { Location(rawPath: $0.path, reason: $0.reason) }
         let stats = snapshot.stats
+        var plain: [String] = []
+        if stats.unreadable_count > 0 {
+            let count = stats.unreadable_count
+            plain.append(String(localized: "detail.report.unreadable", defaultValue: "\(count) folders couldn't be read",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Count of unreadable folders in a simple report."))
+        }
+        let cloud = stats.dataless_files + stats.dataless_directories
+        if cloud > 0 {
+            plain.append(String(localized: "detail.report.cloud", defaultValue: "\(cloud) items are only in iCloud",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Count of cloud-only items in a simple report."))
+        }
+        if stats.errors > 0 {
+            let count = stats.errors
+            plain.append(String(localized: "detail.report.errors", defaultValue: "\(count) problems occurred during the scan",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Count of scan problems in a simple report."))
+        }
+        if !skipped.isEmpty {
+            let count = skipped.count
+            plain.append(String(localized: "detail.report.skipped", defaultValue: "\(count) locations were skipped",
+                bundle: L10n.bundle, locale: L10n.pluralLocale(locale), comment: "Skipped locations without internal identifiers."))
+        }
+        if stats.lost_entries > 0 || stats.depth_capped > 0 {
+            plain.append(String(localized: "detail.report.omitted", defaultValue: "Some items couldn't be included in the scan.",
+                bundle: L10n.bundle, comment: "Lost entries or depth limit in a simple report."))
+        }
         self.caveats = caveats.map { displayPaths ? $0.displayText : $0.diagnosticsText }
         var reasons = ScanBanner.incompleteReason(for: stats,
             stalledAt: snapshot.stalledAt.map { path(Location(rawPath: $0, reason: nil)) }).map { [$0] } ?? []
         if snapshot.noMaterializeFailed { reasons.append(ReconciliationViewModel.downloadProtectionWarning) }
         incomplete = reasons
+        if let stop = ScanBanner.incompleteReason(for: stats,
+            stalledAt: snapshot.stalledAt.map { path(Location(rawPath: $0, reason: nil)) }, detailLevel: .simple) { plain.append(stop) }
+        if snapshot.noMaterializeFailed { plain.append(ReconciliationViewModel.downloadProtectionWarning) }
+        plain += caveats.map(\.simpleText).filter { !plain.contains($0) }
+        if access != .granted {
+            plain.append(String(localized: "detail.report.access", defaultValue: "Full Disk Access is needed to include protected folders.",
+                bundle: L10n.bundle, comment: "Access limitation in a simple report."))
+        }
+        if plain.isEmpty {
+            plain.append(String(localized: "detail.report.complete", defaultValue: "Scan complete. No problems reported.",
+                bundle: L10n.bundle, comment: "Simple report for a complete scan without warnings."))
+        }
+        summaryLines = plain
         let formatter = DateFormatter()
         formatter.locale = locale; formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
