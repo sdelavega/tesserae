@@ -649,6 +649,23 @@ impl<'a, O: DirOpener> Walker<'a, O> {
             }
         };
         let id = self.push(slot, e.name, dir, Some(e))?;
+        if e.obj_type == ObjType::Dir
+            && frame.depth == 0
+            && self.skips.root_is_volume_root
+            && matches!(e.name, b".Spotlight-V100" | b".fseventsd")
+        {
+            let path = self.report_path_of(slot, id)?;
+            slot.stats
+                .skipped_by_request
+                .try_reserve(1)
+                .map_err(|_| Incomplete::OutOfMemory)?;
+            slot.stats
+                .skipped_by_request
+                .push((path, "system-managed (macOS index)"));
+            slot.arena.get_mut(id).unwrap().flags |=
+                crate::arena::FLAG_PERM_DENIED | crate::arena::FLAG_SKIPPED_REQUEST;
+            return Ok(());
+        }
         if e.obj_type == ObjType::Dir && crate::dataless::is_dataless(e.flags) {
             let path = self.report_path_of(slot, id)?;
             slot.stats

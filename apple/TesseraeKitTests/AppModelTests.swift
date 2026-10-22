@@ -26,6 +26,73 @@ final class AppModelTests: XCTestCase {
     private let scanningPutBackMessage = "Put Back is unavailable while scanning — try again when the scan finishes, or use Finder"
     private let changedScanMessage = "Files changed since this scan — rescan to stage items"
 
+    func test_start_screen_preserves_session_until_a_scan_begins() async throws {
+        let tree = missingChildSnapshot(), driver = CrossingScan(snapshot: tree.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(progressInterval: 0.001, factory: { root, _ in
+            XCTAssertEqual(root.path, "/System/Volumes/Data")
+            driver.begin(); return driver
+        }), accessLoader: { .granted }, contextLoader: { _ in nil })
+        await app.waitForAccess()
+        app.replaceSnapshot(tree.snapshot)
+        let original = try XCTUnwrap(app.session)
+        original.reclaim.publish([ReclaimItem(nodeIndex: 0, path: Data("/scan/root".utf8),
+            recorded: Recorded(fileID: 1, device: 1, isDirectory: true), recordedSize: 100, verdict: .ok)])
+        XCTAssertEqual(original.reclaim.items.count, 1, "precondition: retained session includes staging")
+        app.showStartScreen()
+        XCTAssertTrue(app.startScreenPresented)
+        XCTAssertTrue(app.session === original)
+        app.dismissStartScreen()
+        XCTAssertFalse(app.startScreenPresented)
+        XCTAssertTrue(app.session === original)
+        app.showStartScreen()
+        let disk = try XCTUnwrap(classify([RawVolume(url: URL(fileURLWithPath: "/"), name: "Startup", local: true,
+            browsable: true, hidden: false, readOnly: false, typeName: "apfs", isDiskImage: false,
+            isTimeMachine: false, total: nil, free: nil)], startupMount: URL(fileURLWithPath: "/")).first)
+        await ReclaimCoordinator.shared.acquire()
+        app.scanVolume(disk)
+        XCTAssertTrue(app.startScreenPresented, "retain screen while waiting for scan permit")
+        XCTAssertTrue(app.session === original)
+        XCTAssertEqual(original.reclaim.items.count, 1, "retain staging until the scan actually begins")
+        ReclaimCoordinator.shared.release()
+        try await crossingWait { driver.hasStarted }
+        XCTAssertFalse(app.startScreenPresented)
+        driver.finishNow()
+        try await crossingWait { app.scanState == .finished }
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_rescan_uses_current_root_and_serialized_scan_path() async throws {
+        let tree = missingChildSnapshot(), driver = CrossingScan(snapshot: tree.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(progressInterval: 0.001, factory: { root, _ in
+            XCTAssertEqual(root.path, "/scan/root")
+            driver.begin(); return driver
+        }), accessLoader: { .granted }, contextLoader: { _ in nil })
+        await app.waitForAccess()
+        XCTAssertNil(app.session)
+        XCTAssertFalse(app.canRescan)
+        app.rescan()
+        XCTAssertFalse(app.scanPending)
+        app.replaceSnapshot(tree.snapshot)
+        let old = try XCTUnwrap(app.session)
+        XCTAssertTrue(app.canRescan)
+        await ReclaimCoordinator.shared.acquire()
+        app.rescan()
+        XCTAssertTrue(app.scanPending)
+        XCTAssertFalse(app.canRescan)
+        app.rescan()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(driver.hasStarted, "rescan waits for the shared Reclaim permit")
+        ReclaimCoordinator.shared.release()
+        try await crossingWait { driver.hasStarted }
+        XCTAssertFalse(app.canRescan)
+        driver.finishNow()
+        try await crossingWait { app.scanState == .finished }
+        XCTAssertTrue(app.canRescan)
+        XCTAssertFalse(app.session === old)
+        XCTAssertEqual(app.session?.snapshot.rawPath(0), Data("/scan/root".utf8))
+        withExtendedLifetime(tree) {}
+    }
+
     func test_other_model_scan_refuses_put_back_for_ordinary_and_dataless_children() async throws {
         for cloud in [false, true] {
             let (tree, a, probe, original, entry) = try await excludedChild(cloud: cloud)
@@ -48,11 +115,11 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(session.snapshot.nodes.count, 3)
             XCTAssertFalse(session.changedSinceScan, "Refused restore left the child in Trash")
             session.selection.nodes = [missing["parent"]]; b.stageSelection(); await b.waitForStaging()
-            XCTAssertEqual(session.jetsam.knownBytes, 20)
+            XCTAssertEqual(session.reclaim.knownBytes, 20)
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("fix4-refused-" + UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let ui = JetsamPresentation(log: JettisonLog(directory: directory), historyLoader: { [] })
-            ui.prepare(session.jetsam.items, model: b)
+            let ui = ReclaimPresentation(log: ReclaimLog(directory: directory), historyLoader: { [] })
+            ui.prepare(session.reclaim.items, model: b)
             XCTAssertTrue(ui.showingConfirmation, "B can review because the restore was refused")
             XCTAssertEqual(ui.confirmation.items.first?.recordedSize, 20)
             XCTAssertTrue(probe.trashPaths.isEmpty)
@@ -75,13 +142,13 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(session.snapshot.nodes.count, 3)
             XCTAssertFalse(session.changedSinceScan)
             session.selection.nodes = [missing["parent"]]; b.stageSelection(); await b.waitForStaging()
-            XCTAssertEqual(session.jetsam.knownBytes, 20)
-            XCTAssertEqual(session.jetsam.items.first?.descendants.count, 1)
-            XCTAssertEqual(session.jetsam.items.first?.warnings, [])
-            let reviewed = session.jetsam.items
+            XCTAssertEqual(session.reclaim.knownBytes, 20)
+            XCTAssertEqual(session.reclaim.items.first?.descendants.count, 1)
+            XCTAssertEqual(session.reclaim.items.first?.warnings, [])
+            let reviewed = session.reclaim.items
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("fix4-review-" + UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let ui = JetsamPresentation(log: JettisonLog(directory: directory), historyLoader: { [] })
+            let ui = ReclaimPresentation(log: ReclaimLog(directory: directory), historyLoader: { [] })
             ui.prepare(reviewed, model: b)
             XCTAssertTrue(ui.showingConfirmation)
             probe.trashPaths.removeAll()
@@ -149,6 +216,9 @@ final class AppModelTests: XCTestCase {
         let loading = await Task.detached { facts.waitUntilStarted() }.value
         XCTAssertTrue(loading)
         XCTAssertTrue(b.isScanning)
+        XCTAssertFalse(b.canRescan)
+        b.rescan()
+        XCTAssertFalse(b.scanPending)
         XCTAssertNil(b.session)
         mover.release.signal()
         let result = await restore.value
@@ -176,9 +246,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(String(data: rawRoot, encoding: .utf8))
         XCTAssertFalse(session.changedSinceScan)
         // A byte prefix that is not an ancestor must not invalidate this root.
-        JetsamCoordinator.shared.recordRestoration(rawRoot + Data("ish/child".utf8), fileID: 99)
+        ReclaimCoordinator.shared.recordRestoration(rawRoot + Data("ish/child".utf8), fileID: 99)
         XCTAssertFalse(session.changedSinceScan)
-        JetsamCoordinator.shared.recordRestoration(rawRoot + Data("/child".utf8), fileID: 99)
+        ReclaimCoordinator.shared.recordRestoration(rawRoot + Data("/child".utf8), fileID: 99)
         XCTAssertTrue(session.changedSinceScan)
         XCTAssertTrue(app.stagingUnavailable)
         XCTAssertTrue(probe.trashPaths.isEmpty)
@@ -253,9 +323,9 @@ final class AppModelTests: XCTestCase {
             let current = try XCTUnwrap(app.session)
             XCTAssertTrue(current !== old)
             let ctx = try XCTUnwrap(current.guardContext)
-            current.jetsam.stage([missing["parent"]], in: missing.snapshot, context: ctx, stat: p)
-            XCTAssertEqual(current.jetsam.knownBytes, 20)
-            let reviewed = current.jetsam.items
+            current.reclaim.stage([missing["parent"]], in: missing.snapshot, context: ctx, stat: p)
+            XCTAssertEqual(current.reclaim.knownBytes, 20)
+            let reviewed = current.reclaim.items
             mover.release.signal()
             let restored = await restore.value
             XCTAssertEqual(restored, .restored)
@@ -281,7 +351,7 @@ final class AppModelTests: XCTestCase {
             p.trashPaths.removeAll()
             if variant == 0 { app.replaceSnapshot(nil) }
             let mover = PutBackTests.RestoreProbe()
-            await JetsamCoordinator.shared.acquire()
+            await ReclaimCoordinator.shared.acquire()
             let restore = Task { await app.putBack(entry, stat: p, mover: mover, log: p) }
             try await crossingWait { !app.restoresInFlight.isEmpty }
             if variant >= 2 {
@@ -291,7 +361,7 @@ final class AppModelTests: XCTestCase {
                 app.prepareSnapshot(tree.snapshot)
                 await app.waitForFacts()
             } else { app.replaceSnapshot(tree.snapshot) }
-            JetsamCoordinator.shared.release()
+            ReclaimCoordinator.shared.release()
             let result = await restore.value
             XCTAssertEqual(result, .failed(scanningPutBackMessage), "queued variant \(variant)")
             XCTAssertEqual(mover.calls, 0)
@@ -317,7 +387,7 @@ final class AppModelTests: XCTestCase {
         p.entries[tree.snapshot.rawPath(child)] = .ok(Observed(device: 7, flags: 0, isDirectory: false, linkCount: 1),
             fileID: tree.snapshot.fileID(child)!, isSymlink: false)
         session.selection.nodes = [child]; app.stageSelection(); await app.waitForStaging()
-        _ = await app.executeJetsam(confirmedWarnings: [], trasher: p, stat: p, log: p)
+        _ = await app.executeReclaim(confirmedWarnings: [], trasher: p, stat: p, log: p)
         let entry = try XCTUnwrap(p.logs.last)
         p.entries[tree.snapshot.rawPath(child)] = .error(errno: ENOENT)
         let mover = HeldRestoreMover()
@@ -345,11 +415,15 @@ final class AppModelTests: XCTestCase {
         app.replaceSnapshot(tree.snapshot)
         let session = try XCTUnwrap(app.session)
         session.selection.nodes = [tree["sibling"]]; app.stageSelection(); await app.waitForStaging()
-        XCTAssertEqual(session.jetsam.knownBytes, 20)
+        XCTAssertEqual(session.reclaim.knownBytes, 20)
         let held = HeldExecutionTrasher()
-        let execute = Task { await app.executeJetsam(confirmedWarnings: [], trasher: held, stat: p, log: p) }
+        let execute = Task { await app.executeReclaim(confirmedWarnings: [], trasher: held, stat: p, log: p) }
         let started = await Task.detached { held.waitUntilStarted() }.value
         XCTAssertTrue(started)
+        XCTAssertTrue(app.isExecutingReclaim)
+        XCTAssertFalse(app.canRescan)
+        app.rescan()
+        XCTAssertFalse(app.scanPending)
         app.scan(URL(fileURLWithPath: "/scan/root"))
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertFalse(driver.hasStarted, "Snapshot capture must wait for execute publication")
@@ -406,11 +480,11 @@ final class AppModelTests: XCTestCase {
         app.replaceSnapshot(missing.snapshot)
         let session = try XCTUnwrap(app.session)
         session.selection.nodes = [missing["parent"]]; app.stageSelection(); await app.waitForStaging()
-        XCTAssertEqual(session.jetsam.knownBytes, 20)
-        let reviewed = session.jetsam.items
+        XCTAssertEqual(session.reclaim.knownBytes, 20)
+        let reviewed = session.reclaim.items
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("fix3-review-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let ui = JetsamPresentation(log: JettisonLog(directory: directory), historyLoader: { [] })
+        let ui = ReclaimPresentation(log: ReclaimLog(directory: directory), historyLoader: { [] })
         ui.prepare(reviewed, model: app)
         XCTAssertTrue(ui.showingConfirmation)
         // Exercise the publication seam independently of the busy UI, which
@@ -435,11 +509,11 @@ final class AppModelTests: XCTestCase {
                                                 tree: TestSnapshot, probe: ExecutorTests.Probe) async throws {
         XCTAssertEqual(session.banner, changedScanMessage)
         XCTAssertTrue(app.stagingUnavailable)
-        session.jetsam.clear()
+        session.reclaim.clear()
         session.selection.nodes = [tree["parent"]]
         app.stageSelection(); await app.waitForStaging()
-        XCTAssertTrue(session.jetsam.items.isEmpty, "An omitted restored child requires a new scan")
-        let result = await app.executeJetsam(confirmedWarnings: [], trasher: probe, stat: probe, log: probe)
+        XCTAssertTrue(session.reclaim.items.isEmpty, "An omitted restored child requires a new scan")
+        let result = await app.executeReclaim(confirmedWarnings: [], trasher: probe, stat: probe, log: probe)
         XCTAssertNil(result)
         XCTAssertTrue(probe.trashPaths.isEmpty)
     }
@@ -544,14 +618,14 @@ final class AppModelTests: XCTestCase {
         let start = Date()
         app.stageSelection()
         for _ in 0..<10_000 {
-            if !session.jetsam.items.isEmpty { break }
+            if !session.reclaim.items.isEmpty { break }
             try await Task.sleep(for: .milliseconds(5))
         }
         try await Task.sleep(for: .milliseconds(20))
         heartbeat.cancel(); await heartbeat.value
         XCTAssertGreaterThan(ticks, 3)
-        XCTAssertEqual(session.jetsam.items.first?.descendants.count, 1_000_000)
-        XCTAssertEqual(session.jetsam.knownBytes, 1_000_000)
+        XCTAssertEqual(session.reclaim.items.first?.descendants.count, 1_000_000)
+        XCTAssertEqual(session.reclaim.knownBytes, 1_000_000)
         XCTAssertLessThanOrEqual(maximum, 0.100, "Main actor heartbeat stalled during preparation")
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)
@@ -572,15 +646,18 @@ final class AppModelTests: XCTestCase {
             old.selection.nodes = [0]
             app.stageSelection()
             let started = await Task.detached { stat.waitUntilStarted() }.value
-            XCTAssertTrue(started); XCTAssertTrue(app.isPreparingJetsam)
-            XCTAssertTrue(old.jetsam.items.isEmpty)
+            XCTAssertTrue(started); XCTAssertTrue(app.isPreparingReclaim)
+            XCTAssertFalse(app.canRescan)
+            app.rescan()
+            XCTAssertFalse(app.scanPending)
+            XCTAssertTrue(old.reclaim.items.isEmpty)
             if replace { app.replaceSnapshot(s) } else { app.cancelStaging() }
             stat.release.signal()
             await app.waitForStaging()
             try await Task.sleep(for: .milliseconds(30))
-            XCTAssertFalse(app.isPreparingJetsam)
-            XCTAssertTrue(old.jetsam.items.isEmpty, "Stale preparation was published")
-            XCTAssertTrue(app.session?.jetsam.items.isEmpty == true)
+            XCTAssertFalse(app.isPreparingReclaim)
+            XCTAssertTrue(old.reclaim.items.isEmpty, "Stale preparation was published")
+            XCTAssertTrue(app.session?.reclaim.items.isEmpty == true)
             XCTAssertFalse(stat.timedOut)
         }
     }
@@ -640,13 +717,13 @@ final class AppModelTests: XCTestCase {
         let (t, app, p, session, entry) = try await excludedChild(cloud: cloud)
         let parent = t["parent"], child = t["child"], s = t.snapshot
         session.selection.nodes = [parent]; app.stageSelection(); await app.waitForStaging()
-        XCTAssertEqual(session.jetsam.knownBytes, 20)
-        XCTAssertEqual(session.jetsam.items.first?.descendants.count, 1)
-        XCTAssertTrue(session.jetsam.items.first?.warnings.isEmpty == true)
+        XCTAssertEqual(session.reclaim.knownBytes, 20)
+        XCTAssertEqual(session.reclaim.items.first?.descendants.count, 1)
+        XCTAssertTrue(session.reclaim.items.first?.warnings.isEmpty == true)
         let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("fix2-review-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: logDirectory) }
-        let ui = JetsamPresentation(log: JettisonLog(directory: logDirectory))
-        ui.prepare(session.jetsam.items, model: app)
+        let ui = ReclaimPresentation(log: ReclaimLog(directory: logDirectory))
+        ui.prepare(session.reclaim.items, model: app)
         XCTAssertTrue(ui.showingConfirmation)
         let reviewedRevision = session.overlay.revision
         XCTAssertEqual(ui.confirmation.overlayRevision, reviewedRevision)
@@ -665,16 +742,16 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(restored, .restored)
         XCTAssertFalse(ui.showingConfirmation, "Overlay changes invalidate the open review")
         XCTAssertGreaterThan(session.overlay.revision, reviewedRevision)
-        XCTAssertEqual(session.jetsam.items.first?.overlayRevision, session.overlay.revision)
-        XCTAssertEqual(session.jetsam.items.first?.sessionID, session.id)
+        XCTAssertEqual(session.reclaim.items.first?.overlayRevision, session.overlay.revision)
+        XCTAssertEqual(session.reclaim.items.first?.sessionID, session.id)
         p.entries[s.rawPath(child)] = .ok(Observed(device: 7, flags: cloud ? UInt32(SF_DATALESS) : 0,
             isDirectory: false, linkCount: 1), fileID: s.fileID(child)!, isSymlink: false)
         let expected: UInt64 = cloud ? 20 : 100
         XCTAssertEqual(session.source.allocated(parent), expected)
-        XCTAssertEqual(session.jetsam.knownBytes, expected)
-        XCTAssertEqual(session.jetsam.items.first?.descendants.count, 2)
-        XCTAssertEqual(session.jetsam.items.first?.warnings.contains(.containsCloudOnly), cloud)
-        XCTAssertEqual(session.jetsam.items.first?.hasUnknownContent, cloud)
+        XCTAssertEqual(session.reclaim.knownBytes, expected)
+        XCTAssertEqual(session.reclaim.items.first?.descendants.count, 2)
+        XCTAssertEqual(session.reclaim.items.first?.warnings.contains(.containsCloudOnly), cloud)
+        XCTAssertEqual(session.reclaim.items.first?.hasUnknownContent, cloud)
         p.trashPaths.removeAll()
         await ui.execute(app, trasher: p, stat: p)
         XCTAssertTrue(p.trashPaths.isEmpty, "Stale review must never reach Trash")
@@ -682,14 +759,14 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(outcomeText(stale).contains("changed since review"))
         XCTAssertEqual(session.source.allocated(parent), expected)
         // A fresh cloud warning starts unchecked and requires its own review.
-        ui.prepare(session.jetsam.items, model: app)
+        ui.prepare(session.reclaim.items, model: app)
         XCTAssertEqual(ui.confirmation.movingCount, cloud ? 0 : 1)
         if cloud {
             XCTAssertEqual(ui.confirmation.warningItems.map(\.id), [parent])
             await ui.execute(app, trasher: p, stat: p)
             XCTAssertTrue(p.trashPaths.isEmpty)
             guard case .notConfirmed = ui.result?.outcomes.first?.1 else { return XCTFail("Fresh warning needs consent") }
-            ui.prepare(session.jetsam.items, model: app)
+            ui.prepare(session.reclaim.items, model: app)
             ui.confirmation.setConfirmed(parent, true)
         }
         await ui.execute(app, trasher: p, stat: p)
@@ -707,7 +784,7 @@ final class AppModelTests: XCTestCase {
     func test_restore_in_flight_serializes_staging_and_confirmation() async throws {
         let (t, app, p, session, entry) = try await excludedChild(cloud: true)
         session.selection.nodes = [t["parent"]]; app.stageSelection(); await app.waitForStaging()
-        let oldItems = session.jetsam.items
+        let oldItems = session.reclaim.items
         XCTAssertEqual(oldItems.first?.descendants.count, 1)
         XCTAssertTrue(oldItems.first?.warnings.isEmpty == true)
         p.trashPaths.removeAll()
@@ -724,13 +801,13 @@ final class AppModelTests: XCTestCase {
                 confirmedWarnings: [], reviewedItems: oldItems, stagingStat: p)
         }
         try await Task.sleep(for: .milliseconds(30))
-        XCTAssertTrue(app.isPreparingJetsam)
-        XCTAssertEqual(session.jetsam.items, oldItems, "Preparation cannot publish during restore")
+        XCTAssertTrue(app.isPreparingReclaim)
+        XCTAssertEqual(session.reclaim.items, oldItems, "Preparation cannot publish during restore")
         XCTAssertTrue(p.trashPaths.isEmpty, "Execution must wait for the held restore")
         let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("fix2-held-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: logDirectory) }
-        let ui = JetsamPresentation(log: JettisonLog(directory: logDirectory))
-        ui.prepare(session.jetsam.items, model: app)
+        let ui = ReclaimPresentation(log: ReclaimLog(directory: logDirectory))
+        ui.prepare(session.reclaim.items, model: app)
         XCTAssertFalse(ui.showingConfirmation, "Cannot review an unfinished preparation")
         await ui.execute(app, trasher: p, stat: p)
         XCTAssertTrue(p.trashPaths.isEmpty)
@@ -744,11 +821,11 @@ final class AppModelTests: XCTestCase {
         let attempted = await execution.value
         XCTAssertEqual(attempted.outcomes.first?.1, .skipped(.changedSinceReview))
         XCTAssertTrue(p.trashPaths.isEmpty)
-        XCTAssertFalse(app.isPreparingJetsam)
-        XCTAssertEqual(session.jetsam.items.first?.descendants.count, 2)
-        XCTAssertTrue(session.jetsam.items.first?.warnings.contains(.containsCloudOnly) == true)
-        XCTAssertEqual(session.jetsam.knownBytes, session.source.allocated(t["parent"]))
-        ui.prepare(session.jetsam.items, model: app)
+        XCTAssertFalse(app.isPreparingReclaim)
+        XCTAssertEqual(session.reclaim.items.first?.descendants.count, 2)
+        XCTAssertTrue(session.reclaim.items.first?.warnings.contains(.containsCloudOnly) == true)
+        XCTAssertEqual(session.reclaim.knownBytes, session.source.allocated(t["parent"]))
+        ui.prepare(session.reclaim.items, model: app)
         XCTAssertEqual(ui.confirmation.warningItems.map(\.id), [t["parent"]])
         XCTAssertTrue(ui.confirmation.confirmedWarnings.isEmpty)
         await ui.execute(app, trasher: p, stat: p)
@@ -775,10 +852,10 @@ final class AppModelTests: XCTestCase {
         app.replaceSnapshot(s)
         let session = try XCTUnwrap(app.session), node = t["child"]
         session.selection.nodes = [node]; app.stageSelection(); await app.waitForStaging()
-        let first = await app.executeJetsam(confirmedWarnings: [node], trasher: p, stat: p, log: p)
+        let first = await app.executeReclaim(confirmedWarnings: [node], trasher: p, stat: p, log: p)
         guard case .trashed = first?.outcomes.first?.1 else { throw NSError(domain: "fixture", code: 1) }
         XCTAssertEqual(session.overlay.deleted, [node])
-        session.jetsam.clear()
+        session.reclaim.clear()
         let entry = try XCTUnwrap(p.logs.last)
         p.entries[Data("/fake-trash/child".utf8)] = .ok(Observed(device: 7, flags: cloud ? UInt32(SF_DATALESS) : 0,
             isDirectory: false, linkCount: 1), fileID: entry.inode, isSymlink: false)
@@ -799,20 +876,23 @@ final class AppModelTests: XCTestCase {
         let app = AppModel(coordinator: ScanCoordinator(), stagingStat: p, contextLoader: { _ in ctx })
         app.replaceSnapshot(s)
         let session = try XCTUnwrap(app.session)
+        session.resize(to: CGSize(width: 600, height: 400))
+        XCTAssertEqual(session.folderColours?.slots, [t["parent"]: 1])
         session.selection.nodes = [t["large"]]; app.stageSelection(); await app.waitForStaging()
-        XCTAssertEqual(session.jetsam.knownBytes, 80)
-        let first = await app.executeJetsam(confirmedWarnings: [], trasher: p, stat: p, log: p)
+        XCTAssertEqual(session.reclaim.knownBytes, 80)
+        let first = await app.executeReclaim(confirmedWarnings: [], trasher: p, stat: p, log: p)
         XCTAssertEqual(first?.reclaimableBytes, 80)
-        session.jetsam.clear()
+        session.reclaim.clear()
         XCTAssertEqual(session.source.allocated(t["parent"]), 20)
         session.selection.nodes = [t["parent"]]; app.stageSelection(); await app.waitForStaging()
-        XCTAssertEqual(session.jetsam.knownBytes, 20)
-        XCTAssertEqual(TrashConfirmation(items: session.jetsam.items).total(locale: Locale(identifier: "en_US")), "Up to " + displaySize(20, locale: Locale(identifier: "en_US")) + " staged")
-        let second = await app.executeJetsam(confirmedWarnings: [], trasher: p, stat: p, log: p)
+        XCTAssertEqual(session.reclaim.knownBytes, 20)
+        XCTAssertEqual(TrashConfirmation(items: session.reclaim.items).total(locale: Locale(identifier: "en_US")), "Up to " + displaySize(20, locale: Locale(identifier: "en_US")) + " staged")
+        let second = await app.executeReclaim(confirmedWarnings: [], trasher: p, stat: p, log: p)
         XCTAssertEqual(second?.reclaimableBytes, 20)
         XCTAssertTrue(trashSummaryText(try XCTUnwrap(second), locale: Locale(identifier: "en_US")).hasPrefix("Up to " + displaySize(20, locale: Locale(identifier: "en_US"))))
         XCTAssertEqual(p.logs.map(\.bytes), [80, 20])
         XCTAssertEqual(session.source.allocated(s.root), 0)
+        XCTAssertTrue(try XCTUnwrap(session.folderColours).slots.isEmpty)
         let e = try XCTUnwrap(p.logs.last)
         p.entries[Data("/fake-trash/parent".utf8)] = .ok(Observed(device: 7, flags: 0, isDirectory: true, linkCount: 1),
             fileID: e.inode, isSymlink: false)
@@ -821,6 +901,7 @@ final class AppModelTests: XCTestCase {
         let restored = await app.putBack(e, stat: p, mover: mover, log: p)
         XCTAssertEqual(restored, .restored)
         XCTAssertEqual(session.source.allocated(s.root), 20)
+        XCTAssertEqual(session.folderColours?.slots, [t["parent"]: 1])
         XCTAssertEqual(session.overlay.deleted, [t["large"]])
     }
 
@@ -849,7 +930,7 @@ final class AppModelTests: XCTestCase {
         app.replaceSnapshot(s)
         let old = try XCTUnwrap(app.session)
         old.selection.nodes = [t["file"]]; app.stageSelection(); await app.waitForStaging()
-        _ = await app.executeJetsam(confirmedWarnings: [], trasher: p, stat: p, log: p)
+        _ = await app.executeReclaim(confirmedWarnings: [], trasher: p, stat: p, log: p)
         XCTAssertEqual(old.overlay.deleted, [t["file"]])
         let e = try XCTUnwrap(p.logs.last), mover = HeldRestoreMover()
         p.entries[Data("/fake-trash/file".utf8)] = .ok(Observed(device: 7, flags: 0, isDirectory: false, linkCount: 1), fileID: e.inode, isSymlink: false)
@@ -939,18 +1020,18 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(chmod(unknown.path, 0o700), 0)
         session.selection.nodes = Set(nodes)
         model.stageSelection(); await model.waitForStaging()
-        let staged = Dictionary(uniqueKeysWithValues: session.jetsam.items.map { ($0.id, $0) })
+        let staged = Dictionary(uniqueKeysWithValues: session.reclaim.items.map { ($0.id, $0) })
         XCTAssertEqual(staged.count, 4)
         XCTAssertEqual(staged[nodes[0]]?.verdict, .ok)
         XCTAssertEqual(staged[nodes[1]]?.verdict, .warn(.otherHardLinks))
         XCTAssertEqual(staged[nodes[2]]?.verdict, .denied(.systemManaged))
         XCTAssertNil(staged[nodes[3]]?.recordedSize)
-        XCTAssertEqual(session.jetsam.unknownSizeCount, 1)
+        XCTAssertEqual(session.reclaim.unknownSizeCount, 1)
         let originalID = try XCTUnwrap(snapshot.fileID(nodes[0]))
         let before = session.source.allocated(snapshot.root)
-        let log = JettisonLog(directory: f.root.appendingPathComponent("audit"))
-        let ui = JetsamPresentation(log: log)
-        ui.prepare(session.jetsam.items)
+        let log = ReclaimLog(directory: f.root.appendingPathComponent("audit"))
+        let ui = ReclaimPresentation(log: log)
+        ui.prepare(session.reclaim.items)
         ui.confirmation.setConfirmed(nodes[1], true)
         await ui.execute(model, trasher: ContainedTrasher(fixtureRoot: f.root, inner: ProductionTrasher()))
         await ui.historyTask?.value
@@ -1105,6 +1186,19 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(snap.skippedByRequest.map { String(decoding: $0.path, as: UTF8.self) }.sorted(),
                 mode == .limited ? expected.sorted() : [])
             XCTAssertTrue(snap.skippedByRequest.allSatisfy { $0.reason == "limited scan" })
+            let oldSession = try XCTUnwrap(app.session)
+            XCTAssertTrue(app.canRescan)
+            app.rescan()
+            XCTAssertTrue(app.isScanning)
+            for _ in 0..<2000 {
+                if app.scanState == .finished && app.session !== oldSession { break }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTAssertFalse(app.session === oldSession)
+            XCTAssertEqual(app.session?.snapshot.stats.files, mode == .limited ? 1 : 5)
+            XCTAssertEqual(app.session?.snapshot.rawPath(0), snap.rawPath(0))
+            XCTAssertEqual(c.scanMode, mode)
+
             if mode == .limited {
                 let nodes = snap.nodes.indices.filter { snap.isSkippedByRequest(UInt32($0)) }
                 XCTAssertEqual(nodes.count, 4)
@@ -1248,13 +1342,18 @@ final class AppModelTests: XCTestCase {
         let s = try XCTUnwrap(app.session)
         s.resize(to: CGSize(width: 600, height: 400))
         XCTAssertEqual(s.tiles.first?.node, tree.snapshot.root)
+        XCTAssertEqual(s.folderColours?.slots, [tree["sub"]: 1])
+        XCTAssertEqual(s.tileColourIndex(try XCTUnwrap(s.tiles.first { $0.node == tree["one"] }), mode: .folder), 3)
         s.navigator.descend(into: tree["sub"])
         XCTAssertEqual(s.tiles.first?.node, tree["sub"])
+        XCTAssertTrue(try XCTUnwrap(s.folderColours).slots.isEmpty)
+        XCTAssertTrue(s.tiles.allSatisfy { s.tileColourIndex($0, mode: .folder) == 0 })
         s.selection.nodes = [tree["two"]]
         let selected = s.tiles.filter { $0.flags & Tile.Flag.selected != 0 }
         XCTAssertEqual(selected.map(\.node), [tree["two"]])
         s.resize(to: .zero)
         XCTAssertTrue(s.tiles.isEmpty)
+        XCTAssertNil(s.folderColours)
         s.resize(to: CGSize(width: 500, height: 300))
         XCTAssertEqual(s.tiles.first?.node, tree["sub"])
     }
@@ -1434,8 +1533,8 @@ final class AppModelTests: XCTestCase {
             let summaries: [String: [String: FrameTimer.Summary]]
         }
         let capture = try JSONDecoder().decode(Capture.self, from: Data(contentsOf: output))
-        XCTAssertEqual(capture.passes, ["depth", "age", "type-focus", "hover"])
-        XCTAssertEqual(modes, [.depth, .age(now: Date(timeIntervalSince1970: Double(t.snapshot.stats.started_at))), .typeFocus([.video, .images, .audio])])
+        XCTAssertEqual(capture.passes, ["folder", "age", "type-focus", "hover"])
+        XCTAssertEqual(modes, [.folder, .age(now: Date(timeIntervalSince1970: Double(t.snapshot.stats.started_at))), .typeFocus([.video, .images, .audio])])
         XCTAssertEqual(Set(capture.summaries.keys), Set(capture.passes))
         XCTAssertEqual(capture.summaries["hover"]?["hover"]?.count, 240)
         XCTAssertEqual(capture.root, "/gate")
@@ -1667,18 +1766,18 @@ final class AppModelTests: XCTestCase {
         let b = TestSnapshot(.dir("/B", [.file("one.txt", 20)]))
         let coordinator = TreemapView.Coordinator()
         var tiles = [Tile(rect: CGRect(x: 0, y: 0, width: 100, height: 80), node: 1, depth: 0)]
-        var palette = Palette.colours(.depth, dark: false)
+        var palette = Palette.colours(.folder, dark: false)
         var calls = 0
         func install(_ snapshot: Snapshot?, _ mode: ColourMode?, dark: Bool = false) {
             coordinator.updateRenderer(renderer, tiles: tiles, palette: palette, dark: dark,
                 snapshot: snapshot, mode: mode, colourOf: { _ in calls += 1; return 2 })
         }
-        install(a.snapshot, .depth)
+        install(a.snapshot, .folder)
         XCTAssertEqual(calls, 1)
-        install(a.snapshot, .depth)
+        install(a.snapshot, .folder)
         XCTAssertEqual(calls, 1, "hover or zoom-state updates do not rebuild identical input")
         tiles[0].flags |= Tile.Flag.selected
-        install(a.snapshot, .depth)
+        install(a.snapshot, .folder)
         XCTAssertEqual(calls, 2, "selection invalidates the input")
         install(a.snapshot, .typeFocus([.video]))
         XCTAssertEqual(calls, 3, "a mode change invalidates even if its palette bytes match")

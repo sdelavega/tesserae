@@ -47,7 +47,11 @@ public final class Navigator: ObservableObject {
     public let snapshot: Snapshot
     @Published public private(set) var root: UInt32
 
-    public init(snapshot: Snapshot) {
+    private let rootDisplayName: String?
+
+    public init(snapshot: Snapshot, startupDiskName: String? = nil) {
+        rootDisplayName = snapshot.root != Tile.noNode && snapshot.rawPath(snapshot.root) == Data(StartupDisk.root.path.utf8)
+            ? (startupDiskName ?? StartupDisk.displayName) : nil
         self.snapshot = snapshot
         root = snapshot.root
     }
@@ -67,7 +71,7 @@ public final class Navigator: ObservableObject {
     /// The `breadcrumb` with each folder's name as the user reads it
     /// (`Snapshot.displayName`), for the breadcrumb bar.
     public var breadcrumbItems: [BreadcrumbItem] {
-        breadcrumb.map { BreadcrumbItem(node: $0, title: snapshot.displayName($0)) }
+        breadcrumb.map { BreadcrumbItem(node: $0, title: $0 == snapshot.root ? (rootDisplayName ?? snapshot.displayName($0)) : snapshot.displayName($0)) }
     }
 
     /// Whether `descend(into: node)` would change `root`.

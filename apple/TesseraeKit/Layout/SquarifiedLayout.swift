@@ -24,11 +24,21 @@ public struct LayoutParameters: Sendable {
     public var cullArea: CGFloat = 16
     /// At most this many tiles are emitted.
     public var budget = 50_000
+    public var headerHeight: CGFloat = 16
+    public var headerMinWidth: CGFloat = 96
+    public var headerMinHeight: CGFloat = 48
+    public var showHeaders: Bool = true
 
-    public init(subdivideMin: CGFloat = 24, cullArea: CGFloat = 16, budget: Int = 50_000) {
+    public init(subdivideMin: CGFloat = 24, cullArea: CGFloat = 16, budget: Int = 50_000,
+        headerHeight: CGFloat = 16, headerMinWidth: CGFloat = 96, headerMinHeight: CGFloat = 48, showHeaders: Bool = true
+    ) {
         self.subdivideMin = subdivideMin
         self.cullArea = cullArea
         self.budget = budget
+        self.headerHeight = headerHeight
+        self.headerMinWidth = headerMinWidth
+        self.headerMinHeight = headerMinHeight
+        self.showHeaders = showHeaders
     }
 }
 
@@ -40,7 +50,7 @@ public struct LayoutParameters: Sendable {
 /// * Every emitted tile is a node's whole share of its parent's rect; a
 ///   directory that is subdivided keeps its own tile (painted first, so the
 ///   renderer can draw its nesting border) and its children tile that rect
-///   exactly, without padding.
+///   below any reserved folder header, without padding.
 /// * A directory tile whose smaller side is below `subdivideMin` is terminal.
 /// * Zero-size children get no area, so they are left out of the layout
 ///   entirely: no tile, and not counted in an aggregate. A zero-size root
@@ -95,25 +105,38 @@ public func squarify(
     }
     guard rootBytes > 0 || src.isDirectory(root) else { return [] }
 
+    precondition(p.headerHeight.isFinite && p.headerHeight > 0)
+    precondition(p.headerMinWidth.isFinite && p.headerMinWidth > 0)
+    precondition(p.headerMinHeight.isFinite && p.headerMinHeight > p.headerHeight)
     var tiles: [Tile] = []
     tiles.reserveCapacity(min(p.budget, 4096))
     tiles.append(Tile(rect: bounds, node: root, depth: 0))
 
     // Directories waiting to be subdivided, in breadth-first order.
-    var queue: [(node: UInt32, rect: CGRect, depth: UInt8)] = []
+    var queue: [(node: UInt32, rect: CGRect, depth: UInt8, index: Int)] = []
     if src.isDirectory(root) && min(bounds.width, bounds.height) >= p.subdivideMin {
-        queue.append((root, bounds, 0))
+        queue.append((root, bounds, 0, 0))
     }
     var head = 0
     var row = SquarifyScratch()
     while head < queue.count {
-        let (node, rect, depth) = queue[head]
+        let (node, rect, depth, index) = queue[head]
         head += 1
         let remaining = p.budget - tiles.count
         if remaining <= 0 { break }
+        // The navigation root is named by the breadcrumb. Its children keep
+        // their Phase 5 rectangles (and Folder colour adjacency slots).
+        let header = p.showHeaders && node != root && rect.width >= p.headerMinWidth && rect.height >= p.headerMinHeight
+        var content = rect
+        if header { content.origin.y += p.headerHeight; content.size.height -= p.headerHeight }
+        let before = tiles.count
         layoutChildren(
-            src, of: node, in: rect, depth: depth, remaining: remaining, p,
+            src, of: node, in: content, depth: depth, remaining: remaining, p,
             scratch: &row, tiles: &tiles, queue: &queue)
+        if header && tiles.count > before {
+            tiles[index].flags |= Tile.Flag.header
+            tiles[index].headerHeight = p.headerHeight
+        }
     }
     // A zero-size root shows only its unreadable children, if any.
     if rootBytes == 0 && tiles.count == 1 { return [] }
@@ -168,7 +191,7 @@ private func firstBelow(_ range: Range<Int>, _ isBelow: (Int) -> Bool) -> Int {
 private func layoutChildren(
     _ src: some TreeSource, of node: UInt32, in rect: CGRect, depth: UInt8, remaining: Int,
     _ p: LayoutParameters, scratch: inout SquarifyScratch, tiles: inout [Tile],
-    queue: inout [(node: UInt32, rect: CGRect, depth: UInt8)]
+    queue: inout [(node: UInt32, rect: CGRect, depth: UInt8, index: Int)]
 ) {
     let range = src.children(node)
     let total = src.allocated(node)
@@ -271,7 +294,7 @@ private func layoutChildren(
             let c = range[range.startIndex + i]
             tiles.append(Tile(rect: r, node: c, depth: childDepth, parent: node))
             if src.isDirectory(c) && min(r.width, r.height) >= p.subdivideMin {
-                queue.append((c, r, childDepth))
+                queue.append((c, r, childDepth, tiles.count - 1))
             }
         } else if i == aggregateIndex {
             tiles.append(

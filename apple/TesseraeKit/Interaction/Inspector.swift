@@ -44,11 +44,31 @@ public struct InspectorInfo: Equatable {
 
         public var displayName: String {
             switch self {
-            case .folder: return "Folder"
-            case .file: return "File"
+            case .folder: return String(
+                localized: "inspector.folder",
+                defaultValue: "Folder",
+                bundle: L10n.bundle,
+                comment: "Inspector: Folder."
+            )
+            case .file: return String(
+                localized: "inspector.file",
+                defaultValue: "File",
+                bundle: L10n.bundle,
+                comment: "Inspector: File."
+            )
             case .fileKind(let k): return k.displayName
-            case .aggregate: return "Smaller items"
-            case .unreadable: return "Unreadable folders"
+            case .aggregate: return String(
+                localized: "inspector.smaller.items",
+                defaultValue: "Smaller items",
+                bundle: L10n.bundle,
+                comment: "Inspector: Smaller items."
+            )
+            case .unreadable: return String(
+                localized: "inspector.unreadable.folders",
+                defaultValue: "Unreadable folders",
+                bundle: L10n.bundle,
+                comment: "Inspector: Unreadable folders."
+            )
             }
         }
     }
@@ -115,12 +135,24 @@ public struct InspectorInfo: Equatable {
     /// An aggregate's title in two parts, "N smaller items" and its size, so
     /// a caller that has to shorten the title can keep the size whole.
     static func aggregateParts(count n: UInt32, bytes: UInt64, locale: Locale) -> (words: String, size: String) {
-        ("\(displayCount(n, locale: locale)) smaller \(n == 1 ? "item" : "items")", displaySize(bytes, locale: locale))
+        (String(
+            localized: "inspector.smaller.items.v2",
+            defaultValue: "\(n) smaller items",
+            bundle: L10n.bundle,
+            locale: L10n.pluralLocale(locale),
+            comment: "Inspector: {n} smaller items."
+        ), displaySize(bytes, locale: locale))
     }
 
     /// "N unreadable folders".
     static func unreadableWords(count n: UInt32, locale: Locale) -> String {
-        "\(displayCount(n, locale: locale)) unreadable \(n == 1 ? "folder" : "folders")"
+        String(
+            localized: "inspector.unreadable.folders.v2",
+            defaultValue: "\(n) unreadable folders",
+            bundle: L10n.bundle,
+            locale: L10n.pluralLocale(locale),
+            comment: "Inspector: {n} unreadable folders."
+        )
     }
 }
 
@@ -143,11 +175,36 @@ extension FileKind {
     /// The inspector's name for a file of this kind.
     public var displayName: String {
         switch self {
-        case .video: return "Video"
-        case .images: return "Image"
-        case .audio: return "Audio"
-        case .archives: return "Archive"
-        case .documents: return "Document"
+        case .video: return String(
+            localized: "inspector.video",
+            defaultValue: "Video",
+            bundle: L10n.bundle,
+            comment: "Inspector: Video."
+        )
+        case .images: return String(
+            localized: "inspector.image",
+            defaultValue: "Image",
+            bundle: L10n.bundle,
+            comment: "Inspector: Image."
+        )
+        case .audio: return String(
+            localized: "inspector.audio",
+            defaultValue: "Audio",
+            bundle: L10n.bundle,
+            comment: "Inspector: Audio."
+        )
+        case .archives: return String(
+            localized: "inspector.archive",
+            defaultValue: "Archive",
+            bundle: L10n.bundle,
+            comment: "Inspector: Archive."
+        )
+        case .documents: return String(
+            localized: "inspector.document",
+            defaultValue: "Document",
+            bundle: L10n.bundle,
+            comment: "Inspector: Document."
+        )
         }
     }
 }
@@ -169,12 +226,12 @@ func nodeKind(_ node: UInt32, in s: Snapshot) -> InspectorInfo.Kind {
 ///   the scan's start (the freeze's rollup). A stored 0 is what the scan
 ///   records when it got no time (the attribute was not returned), so it is
 ///   reported as unknown (nil), not as 1 January 1970.
-public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
+public func inspect(_ node: UInt32, in s: Snapshot, rootName: String? = nil) -> InspectorInfo {
     precondition(Int(node) < s.nodes.count, "inspect: node \(node) outside the snapshot")
     let n = s.nodes[Int(node)]
     let kind = nodeKind(node, in: s)
     return InspectorInfo(
-        subject: .node(node, rawPath: s.rawPath(node), displayPath: s.displayPath(node)), allocated: n.allocated, logical: n.logical, kind: kind,
+        subject: .node(node, rawPath: s.rawPath(node), displayPath: joinedForDisplay(relativePath(of: node, in: s, rootName: rootName ?? s.scanRootName))), allocated: n.allocated, logical: n.logical, kind: kind,
         modified: n.modified == 0 ? nil : Date(timeIntervalSince1970: TimeInterval(n.modified)))
 }
 
@@ -183,11 +240,11 @@ public func inspect(_ node: UInt32, in s: Snapshot) -> InspectorInfo {
 /// their logical size summed from the snapshot); the collapsed
 /// permission-denied placeholder reports how many folders it stands for.
 /// Neither has a path or a date.
-public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot, overlay: SizeOverlay = SizeOverlay()) -> InspectorInfo {
+public func inspect(tileAt index: Int, in tiles: [Tile], snapshot s: Snapshot, overlay: SizeOverlay = SizeOverlay(), rootName: String? = nil) -> InspectorInfo {
     precondition(tiles.indices.contains(index), "inspect: tile \(index) outside the list")
     let t = tiles[index]
     if t.node != Tile.noNode {
-        var info = inspect(t.node, in: s)
+        var info = inspect(t.node, in: s, rootName: rootName)
         info.allocated = OverlaySource(s, overlay).allocated(t.node)
         info.logical = OverlaySource(s, overlay).logical(t.node)
         return info

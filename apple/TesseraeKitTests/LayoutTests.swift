@@ -87,6 +87,12 @@ final class LayoutTests: XCTestCase {
         return groups.values.sorted { $0.parentIndex < $1.parentIndex }
     }
 
+    func contentRect(_ tile: Tile) -> CGRect {
+        var rect = tile.rect
+        if let header = tile.headerRect { rect.origin.y += header.height; rect.size.height -= header.height }
+        return rect
+    }
+
     static func area(_ r: CGRect) -> Double { Double(r.width) * Double(r.height) }
 
     /// The area of the strip that holds `tiles` placeholder squares in a
@@ -161,12 +167,12 @@ final class LayoutTests: XCTestCase {
                 // of a parent, so the tiles plus those cells cover it.
                 if t.allocated(g.parent.node) > 0 {
                     let ph = g.children.filter(\.tile.isPermissionDenied)
-                    let empty = stripArea(in: g.parent.rect, tiles: ph.count) - ph.reduce(0.0) { $0 + Self.area($1.tile.rect) }
+                    let empty = stripArea(in: contentRect(g.parent), tiles: ph.count) - ph.reduce(0.0) { $0 + Self.area($1.tile.rect) }
                     XCTAssertGreaterThanOrEqual(empty, -1e-6 * pa)
-                    XCTAssertEqual(sum + empty, pa, accuracy: 1e-6 * pa, "children do not cover parent \(g.parent.node)")
+                    XCTAssertEqual(sum + empty + Self.area(g.parent.headerRect ?? .zero), pa, accuracy: 1e-6 * pa, "children do not cover parent \(g.parent.node)")
                 }
                 let slack = 1e-9 * max(g.parent.rect.width, g.parent.rect.height)
-                let outer = g.parent.rect.insetBy(dx: -slack, dy: -slack)
+                let outer = contentRect(g.parent).insetBy(dx: -slack, dy: -slack)
                 for c in g.children {
                     XCTAssertTrue(outer.contains(c.tile.rect), "\(c.tile.rect) outside parent \(g.parent.rect)")
                     if c.tile.isAggregate && !c.tile.isPermissionDenied { aggregates += 1 }
@@ -196,7 +202,7 @@ final class LayoutTests: XCTestCase {
                 // Permission-denied placeholders have a fixed area, not a
                 // size; the sized children share the rect their strip leaves.
                 let placeholders = g.children.filter(\.tile.isPermissionDenied)
-                let pa = Self.area(g.parent.rect) - stripArea(in: g.parent.rect, tiles: placeholders.count)
+                let pa = Self.area(contentRect(g.parent)) - stripArea(in: contentRect(g.parent), tiles: placeholders.count)
                 let pb = Double(t.allocated(g.parent.node))
                 for c in g.children where !c.tile.isPermissionDenied {
                     let bytes = c.tile.isAggregate ? c.tile.aggregateBytes : t.allocated(c.tile.node)
@@ -461,8 +467,8 @@ final class LayoutTests: XCTestCase {
                 let pa = Self.area(g.parent.rect)
                 let sum = g.children.reduce(0.0) { $0 + Self.area($1.tile.rect) }
                 let held = g.children.filter(\.tile.isPermissionDenied)
-                let empty = stripArea(in: g.parent.rect, tiles: held.count) - held.reduce(0.0) { $0 + Self.area($1.tile.rect) }
-                XCTAssertEqual(sum + empty, pa, accuracy: 1e-6 * pa, "seed \(seed): budget broke coverage")
+                let empty = stripArea(in: contentRect(g.parent), tiles: held.count) - held.reduce(0.0) { $0 + Self.area($1.tile.rect) }
+                XCTAssertEqual(sum + empty + Self.area(g.parent.headerRect ?? .zero), pa, accuracy: 1e-6 * pa, "seed \(seed): budget broke coverage")
             }
             if testRun!.failureCount > 0 {
                 print("budget: failing seed \(seed)")

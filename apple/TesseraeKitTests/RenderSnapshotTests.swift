@@ -167,10 +167,9 @@ final class RenderSnapshotTests: XCTestCase {
         squarify(tree, root: tree.rootIndex, in: bounds)
     }
 
-    /// Depth mode's colours for layout tiles (what `colourIndex(for:in:mode:)`
-    /// gives on a snapshot): the ramp cycles every five levels.
-    private static func depthIndex(_ t: Tile) -> UInt16 {
-        t.isPermissionDenied ? UInt16(Palette.statusIndex) : UInt16(Palette.firstColourIndex + Int(t.depth) % 5)
+    /// Explicit indices for renderer pixel-rule tests, independent of tree ancestry.
+    private static func testIndex(_ t: Tile) -> UInt16 {
+        t.isPermissionDenied ? UInt16(Palette.statusIndex) : UInt16(Palette.firstColourIndex + min(Int(t.depth), 3))
     }
 
     /// Type-focus-like colours: denied is status, aggregates neutral, and files
@@ -190,26 +189,40 @@ final class RenderSnapshotTests: XCTestCase {
             tiles: tiles, colours: colours, colourOf: colourOf, size: size, scale: scale)
     }
 
-    // MARK: References
-
-    func test_fixed_tree_depth_mode_light_matches_reference() throws {
-        let tiles = Self.tiles(of: Self.fixedTree())
-        XCTAssertGreaterThanOrEqual(Set(tiles.map(\.depth)).count, 4, "precondition: several depths")
-        XCTAssertGreaterThan(tiles.count, 12, "precondition: many tiles")
-        let image = render(tiles, Palette.colours(.depth, dark: false), Self.depthIndex, dark: false)
-        XCTAssertEqual(image.width, 240)
-        try assertMatchesReference(image, named: "fixed-tree-depth-light")
+    private static func fixedSnapshot() -> TestSnapshot {
+        let tree = fixedTree()
+        func spec(_ node: UInt32) -> TestSnapshot.Spec {
+            let name = "node-\(node)"
+            if tree.isPermissionDenied(node) { return .denied(name) }
+            if tree.isDirectory(node) { return .dir(name, tree.children(node).map(spec)) }
+            return .file(name, tree.allocated(node))
+        }
+        return TestSnapshot(spec(tree.rootIndex))
     }
 
-    func test_fixed_tree_depth_mode_dark_matches_reference() throws {
-        let tiles = Self.tiles(of: Self.fixedTree())
+    // MARK: References
+
+    func test_fixed_tree_folder_mode_light_matches_reference() throws {
+        try checkFolderReference(dark: false, scale: 1, name: "fixed-tree-folder-light")
+    }
+
+    func test_fixed_tree_folder_mode_dark_matches_reference() throws {
+        try checkFolderReference(dark: true, scale: 2, name: "fixed-tree-folder-dark-2x")
+    }
+
+    private func checkFolderReference(dark: Bool, scale: CGFloat, name: String) throws {
+        let tree = Self.fixedSnapshot(), s = tree.snapshot
+        let tiles = squarify(s, root: s.root, in: Self.bounds)
+        let folders = FolderColours(tiles: tiles, root: s.root, source: s)
+        XCTAssertGreaterThan(folders.slots.count, 1)
         XCTAssertGreaterThanOrEqual(Set(tiles.map(\.depth)).count, 4, "precondition: several depths")
-        // At scale 2, so the 1-device-pixel border is a half-point border.
-        let image = render(
-            tiles, Palette.colours(.depth, dark: true), Self.depthIndex, dark: true, scale: 2)
-        XCTAssertEqual(image.width, 480)
-        XCTAssertEqual(image.height, 320)
-        try assertMatchesReference(image, named: "fixed-tree-depth-dark-2x")
+        XCTAssertGreaterThan(tiles.count, 12, "precondition: many tiles")
+        let image = render(tiles, Palette.colours(.folder, dark: dark), {
+            colourIndex(for: $0, in: s, mode: .folder, slots: folders.slots, rootChildOf: { folders.rootChildren[$0] })
+        }, dark: dark, scale: scale)
+        XCTAssertEqual(image.width, Int(240 * scale))
+        XCTAssertEqual(image.height, Int(160 * scale))
+        try assertMatchesReference(image, named: name)
     }
 
     func test_type_focus_and_permission_denied_tiles_match_reference() throws {
@@ -237,12 +250,12 @@ final class RenderSnapshotTests: XCTestCase {
     // MARK: Pixel rules
 
     func test_fill_border_and_painter_order_pixels() throws {
-        let colours = Palette.colours(.depth, dark: false)
+        let colours = Palette.colours(.folder, dark: false)
         let tiles = [
             Tile(rect: CGRect(x: 0, y: 0, width: 20, height: 20), node: 0, depth: 0),
             Tile(rect: CGRect(x: 5, y: 6, width: 10, height: 8), node: 1, depth: 3),
         ]
-        let image = render(tiles, colours, Self.depthIndex, dark: false, size: CGSize(width: 24, height: 24))
+        let image = render(tiles, colours, Self.testIndex, dark: false, size: CGSize(width: 24, height: 24))
         let r = Raster(image)
         func q(_ c: SIMD4<Float>, _ s: Float) -> [Int] {
             [Int((c.x * s * 255).rounded()), Int((c.y * s * 255).rounded()), Int((c.z * s * 255).rounded()), 255]
@@ -266,7 +279,7 @@ final class RenderSnapshotTests: XCTestCase {
 
     func test_tiny_and_zero_sizes_emit_no_nan() throws {
         let tree = Self.fixedTree()
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         var checkedRects = 0
         let metal = MTLCreateSystemDefaultDevice().flatMap { TreemapRenderer(device: $0) }
         for side: CGFloat in [0, 0.5, 1] {
@@ -288,7 +301,7 @@ final class RenderSnapshotTests: XCTestCase {
                 Tile(rect: CGRect(x: 0, y: 0, width: 0, height: 0), node: 4, depth: 0),
             ]
             for scale: CGFloat in [1, 2] {
-                let image = render(tiles + nasty, palette, Self.depthIndex, dark: false, size: b.size, scale: scale)
+                let image = render(tiles + nasty, palette, Self.testIndex, dark: false, size: b.size, scale: scale)
                 XCTAssertGreaterThanOrEqual(image.width, 1)
                 XCTAssertGreaterThanOrEqual(image.height, 1)
                 XCTAssertLessThanOrEqual(image.width, Int(side * scale) + 1, "side \(side)")
@@ -302,7 +315,7 @@ final class RenderSnapshotTests: XCTestCase {
                                    Int((want.z * 255).rounded()), 255], "side \(side): the huge tile's fill")
             }
             if let metal = metal {
-                metal.update(tiles: tiles + nasty, colourOf: Self.depthIndex, palette: palette)
+                metal.update(tiles: tiles + nasty, colourOf: Self.testIndex, palette: palette)
                 let image = metal.renderOffscreen(size: b.size, scale: 1)
                 XCTAssertGreaterThanOrEqual(image.width, 1, "Metal side \(side)")
                 XCTAssertGreaterThanOrEqual(image.height, 1, "Metal side \(side)")
@@ -325,7 +338,7 @@ final class RenderSnapshotTests: XCTestCase {
         let metal = try XCTUnwrap(TreemapRenderer(device: device))
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let modes: [(String, ColourMode)] = [
-            ("depth", .depth), ("age", .age(now: now)), ("typeFocus", .typeFocus([]))
+            ("folder", .folder), ("age", .age(now: now)), ("typeFocus", .typeFocus([]))
         ]
         var mismatches: [String] = []
         var checkedColours = 0
@@ -396,14 +409,14 @@ final class RenderSnapshotTests: XCTestCase {
         XCTAssertNotEqual(tile.flags & Tile.Flag.staged, 0)
         for dark in [false, true] {
             for scale: CGFloat in [1, 2] {
-                let palette = Palette.colours(.depth, dark: dark)
-                let image = render([tile], palette, Self.depthIndex, dark: dark, size: tile.rect.size, scale: scale)
+                let palette = Palette.colours(.folder, dark: dark)
+                let image = render([tile], palette, Self.testIndex, dark: dark, size: tile.rect.size, scale: scale)
                 let raster = Raster(image)
                 let ink = palette[2].x * 0.2126 + palette[2].y * 0.7152 + palette[2].z * 0.0722 > 0.5 ? 0 : 255
                 XCTAssertEqual(raster.rgba(0, 10), [ink, ink, ink, 255], "outline")
                 XCTAssertEqual(raster.rgba(3, 5), [ink, ink, ink, 255], "diagonal hatch")
                 XCTAssertNotEqual(raster.rgba(1, 10), [ink, ink, ink, 255], "outline stays one device pixel")
-                try assertMatchesReference(image, named: "jetsam-staged-" + (dark ? "dark" : "light") + "-\(Int(scale))x")
+                try assertMatchesReference(image, named: "reclaim-staged-" + (dark ? "dark" : "light") + "-\(Int(scale))x")
             }
         }
     }
@@ -414,7 +427,7 @@ final class RenderSnapshotTests: XCTestCase {
     func test_fallback_view_rerenders_on_scale_change_but_not_on_unchanged_update() throws {
         let view = TreemapView.FallbackView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
         let tiles = [Tile(rect: CGRect(x: 0, y: 0, width: 120, height: 80), node: 0, depth: 0)]
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         let colourOf: (Tile) -> UInt16 = { _ in 2 }
         view.scaleOverride = 1
         let base = view.renderCount  // the empty view's own render

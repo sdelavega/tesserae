@@ -3,3 +3,5 @@ target/
 .DS_Store
 apple/build/
 xcuserdata/
+apple/Release.local.xcconfig
+dist/

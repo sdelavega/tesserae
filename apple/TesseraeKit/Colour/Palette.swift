@@ -26,7 +26,7 @@ import TesseraeFFI
 ///
 ///     [0]  neutral     (aggregates and non-focus tiles in age/type modes)
 ///     [1]  status      (#fab219, permission denied, every mode)
-///     [2…] the mode's ramp: depth 5 steps, age 7 buckets (recent first),
+///     [2…] the mode's ramp: folder 8 slots × 4 steps, age 7 buckets (recent first),
 ///          type focus 3 slots
 ///
 /// so `colourIndex` results for ramp colours are `firstColourIndex + step`.
@@ -43,8 +43,26 @@ public struct Palette {
 
     private static let status = rgb(0xfab219)
 
-    private static let depthLight: [UInt32] = [0x86b6ef, 0x5598e7, 0x256bc0, 0x184f95, 0x0d366b]
-    private static let depthDark: [UInt32] = [0x184f95, 0x256abf, 0x3987e5, 0x6da7ec, 0x9ec5f4]
+    private static let folderLight: [UInt32] = [
+        0x256bc0, 0x0d59ac, 0x004893, 0x003976,
+        0xeb6834, 0xff7d4b, 0xff9e7b, 0xfebca5,
+        0x1baf7a, 0x3bc28c, 0x53d69e, 0x69eab1,
+        0xeda100, 0xffb63e, 0xffd08f, 0xffe9cc,
+        0xe87ba4, 0xfd8eb7, 0xffaeca, 0xffcddd,
+        0x007a00, 0x036602, 0x025301, 0x014001,
+        0x6250d6, 0x533cc1, 0x4427ad, 0x370a99,
+        0xe34948, 0xf95d5a, 0xfe8079, 0xfea29a,
+    ]
+    private static let folderDark: [UInt32] = [
+        0x3987e5, 0x4c9afa, 0x6faefe, 0x92c2ff,
+        0xd95926, 0xee6c3b, 0xfe8458, 0xffa484,
+        0x199e70, 0x37b182, 0x4ec494, 0x64d8a6,
+        0xc98500, 0xdd982a, 0xf1ab43, 0xffc16c,
+        0xd55181, 0xea6493, 0xff78a5, 0xff9dba,
+        0x007a00, 0x036602, 0x025301, 0x014001,
+        0x9085e9, 0xa298fe, 0xb5b0fe, 0xc9c7fe,
+        0xe66767, 0xfb7a79, 0xfe9a97, 0xfeb9b6,
+    ]
     private static let ageLight: [UInt32] = [
         0xcde2fb, 0x9ec5f4, 0x6da7ec, 0x3987e5, 0x256abf, 0x184f95, 0x0d366b,
     ]
@@ -62,7 +80,7 @@ public struct Palette {
     public static func colours(_ m: ColourMode, dark: Bool) -> [SIMD4<Float>] {
         let ramp: [UInt32]
         switch m {
-        case .depth: ramp = dark ? depthDark : depthLight
+        case .folder: ramp = dark ? folderDark : folderLight
         case .age: ramp = dark ? ageLight.reversed() : ageLight
         case .typeFocus: ramp = dark ? focusDark : focusLight
         }
@@ -76,16 +94,16 @@ private let ageLimits: [Int64] = [7, 30, 90, 365, 730, 1825].map { $0 * 86_400 }
 
 /// The palette-buffer index for node `node` at layout depth `depth`.
 ///
-/// A permission-denied node is the status colour in every mode. Depth mode
-/// cycles the ramp every five levels; age buckets `now - modified` (a future
+/// A permission-denied node is the status colour in every mode. Folder mode
+/// needs layout context (the tile overload below); age buckets `now - modified` (a future
 /// time counts as the most recent bucket); type focus colours only files of
 /// the first three listed kinds and leaves everything else neutral.
 public func colourIndex(_ node: UInt32, depth: UInt8, in src: Snapshot, mode: ColourMode) -> UInt16 {
     let first = Palette.firstColourIndex
     if src.isPermissionDenied(node) { return UInt16(Palette.statusIndex) }
     switch mode {
-    case .depth:
-        return UInt16(first + Int(depth) % 5)
+    case .folder:
+        return UInt16(Palette.neutralIndex)
     case .age(let now):
         let nowSecs = Int64(now.timeIntervalSince1970.rounded(.down))
         let (diff, overflow) = nowSecs.subtractingReportingOverflow(src.nodes[Int(node)].modified)
@@ -101,17 +119,22 @@ public func colourIndex(_ node: UInt32, depth: UInt8, in src: Snapshot, mode: Co
     }
 }
 
-/// As above for a layout tile, which may stand for no single node:
-/// - a permission-denied tile (including the "N unreadable folders" aggregate)
-///   is the status colour in every mode;
-/// - any other aggregate ("N small items") uses its depth in depth mode and
-///   the neutral colour in age and type-focus modes, having no single age or
-///   kind.
-public func colourIndex(for tile: Tile, in src: Snapshot, mode: ColourMode) -> UInt16 {
+/// A tile takes its top-level folder's hue at its relative depth. Root tiles,
+/// loose root files and aggregates directly under the root stay neutral.
+/// Permission denial overrides every mode; age/type aggregates stay neutral.
+public func colourIndex(
+    for tile: Tile, in src: Snapshot, mode: ColourMode,
+    slots: [UInt32: Int] = [:], rootChildOf: (UInt32) -> UInt32? = { _ in nil }
+) -> UInt16 {
     if tile.isPermissionDenied { return UInt16(Palette.statusIndex) }
-    if tile.node == Tile.noNode {
-        if case .depth = mode { return UInt16(Palette.firstColourIndex + Int(tile.depth) % 5) }
-        return UInt16(Palette.neutralIndex)
+    if tile.node != Tile.noNode, src.isPermissionDenied(tile.node) { return UInt16(Palette.statusIndex) }
+    if case .folder = mode {
+        let child = tile.node == Tile.noNode ? rootChildOf(tile.parent) : rootChildOf(tile.node)
+        guard let child, let slot = slots[child], (1...8).contains(slot), tile.depth > 0 else {
+            return UInt16(Palette.neutralIndex)
+        }
+        return UInt16(2 + (slot - 1) * 4 + min(Int(tile.depth) - 1, 3))
     }
+    if tile.node == Tile.noNode { return UInt16(Palette.neutralIndex) }
     return colourIndex(tile.node, depth: tile.depth, in: src, mode: mode)
 }

@@ -101,7 +101,7 @@ final class MetalRendererTests: XCTestCase {
 
     func test_tile_centre_pixel_is_its_palette_colour() throws {
         let r = try XCTUnwrap(TreemapRenderer(device: try device()))
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         // Breadth-first, as the layout emits them: two parents, then a child
         // of the first, which must paint over it (painter's order).
         let tiles = [
@@ -126,7 +126,7 @@ final class MetalRendererTests: XCTestCase {
 
     func test_inner_border_is_one_pixel_and_darker_than_fill() throws {
         let r = try XCTUnwrap(TreemapRenderer(device: try device()))
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         let tile = Tile(rect: CGRect(x: 10, y: 10, width: 40, height: 40), node: 1, depth: 2)
         let fill = palette[Palette.firstColourIndex + 2]
         let border = SIMD4(fill.x * TreemapRenderer.borderShade, fill.y * TreemapRenderer.borderShade,
@@ -231,7 +231,7 @@ final class MetalRendererTests: XCTestCase {
                        "after the failure, three instance buffers at half the budget")
 
         // And it still draws, capped at its budget.
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         let tile = Tile(rect: CGRect(x: 0, y: 0, width: 20, height: 20), node: 1, depth: 1)
         let bmp = try Self.render(r, [tile], palette: palette, size: CGSize(width: 20, height: 20), scale: 1)
         assertExact(bmp[10, 10], Self.pixel(palette[Palette.firstColourIndex + 1]), "centre after the retry")
@@ -271,7 +271,7 @@ final class MetalRendererTests: XCTestCase {
             length > 3 * stride ? nil : dev.makeBuffer(length: length, options: .storageModeShared)
         }))
         XCTAssertEqual(r.instanceBudget, 3, "precondition: a three-tile budget")
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         // Five disjoint tiles in a row, all one colour.
         let tiles = (0..<5).map { i in
             Tile(rect: CGRect(x: CGFloat(i) * 20, y: 0, width: 20, height: 20), node: UInt32(i), depth: 0)

@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["tools/applesauce"]
 members = [
     "crates/tesserae-cli",
     "crates/tesserae-core",

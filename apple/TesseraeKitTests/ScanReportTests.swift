@@ -62,6 +62,7 @@ final class ScanReportTests: XCTestCase {
         Skipped (other volume): 1
         Skipped (non-local mount): 1
         Skipped (dataless directory): 1
+        Skipped (system-managed (macOS index)): 0
         Dataless files: 7
         Dataless directories: 1
         Dataless logical bytes: 1,024
@@ -81,7 +82,7 @@ final class ScanReportTests: XCTestCase {
 
         Unreadable locations
         /root/zero/locked — permission denied
-        /� � — permission denied
+        /� � ⟨/wp/⟩ — permission denied
 
         Skipped locations
         /limited — limited scan
@@ -94,6 +95,19 @@ final class ScanReportTests: XCTestCase {
         App: test-app
         Engine: test-engine
         """)
+    }
+
+    func test_system_index_reason_has_a_stable_summary_line_even_when_zero() {
+        XCTAssertEqual(TESS_SKIP_SYSTEM_MANAGED_INDEX, 6)
+        XCTAssertEqual(Snapshot.systemIndexReason, "system-managed (macOS index)")
+        let empty = TestSnapshot(.dir("/root", []))
+        XCTAssertTrue(report(empty.snapshot).text.contains("Skipped (system-managed (macOS index)): 0"))
+        let tree = TestSnapshot(.dir("/root", []), skipped: [
+            .init(path: Data("/root/.Spotlight-V100".utf8), reason: "system-managed (macOS index)")])
+        XCTAssertEqual(tree.snapshot.skipped.count, 1)
+        let value = report(tree.snapshot)
+        XCTAssertTrue(value.text.contains("Skipped (system-managed (macOS index)): 1"))
+        XCTAssertTrue(value.text.contains("/root/.Spotlight-V100 — system-managed (macOS index)"))
     }
 
     func test_every_incomplete_code_uses_banner_wording_including_unknown() {

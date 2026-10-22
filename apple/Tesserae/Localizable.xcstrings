@@ -1,0 +1,1337 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "appChrome.n.nlicenses.n": {
+      "comment": "AppChrome: Licenses.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\n\nLicenses\n"
+          }
+        }
+      }
+    },
+    "appChrome.tesserae.checks.for.updates.once.a.day.the": {
+      "comment": "AppChrome: Tesserae checks for updates once a day; the request includes the app and macOS version. You can turn this off.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae checks for updates once a day; the request includes the app and macOS version. You can turn this off."
+          }
+        }
+      }
+    },
+    "appChrome.tesserae.is.free.software.under.the.gnu.general": {
+      "comment": "AppChrome: Tesserae is free software under the GNU General Public License, version 3 or later (GPL-3).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae is free software under the GNU General Public License, version 3 or later (GPL-3).\n"
+          }
+        }
+      }
+    },
+    "appChrome.this.program.comes.with.absolutely.no.warranty.n": {
+      "comment": "AppChrome: This program comes with ABSOLUTELY NO WARRANTY.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This program comes with ABSOLUTELY NO WARRANTY.\n\n"
+          }
+        }
+      }
+    },
+    "appChrome.version.n.n": {
+      "comment": "AppChrome: Version {version} ({build}).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@ (%@)\n\n"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.batch.progress": {
+      "comment": "ConfirmTrashSheet: Batch progress.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Batch progress"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.cancel": {
+      "comment": "ConfirmTrashSheet: Cancel.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.move.staged.items.to.trash": {
+      "comment": "ConfirmTrashSheet: Move staged items to Trash?.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move staged items to Trash?"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.move.to.trash": {
+      "comment": "ConfirmTrashSheet: Move to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.moving.to.trash": {
+      "comment": "ConfirmTrashSheet: Moving to Trash….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moving to Trash…"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.of": {
+      "comment": "ConfirmTrashSheet: {done} of {total}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld of %lld"
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.please.wait.for.this.batch.to.finish": {
+      "comment": "ConfirmTrashSheet: Please wait for this batch to finish.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please wait for this batch to finish."
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.review.every.warning.only.checked.warning.items.and": {
+      "comment": "ConfirmTrashSheet: Review every warning. Only checked warning items and items without warnings will move.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review every warning. Only checked warning items and items without warnings will move."
+          }
+        }
+      }
+    },
+    "confirmTrashSheet.will.be.skipped": {
+      "comment": "ConfirmTrashSheet: Will be skipped.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Will be skipped"
+          }
+        }
+      }
+    },
+    "contentView.add.to.reclaim.space": {
+      "comment": "ContentView: Add to Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to Reclaim Space"
+          }
+        }
+      }
+    },
+    "contentView.allocated": {
+      "comment": "ContentView: Allocated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allocated"
+          }
+        }
+      }
+    },
+    "contentView.entries.s": {
+      "comment": "ContentView: {progress.displayedEntriesPerSecond.formatted()} entries/s · {displaySize(progress.bytes, locale: locale)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ entries/s · %@"
+          }
+        }
+      }
+    },
+    "contentView.errors": {
+      "comment": "ContentView: {progress.errors} errors.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu error"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu errors"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "contentView.focus.on.up.to.three.types": {
+      "comment": "ContentView: Focus on up to three types.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Focus on up to three types"
+          }
+        }
+      }
+    },
+    "contentView.inspector": {
+      "comment": "ContentView: Inspector.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inspector"
+          }
+        }
+      }
+    },
+    "contentView.kind": {
+      "comment": "ContentView: Kind.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kind"
+          }
+        }
+      }
+    },
+    "contentView.largest.1.000.files.in.this.folder.column": {
+      "comment": "ContentView: Largest 1,000 files in this folder · column sorts apply to this list.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Largest 1,000 files in this folder · column sorts apply to this list"
+          }
+        }
+      }
+    },
+    "contentView.logical": {
+      "comment": "ContentView: Logical.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logical"
+          }
+        }
+      }
+    },
+    "contentView.modified": {
+      "comment": "ContentView: Modified.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified"
+          }
+        }
+      }
+    },
+    "contentView.no.allocated.file.data.in.this.folder": {
+      "comment": "ContentView: No allocated file data in this folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No allocated file data in this folder"
+          }
+        }
+      }
+    },
+    "contentView.parent.folder": {
+      "comment": "ContentView: Parent folder (⌘↑).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parent folder (⌘↑)"
+          }
+        }
+      }
+    },
+    "contentView.point.to.a.tile.to.see.its.path": {
+      "comment": "ContentView: Point to a tile to see its path, size and modification date.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Point to a tile to see its path, size and modification date."
+          }
+        }
+      }
+    },
+    "contentView.scan": {
+      "comment": "ContentView: Scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan"
+          }
+        }
+      }
+    },
+    "contentView.scanning": {
+      "comment": "ContentView: Scanning….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning…"
+          }
+        }
+      }
+    },
+    "contentView.stage.the.selected.items": {
+      "comment": "ContentView: Stage the selected items (⌘⌫).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stage the selected items (⌘⌫)"
+          }
+        }
+      }
+    },
+    "contentView.unknown": {
+      "comment": "ContentView: Unknown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown"
+          }
+        }
+      }
+    },
+    "onboardingView.age": {
+      "comment": "OnboardingView: Age.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Age"
+          }
+        }
+      }
+    },
+    "onboardingView.folder": {
+      "comment": "Treemap colour mode: group tiles by top-level folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder"
+          }
+        }
+      }
+    },
+    "onboardingView.full.disk.access": {
+      "comment": "OnboardingView: Full Disk Access.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access"
+          }
+        }
+      }
+    },
+    "onboardingView.full.disk.access.granted.relaunch.to.apply": {
+      "comment": "OnboardingView: Full Disk Access granted — relaunch to apply.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access granted — relaunch to apply"
+          }
+        }
+      }
+    },
+    "onboardingView.grant.access.then.tesserae.will.restart": {
+      "comment": "OnboardingView: Grant access, then Tesserae will restart.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grant access, then Tesserae will restart"
+          }
+        }
+      }
+    },
+    "onboardingView.if.you.enabled.access.in.settings.relaunch.to": {
+      "comment": "OnboardingView: If you enabled access in Settings, relaunch to apply it. Tesserae cannot confirm the grant in this running process.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you enabled access in Settings, relaunch to apply it. Tesserae cannot confirm the grant in this running process."
+          }
+        }
+      }
+    },
+    "onboardingView.in.system.settings.enable.tesserae.under.privacy.security": {
+      "comment": "OnboardingView: In System Settings, enable Tesserae under Privacy & Security → Full Disk Access, then click Relaunch Tesserae. Access changes apply only after relaunch.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In System Settings, enable Tesserae under Privacy & Security → Full Disk Access, then click Relaunch Tesserae. Access changes apply only after relaunch."
+          }
+        }
+      }
+    },
+    "onboardingView.no.telemetry.the.only.network.traffic.is.the": {
+      "comment": "OnboardingView: No telemetry. The only network traffic is the update check.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No telemetry. The only network traffic is the update check."
+          }
+        }
+      }
+    },
+    "onboardingView.open.settings": {
+      "comment": "OnboardingView: Open Settings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings"
+          }
+        }
+      }
+    },
+    "onboardingView.relaunch.tesserae": {
+      "comment": "OnboardingView: Relaunch Tesserae.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relaunch Tesserae"
+          }
+        }
+      }
+    },
+    "onboardingView.rescan": {
+      "comment": "OnboardingView: Rescan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rescan"
+          }
+        }
+      }
+    },
+    "onboardingView.scan": {
+      "comment": "OnboardingView: Scan {startupDiskName}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan %@"
+          }
+        }
+      }
+    },
+    "onboardingView.scan.folder": {
+      "comment": "OnboardingView: Scan Folder….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Folder…"
+          }
+        }
+      }
+    },
+    "onboardingView.scan.macintosh.hd": {
+      "comment": "OnboardingView: Scan Macintosh HD.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Macintosh HD"
+          }
+        }
+      }
+    },
+    "onboardingView.scan.your.startup.disk.or.choose.a.folder": {
+      "comment": "OnboardingView: Scan your startup disk or choose a folder to explore its files by size.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan your startup disk or choose a folder to explore its files by size."
+          }
+        }
+      }
+    },
+    "onboardingView.see.where.your.space.goes": {
+      "comment": "OnboardingView: See where your space goes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See where your space goes"
+          }
+        }
+      }
+    },
+    "onboardingView.tesserae.needs.full.disk.access.to.measure.files": {
+      "comment": "OnboardingView: Tesserae needs Full Disk Access to measure files in protected folders and explain where your disk space goes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae needs Full Disk Access to measure files in protected folders and explain where your disk space goes."
+          }
+        }
+      }
+    },
+    "onboardingView.type.focus": {
+      "comment": "OnboardingView: Type focus.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type focus"
+          }
+        }
+      }
+    },
+    "onboardingView.use.limited.scan": {
+      "comment": "OnboardingView: Use Limited Scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Limited Scan"
+          }
+        }
+      }
+    },
+    "onboardingView.without.full.disk.access.scans.can.wait.for": {
+      "comment": "OnboardingView: Without Full Disk Access, scans can wait for macOS privacy consent prompts. You can choose a Limited scan instead.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Without Full Disk Access, scans can wait for macOS privacy consent prompts. You can choose a Limited scan instead."
+          }
+        }
+      }
+    },
+    "reclaimView.add.to.reclaim.space": {
+      "comment": "ReclaimView: Add to Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to Reclaim Space"
+          }
+        }
+      }
+    },
+    "reclaimView.move.to.trash": {
+      "comment": "ReclaimView: Move to Trash….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash…"
+          }
+        }
+      }
+    },
+    "reclaimView.no.items.available.to.put.back": {
+      "comment": "ReclaimView: No items available to put back.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No items available to put back."
+          }
+        }
+      }
+    },
+    "reclaimView.no.items.staged": {
+      "comment": "ReclaimView: No items staged.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No items staged."
+          }
+        }
+      }
+    },
+    "reclaimView.preparing": {
+      "comment": "ReclaimView: Preparing….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing…"
+          }
+        }
+      }
+    },
+    "reclaimView.put.back": {
+      "comment": "ReclaimView: Put Back.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back"
+          }
+        }
+      }
+    },
+    "reclaimView.ready.to.move.to.trash": {
+      "comment": "ReclaimView: Ready to move to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to move to Trash"
+          }
+        }
+      }
+    },
+    "reclaimView.recently.trashed": {
+      "comment": "ReclaimView: Recently trashed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recently trashed"
+          }
+        }
+      }
+    },
+    "reclaimView.reclaim.space": {
+      "comment": "ReclaimView: Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reclaim Space"
+          }
+        }
+      }
+    },
+    "reclaimView.remove.from.reclaim.space": {
+      "comment": "ReclaimView: Remove from Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from Reclaim Space"
+          }
+        }
+      }
+    },
+    "reclaimView.restore.this.item": {
+      "comment": "ReclaimView: Restore this item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore this item"
+          }
+        }
+      }
+    },
+    "reclaimView.review.warnings": {
+      "comment": "ReclaimView: Review warnings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review warnings"
+          }
+        }
+      }
+    },
+    "reclaimView.staged.items.stay.where.they.are.until.you": {
+      "comment": "ReclaimView: Staged items stay where they are until you confirm Move to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Staged items stay where they are until you confirm Move to Trash."
+          }
+        }
+      }
+    },
+    "reclaimView.will.be.skipped": {
+      "comment": "ReclaimView: Will be skipped.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Will be skipped"
+          }
+        }
+      }
+    },
+    "scan.progress.counts": {
+      "comment": "Folders and files visited so far; pluralize each count independently.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@count1@ · %#@count2@"
+          },
+          "substitutions": {
+            "count1": {
+              "argNum": 1,
+              "formatSpecifier": "llu",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu folder"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu folders"
+                    }
+                  }
+                }
+              }
+            },
+            "count2": {
+              "argNum": 2,
+              "formatSpecifier": "llu",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu file"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu files"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scan.rendering.limit": {
+      "comment": "Warning with number of tiles omitted by the rendering budget.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rendering limit: %#@count1@ could not be displayed."
+          },
+          "substitutions": {
+            "count1": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld tile"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld tiles"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scanReportView.copy.diagnostics": {
+      "comment": "ScanReportView: Copy Diagnostics.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Diagnostics"
+          }
+        }
+      }
+    },
+    "scanReportView.scan.report": {
+      "comment": "ScanReportView: Scan report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan report"
+          }
+        }
+      }
+    },
+    "scanReportView.the.clipboard.could.not.be.written.try.copy": {
+      "comment": "ScanReportView: The clipboard could not be written. Try Copy Diagnostics again.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The clipboard could not be written. Try Copy Diagnostics again."
+          }
+        }
+      }
+    },
+    "scanStatusViews.choose.another.folder": {
+      "comment": "ScanStatusViews: Choose another folder….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose another folder…"
+          }
+        }
+      }
+    },
+    "scanStatusViews.cloud.only.folder": {
+      "comment": "ScanStatusViews: Cloud-only folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud-only folder"
+          }
+        }
+      }
+    },
+    "scanStatusViews.copy.diagnostics": {
+      "comment": "ScanStatusViews: Copy Diagnostics.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Diagnostics"
+          }
+        }
+      }
+    },
+    "scanStatusViews.couldn.t.scan.this.folder": {
+      "comment": "ScanStatusViews: Couldn’t scan this folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t scan this folder"
+          }
+        }
+      }
+    },
+    "scanStatusViews.couldn.t.start.the.scan": {
+      "comment": "ScanStatusViews: Couldn’t start the scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t start the scan"
+          }
+        }
+      }
+    },
+    "scanStatusViews.limited.scan.selected": {
+      "comment": "ScanStatusViews: Limited scan selected.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limited scan selected"
+          }
+        }
+      }
+    },
+    "scanStatusViews.review.full.disk.access": {
+      "comment": "ScanStatusViews: Review Full Disk Access.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review Full Disk Access"
+          }
+        }
+      }
+    },
+    "scanStatusViews.tesserae.scan.failed.nerrno.n": {
+      "comment": "ScanStatusViews: Tesserae scan failed errno: {errno}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae scan failed\nerrno: %d\n"
+          }
+        }
+      }
+    },
+    "scanStatusViews.the.clipboard.could.not.be.written.try.copy": {
+      "comment": "ScanStatusViews: The clipboard could not be written. Try Copy Diagnostics again.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The clipboard could not be written. Try Copy Diagnostics again."
+          }
+        }
+      }
+    },
+    "scanStatusViews.unreadable.folder": {
+      "comment": "ScanStatusViews: Unreadable folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unreadable folder"
+          }
+        }
+      }
+    },
+    "tesseraeApp.about.tesserae": {
+      "comment": "TesseraeApp: About Tesserae.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About Tesserae"
+          }
+        }
+      }
+    },
+    "tesseraeApp.check.for.updates": {
+      "comment": "TesseraeApp: Check for Updates….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for Updates…"
+          }
+        }
+      }
+    },
+    "tesseraeApp.support.tesserae": {
+      "comment": "TesseraeApp: Support Tesserae….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Support Tesserae…"
+          }
+        }
+      }
+    },
+    "tesseraeApp.tesserae": {
+      "comment": "TesseraeApp: Tesserae.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae"
+          }
+        }
+      }
+    },
+    "tesseraeApp.writing.access.report": {
+      "comment": "TesseraeApp: Writing access report….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Writing access report…"
+          }
+        }
+      }
+    },
+    "trashSummaryView.open.trash": {
+      "comment": "TrashSummaryView: Open Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Trash"
+          }
+        }
+      }
+    },
+    "trashSummaryView.put.back": {
+      "comment": "TrashSummaryView: Put Back.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back"
+          }
+        }
+      }
+    },
+    "trashSummaryView.restore.this.item": {
+      "comment": "TrashSummaryView: Restore this item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore this item"
+          }
+        }
+      }
+    },
+    "trashSummaryView.trash.results": {
+      "comment": "TrashSummaryView: Trash results.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash results"
+          }
+        }
+      }
+    },
+    "updates.check.for.updates.automatically": {
+      "comment": "Updates: Check for updates automatically.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for updates automatically"
+          }
+        }
+      }
+    },
+    "start.title": {
+      "comment": "Heading above the mounted volumes available to scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See where your space goes"
+          }
+        }
+      }
+    },
+    "start.network.note": {
+      "comment": "Explanation below the Network group.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network volumes scan more slowly."
+          }
+        }
+      }
+    },
+    "start.chooseFolder": {
+      "comment": "Open a folder chooser to scan a folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a Folder…"
+          }
+        }
+      }
+    },
+    "start.cancel": {
+      "comment": "Return to the existing scan session.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "start.thisMac": {
+      "comment": "Group containing the startup disk.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Mac"
+          }
+        }
+      }
+    },
+    "start.otherDisks": {
+      "comment": "Other local mounted disks.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other disks"
+          }
+        }
+      }
+    },
+    "start.network": {
+      "comment": "Mounted network volumes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network"
+          }
+        }
+      }
+    },
+    "start.scan": {
+      "comment": "Scan this mounted volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan"
+          }
+        }
+      }
+    },
+    "start.sizeUnknown": {
+      "comment": "Capacity could not be read from this volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size unknown"
+          }
+        }
+      }
+    },
+    "start.capacity": {
+      "comment": "Used space, total capacity, and free space of a mounted volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ used of %@ — %@ free"
+          }
+        }
+      }
+    },
+    "start.anotherLocation": {
+      "comment": "Show mounted volumes and the folder chooser without discarding the session.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Another Location…"
+          }
+        }
+      }
+    },
+    "view.show.folder.names": {
+      "comment": "View menu toggle for reserved folder name strips.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Folder Names"
+          }
+        }
+      }
+    },
+    "contentView.fileListMode": {
+      "comment": "Accessible label for file-list mode selector.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File list"
+          }
+        }
+      }
+    },
+    "contentView.folders": {
+      "comment": "Folder tree list mode.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folders"
+          }
+        }
+      }
+    },
+    "contentView.largestFiles": {
+      "comment": "Largest files list mode.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Largest Files"
+          }
+        }
+      }
+    },
+    "reclaim.cancel": {
+      "comment": "Cancel decompression.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "confirmReclaimSheet.apply": {
+      "comment": "ConfirmReclaimSheet: Apply staged actions?.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply staged actions?"
+          }
+        }
+      }
+    },
+    "confirmReclaimSheet.warnings": {
+      "comment": "ConfirmReclaimSheet: Review every warning. Only checked warning items and items without warnings will proceed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review every warning. Only checked warning items and items without warnings will proceed."
+          }
+        }
+      }
+    },
+    "confirmReclaimSheet.execute": {
+      "comment": "ConfirmReclaimSheet: Apply actions.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply actions"
+          }
+        }
+      }
+    },
+    "confirmReclaimSheet.progress": {
+      "comment": "ConfirmReclaimSheet: Applying actions….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applying actions…"
+          }
+        }
+      }
+    },
+    "reclaimSummaryView.results": {
+      "comment": "ReclaimSummaryView: Reclaim results.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reclaim results"
+          }
+        }
+      }
+    },
+    "reclaimView.staged.until.confirmation": {
+      "comment": "ReclaimView: Staged items stay where they are until you confirm their actions.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Staged items stay where they are until you confirm their actions."
+          }
+        }
+      }
+    },
+    "reclaimView.ready.to.review": {
+      "comment": "ReclaimView: Ready to review.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to review"
+          }
+        }
+      }
+    },
+    "reclaim.stopAfterBatch": {
+      "comment": "Request cancellation after the current compression or decompression batch finishes.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop after this batch"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

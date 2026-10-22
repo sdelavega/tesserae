@@ -1,0 +1,3485 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "reclaimAction.appBundleCompress": {
+      "comment": "Warning before compressing an app bundle.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contents are unchanged; Tesserae re-checks the signature afterwards."
+          }
+        }
+      }
+    },
+    "reclaimAction.cannotCompress": {
+      "comment": "Disabled in-place compression on an unsupported volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This disk can't compress files in place. Archive instead?"
+          }
+        }
+      }
+    },
+    "reclaimAction.containsOtherVolume": {
+      "comment": "Archive denial for a nested volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item contains another volume's mount point and can't be archived."
+          }
+        }
+      }
+    },
+    "reclaimAction.gitWorkingTree": {
+      "comment": "Warning before compressing a Git working tree.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "git status may be slow once."
+          }
+        }
+      }
+    },
+    "reclaimAction.isArchive": {
+      "comment": "Archive denial for an archive item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is already an archive in a supported format."
+          }
+        }
+      }
+    },
+    "reclaimAction.largeCompressRun": {
+      "comment": "Warning for a large compression run.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More than 100 GB is eligible for compression."
+          }
+        }
+      }
+    },
+    "reclaimAction.largeFile": {
+      "comment": "Compression warning for a file larger than 4 GiB.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file can't be interrupted mid-file."
+          }
+        }
+      }
+    },
+    "reclaimAction.parentNotWritable": {
+      "comment": "Archive must be created beside the original item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item's parent folder isn't writable."
+          }
+        }
+      }
+    },
+    "reclaimAction.readOnly": {
+      "comment": "Disabled action on a read-only volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This disk is read-only."
+          }
+        }
+      }
+    },
+    "compressSkip.notRegular": {
+      "comment": "Why a file is excluded from in-place compression: notRegular.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not a regular file."
+          }
+        }
+      }
+    },
+    "compressSkip.alreadyCompressed": {
+      "comment": "Why a file is excluded from in-place compression: alreadyCompressed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already compressed."
+          }
+        }
+      }
+    },
+    "compressSkip.hardLinked": {
+      "comment": "Why a file is excluded from in-place compression: hardLinked.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hard-linked file."
+          }
+        }
+      }
+    },
+    "compressSkip.sparse": {
+      "comment": "Why a file is excluded from in-place compression: sparse.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sparse file; compression would materialise it."
+          }
+        }
+      }
+    },
+    "compressSkip.cloudOnly": {
+      "comment": "Why a file is excluded from in-place compression: cloudOnly.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud-only file; reading would download it."
+          }
+        }
+      }
+    },
+    "compressSkip.resourceFork": {
+      "comment": "Why a file is excluded from in-place compression: resourceFork.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has a non-empty resource fork."
+          }
+        }
+      }
+    },
+    "compressSkip.empty": {
+      "comment": "Why a file is excluded from in-place compression: empty.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty file."
+          }
+        }
+      }
+    },
+    "compressSkip.wontShrink": {
+      "comment": "Why a file is excluded from in-place compression: wontShrink.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file type is unlikely to shrink."
+          }
+        }
+      }
+    },
+    "compressSkip.liveDatabase": {
+      "comment": "Why a file is excluded from in-place compression: liveDatabase.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live database or database with a journal sidecar."
+          }
+        }
+      }
+    },
+    "compressSkip.vmImage": {
+      "comment": "Why a file is excluded from in-place compression: vmImage.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Virtual machine or disk image."
+          }
+        }
+      }
+    },
+    "compressSkip.cloudSync": {
+      "comment": "Why a file is excluded from in-place compression: cloudSync.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inside a cloud-sync folder."
+          }
+        }
+      }
+    },
+    "compressSkip.storeOrAdobeApp": {
+      "comment": "Why a file is excluded from in-place compression: storeOrAdobeApp.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inside a Store or Adobe app."
+          }
+        }
+      }
+    },
+    "compressSkip.openForWriting": {
+      "comment": "Why a file is excluded from in-place compression: openForWriting.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open for writing."
+          }
+        }
+      }
+    },
+    "compressSkip.notWritable": {
+      "comment": "Why a file is excluded from in-place compression: notWritable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file or its directory isn't writable."
+          }
+        }
+      }
+    },
+    "reclaimAction.partialOpenFiles": {
+      "comment": "Best-effort open-file inspection warning in compression review.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some processes couldn't be inspected for files open for writing, including processes owned by other users."
+          }
+        }
+      }
+    },
+    "appModel.abi": {
+      "comment": "AppModel: (ABI {abiVersion}).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (ABI %u)"
+          }
+        }
+      }
+    },
+    "appModel.couldn.t.open.system.settings.open.privacy.security": {
+      "comment": "AppModel: Couldn’t open System Settings. Open Privacy & Security → Full Disk Access in System Settings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t open System Settings. Open Privacy & Security → Full Disk Access in System Settings."
+          }
+        }
+      }
+    },
+    "appModel.couldn.t.relaunch.tesserae": {
+      "comment": "AppModel: Couldn’t relaunch Tesserae: {error.localizedDescription}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t relaunch Tesserae: %@"
+          }
+        }
+      }
+    },
+    "appModel.files": {
+      "comment": "AppModel: {kind.displayName} files.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ files"
+          }
+        }
+      }
+    },
+    "appModel.invalid.original.path": {
+      "comment": "AppModel: Invalid original path.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid original path"
+          }
+        }
+      }
+    },
+    "appModel.macintosh.hd": {
+      "comment": "AppModel: Macintosh HD.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Macintosh HD"
+          }
+        }
+      }
+    },
+    "appModel.other.files.and.folders": {
+      "comment": "AppModel: Other files and folders.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other files and folders"
+          }
+        }
+      }
+    },
+    "appModel.put.back.is.already.in.progress": {
+      "comment": "AppModel: Put Back is already in progress.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back is already in progress."
+          }
+        }
+      }
+    },
+    "appModel.scan": {
+      "comment": "AppModel: Scan {startupDiskName}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan %@"
+          }
+        }
+      }
+    },
+    "appModel.tesserae": {
+      "comment": "AppModel: Tesserae.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae"
+          }
+        }
+      }
+    },
+    "appModel.this.item.belongs.to.an.earlier.scan.use": {
+      "comment": "AppModel: This item belongs to an earlier scan. Use Finder's Put Back, then rescan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item belongs to an earlier scan. Use Finder's Put Back, then rescan."
+          }
+        }
+      }
+    },
+    "executor.file.url.changed.the.raw.path.bytes": {
+      "comment": "Executor: File URL changed the raw path bytes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File URL changed the raw path bytes"
+          }
+        }
+      }
+    },
+    "executor.this.item.was.not.included.in.the.confirmation": {
+      "comment": "Executor: This item was not included in the confirmation.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item was not included in the confirmation."
+          }
+        }
+      }
+    },
+    "executor.trash.returned.no.destination.url": {
+      "comment": "Executor: Trash returned no destination URL.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash returned no destination URL"
+          }
+        }
+      }
+    },
+    "fileTableView.allocated": {
+      "comment": "FileTableView: Allocated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allocated"
+          }
+        }
+      }
+    },
+    "fileTableView.allocated.v2": {
+      "comment": "FileTableView: allocated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " allocated"
+          }
+        }
+      }
+    },
+    "fileTableView.kind": {
+      "comment": "FileTableView: Kind.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kind"
+          }
+        }
+      }
+    },
+    "fileTableView.locale.locale": {
+      "comment": "FileTableView: {snapshot.displayName(node)}, {displaySize(snapshot.allocated(node), locale: locale)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, %@"
+          }
+        }
+      }
+    },
+    "fileTableView.logical": {
+      "comment": "FileTableView: Logical.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logical"
+          }
+        }
+      }
+    },
+    "fileTableView.logical.v2": {
+      "comment": "FileTableView: , logical {text(column: id, row: row)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", logical %@"
+          }
+        }
+      }
+    },
+    "fileTableView.modified": {
+      "comment": "FileTableView: Modified.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified"
+          }
+        }
+      }
+    },
+    "fileTableView.modified.unknown": {
+      "comment": "FileTableView: , modified unknown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", modified unknown"
+          }
+        }
+      }
+    },
+    "fileTableView.modified.v2": {
+      "comment": "FileTableView: , modified {text(column: id, row: row)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", modified %@"
+          }
+        }
+      }
+    },
+    "fileTableView.name": {
+      "comment": "FileTableView: Name.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        }
+      }
+    },
+    "fileTableView.value": {
+      "comment": "FileTableView: , {text(column: id, row: row)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", %@"
+          }
+        }
+      }
+    },
+    "inspector.archive": {
+      "comment": "Inspector: Archive.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive"
+          }
+        }
+      }
+    },
+    "inspector.audio": {
+      "comment": "Inspector: Audio.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        }
+      }
+    },
+    "inspector.document": {
+      "comment": "Inspector: Document.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document"
+          }
+        }
+      }
+    },
+    "inspector.file": {
+      "comment": "Inspector: File.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File"
+          }
+        }
+      }
+    },
+    "inspector.folder": {
+      "comment": "Inspector: Folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder"
+          }
+        }
+      }
+    },
+    "inspector.image": {
+      "comment": "Inspector: Image.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image"
+          }
+        }
+      }
+    },
+    "inspector.smaller.items": {
+      "comment": "Inspector: Smaller items.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smaller items"
+          }
+        }
+      }
+    },
+    "inspector.smaller.items.v2": {
+      "comment": "Inspector: {n} smaller items.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%u smaller item"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%u smaller items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "inspector.unreadable.folders": {
+      "comment": "Inspector: Unreadable folders.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unreadable folders"
+          }
+        }
+      }
+    },
+    "inspector.unreadable.folders.v2": {
+      "comment": "Inspector: {n} unreadable folders.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%u unreadable folder"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%u unreadable folders"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "inspector.video": {
+      "comment": "Inspector: Video.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        }
+      }
+    },
+    "putBack.can.t.verify.this.volume": {
+      "comment": "PutBack: can't verify this volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "can't verify this volume"
+          }
+        }
+      }
+    },
+    "putBack.file.url.changed.the.raw.path.bytes": {
+      "comment": "PutBack: File URL changed the raw path bytes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File URL changed the raw path bytes"
+          }
+        }
+      }
+    },
+    "putBack.invalid.original.path": {
+      "comment": "PutBack: Invalid original path.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid original path"
+          }
+        }
+      }
+    },
+    "putBack.missing.or.invalid.trashurl": {
+      "comment": "PutBack: missing or invalid trashURL.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "missing or invalid trashURL"
+          }
+        }
+      }
+    },
+    "putBack.put.back.isn.t.available.on.this.volume": {
+      "comment": "PutBack: Put Back isn't available on this volume — use Finder's Put Back.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back isn't available on this volume — use Finder's Put Back"
+          }
+        }
+      }
+    },
+    "putBack.unsafe.original.ancestry": {
+      "comment": "PutBack: Unsafe original ancestry.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsafe original ancestry"
+          }
+        }
+      }
+    },
+    "putBack.unsafe.trash.ancestry": {
+      "comment": "PutBack: Unsafe Trash ancestry.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsafe Trash ancestry"
+          }
+        }
+      }
+    },
+    "reclaim.size.known.unknown": {
+      "comment": "Known byte size with additional unreadable content.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ + unknown content"
+          }
+        }
+      }
+    },
+    "reclaim.size.unknown": {
+      "comment": "Size is unavailable for this staged item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown size"
+          }
+        }
+      }
+    },
+    "reclaim.size.upperBound": {
+      "comment": "Upper bound on the size of a directory. The value is a formatted byte size.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Up to %@"
+          }
+        }
+      }
+    },
+    "reclaim.size.upperBound.unknown": {
+      "comment": "Upper bound byte size with additional unreadable content.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Up to %@ + unknown content"
+          }
+        }
+      }
+    },
+    "reclaim.staged.size": {
+      "comment": "Total formatted byte size staged for Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ staged"
+          }
+        }
+      }
+    },
+    "reclaim.staged.unknown": {
+      "comment": "Staged byte size and count of items with unknown size.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ staged · %#@count2@ of unknown size"
+          },
+          "substitutions": {
+            "count2": {
+              "argNum": 2,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld item"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld items"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaim.summary.size": {
+      "comment": "Trash result: formatted bytes moved, awaiting emptying Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ moved to Trash — empty Trash to reclaim it"
+          }
+        }
+      }
+    },
+    "reclaim.summary.unknown": {
+      "comment": "Trash result: formatted bytes and additional items of unknown size.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ moved to Trash — empty Trash to reclaim it (plus %#@count2@ of unknown size)"
+          },
+          "substitutions": {
+            "count2": {
+              "argNum": 2,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld item"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld items"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.a.different.item.now.occupies.this.path": {
+      "comment": "ReclaimViewModel: A different item now occupies this path.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different item now occupies this path."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.add.to.reclaim.space": {
+      "comment": "ReclaimViewModel: Add to Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to Reclaim Space"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.already.in.the.trash.empty.it.from.finder": {
+      "comment": "ReclaimViewModel: Already in the Trash — empty it from Finder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already in the Trash — empty it from Finder."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.can.t.stage.items.tesserae.couldn.t.identify": {
+      "comment": "ReclaimViewModel: Can't stage items: Tesserae couldn't identify this scan's volume. Rescan to try again.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't stage items: Tesserae couldn't identify this scan's volume. Rescan to try again."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.cloud.only.trashing.removes.it.from.icloud.on": {
+      "comment": "ReclaimViewModel: Cloud-only: trashing removes it from iCloud on all your devices and frees no space on this Mac.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud-only: trashing removes it from iCloud on all your devices and frees no space on this Mac."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.failed.errno": {
+      "comment": "ReclaimViewModel: Failed: {message} (errno {code}).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed: %@ (errno %d)."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.files.changed.since.this.scan.rescan.to.stage": {
+      "comment": "ReclaimViewModel: Files changed since this scan — rescan to stage items.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files changed since this scan — rescan to stage items"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.identity.could.not.be.verified": {
+      "comment": "ReclaimViewModel: Identity could not be verified.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity could not be verified."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.items": {
+      "comment": "ReclaimViewModel: {count} items.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld item"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.items.will.move": {
+      "comment": "ReclaimViewModel: {count} items will move.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld item will move"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld items will move"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.macos.manages.this.item": {
+      "comment": "ReclaimViewModel: macOS manages this item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS manages this item."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.macos.system.integrity.protection.protects.this.item": {
+      "comment": "ReclaimViewModel: macOS System Integrity Protection protects this item.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS System Integrity Protection protects this item."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.macos.uses.this.item.to.keep.the.system": {
+      "comment": "ReclaimViewModel: macOS uses this item to keep the system running.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS uses this item to keep the system running."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.moved.to.trash": {
+      "comment": "ReclaimViewModel: Moved to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moved to Trash."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.not.confirmed": {
+      "comment": "ReclaimViewModel: Not confirmed: {reasonText(reason)}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not confirmed: %@"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.of.items.processed": {
+      "comment": "ReclaimViewModel: {done} of {total} items processed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %#@count@ processed"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 2,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld item"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld items"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.other.hard.links.point.to.this.file.its": {
+      "comment": "ReclaimViewModel: Other hard links point to this file; its space is freed only when every link is gone.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other hard links point to this file; its space is freed only when every link is gone."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.put.back.failed": {
+      "comment": "ReclaimViewModel: Put Back failed: {message}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back failed: %@"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.put.back.in.its.original.location": {
+      "comment": "ReclaimViewModel: Put back in its original location.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put back in its original location."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.put.back.is.unavailable.while.scanning.try.again": {
+      "comment": "ReclaimViewModel: Put Back is unavailable while scanning — try again when the scan finishes, or use Finder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put Back is unavailable while scanning — try again when the scan finishes, or use Finder"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.removing.an.app.s.container.resets.that.app": {
+      "comment": "ReclaimViewModel: Removing an app's container resets that app, including documents of sandboxed apps.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removing an app's container resets that app, including documents of sandboxed apps."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.running.apps.use.these.temporary.files": {
+      "comment": "ReclaimViewModel: Running apps use these temporary files.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running apps use these temporary files."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.sizes.include.trashed.items.rescan.for.exact.figures": {
+      "comment": "ReclaimViewModel: Sizes include {count} trashed items; rescan for exact figures.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sizes include %lld trashed item; rescan for exact figures"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sizes include %lld trashed items; rescan for exact figures"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.skipped": {
+      "comment": "ReclaimViewModel: Skipped: {text}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped: %@"
+          }
+        }
+      }
+    },
+    "reclaimViewModel.staged.items": {
+      "comment": "ReclaimViewModel: {count} staged items.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld staged item"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld staged items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaimViewModel.the.item.in.the.trash.has.changed": {
+      "comment": "ReclaimViewModel: The item in the Trash has changed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item in the Trash has changed."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.the.original.location.is.occupied.nothing.was.overwritten": {
+      "comment": "ReclaimViewModel: The original location is occupied; nothing was overwritten.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original location is occupied; nothing was overwritten."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.the.original.parent.folder.is.missing": {
+      "comment": "ReclaimViewModel: The original parent folder is missing.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original parent folder is missing."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.the.scan.could.not.record.this.item.s": {
+      "comment": "ReclaimViewModel: The scan could not record this item's identity.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan could not record this item's identity."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.the.tesserae.log.couldn.t.be.written.trashing": {
+      "comment": "ReclaimViewModel: The Tesserae log couldn't be written; trashing still worked.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Tesserae log couldn't be written; trashing still worked."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.folder.contains.cloud.only.items.trashing.removes": {
+      "comment": "ReclaimViewModel: This folder contains cloud-only items. Trashing removes them from iCloud on all your devices.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains cloud-only items. Trashing removes them from iCloud on all your devices."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.folder.contains.hard.links.space.is.freed": {
+      "comment": "ReclaimViewModel: This folder contains hard links; space is freed only when every link is gone.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains hard links; space is freed only when every link is gone."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.folder.contains.unreadable.or.skipped.content.its": {
+      "comment": "ReclaimViewModel: This folder contains unreadable or skipped content; its size is only the known part.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains unreadable or skipped content; its size is only the known part."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.changed.since.review.review.it.again": {
+      "comment": "ReclaimViewModel: This item changed since review; review it again before moving to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item changed since review; review it again before moving to Trash."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.changed.since.the.scan.rescan.before": {
+      "comment": "ReclaimViewModel: This item changed since the scan; rescan before staging it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item changed since the scan; rescan before staging it."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.contains.the.running.tesserae.app": {
+      "comment": "ReclaimViewModel: This item contains the running Tesserae app.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item contains the running Tesserae app."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.essential.to.your.user.account": {
+      "comment": "ReclaimViewModel: This item is essential to your user account.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is essential to your user account."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.locked.against.changes": {
+      "comment": "ReclaimViewModel: This item is locked against changes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is locked against changes."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.no.longer.in.the.trash": {
+      "comment": "ReclaimViewModel: This item is no longer in the Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is no longer in the Trash."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.now.a.symbolic.link": {
+      "comment": "ReclaimViewModel: This item is now a symbolic link.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is now a symbolic link."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.on.a.different.volume.from": {
+      "comment": "ReclaimViewModel: This item is on a different volume from the scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is on a different volume from the scan."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.part.of.macos": {
+      "comment": "ReclaimViewModel: This item is part of macOS.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is part of macOS."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.is.the.volume.root.or.a": {
+      "comment": "ReclaimViewModel: This item is the volume root or a top-level folder.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is the volume root or a top-level folder."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.no.longer.exists": {
+      "comment": "ReclaimViewModel: This item no longer exists.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item no longer exists."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.s.file.type.changed": {
+      "comment": "ReclaimViewModel: This item's file type changed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item's file type changed."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.s.identity.could.not.be.read": {
+      "comment": "ReclaimViewModel: This item's identity could not be read (errno {code}).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item's identity could not be read (errno %d)."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.item.s.volume.changed": {
+      "comment": "ReclaimViewModel: This item's volume changed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item's volume changed."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.path.cannot.be.identified.safely": {
+      "comment": "ReclaimViewModel: This path cannot be identified safely.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This path cannot be identified safely."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.path.contains.a.symbolic.link.and.cannot": {
+      "comment": "ReclaimViewModel: This path contains a symbolic link and cannot be trashed safely.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This path contains a symbolic link and cannot be trashed safely."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.this.path.now.contains.a.symbolic.link": {
+      "comment": "ReclaimViewModel: This path now contains a symbolic link.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This path now contains a symbolic link."
+          }
+        }
+      }
+    },
+    "reclaimViewModel.time.machine.manages.this.backup": {
+      "comment": "ReclaimViewModel: Time Machine manages this backup.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time Machine manages this backup."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.0.local.snapshots": {
+      "comment": "ReconciliationViewModel: 0 local snapshots.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "0 local snapshots"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.about.purgeable.derived": {
+      "comment": "ReconciliationViewModel: about {size($0)} purgeable (derived).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "about %@ purgeable (derived)"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.capacity": {
+      "comment": "ReconciliationViewModel: Capacity.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capacity"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.cloud.only.download.protection.could.not.be.enabled": {
+      "comment": "ReconciliationViewModel: Cloud-only download protection could not be enabled for this scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud-only download protection could not be enabled for this scan."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.cloud.only.items.not.stored.on.this.mac": {
+      "comment": "ReconciliationViewModel: {count} cloud-only items ({size(scan.datalessLogicalBytes)}) — not stored on this Mac.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@count@ (%2$@) — not stored on this Mac"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 1,
+              "formatSpecifier": "llu",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu cloud-only item"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%llu cloud-only items"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.free": {
+      "comment": "ReconciliationViewModel: Free.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.full.disk.access.is.missing": {
+      "comment": "ReconciliationViewModel: Full Disk Access is missing.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access is missing."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.full.disk.access.is.unknown": {
+      "comment": "ReconciliationViewModel: Full Disk Access is unknown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access is unknown."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.grant.access": {
+      "comment": "ReconciliationViewModel: Grant Access.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grant Access"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.limited.scan": {
+      "comment": "ReconciliationViewModel: Limited scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limited scan."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.local.snapshot.information.unavailable": {
+      "comment": "ReconciliationViewModel: Local snapshot information unavailable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local snapshot information unavailable."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.local.snapshots": {
+      "comment": "ReconciliationViewModel: Local snapshots: —.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local snapshots: —"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.local.snapshots.oldest.size.not.reported.by.macos": {
+      "comment": "ReconciliationViewModel: {count} local snapshots, oldest {date} — size not reported by macOS.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@count@, oldest %2$@ — size not reported by macOS"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld local snapshot"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld local snapshots"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.locations.unreadable": {
+      "comment": "ReconciliationViewModel: {scan.unreadableLocations} locations unreadable.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld location unreadable"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld locations unreadable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.locations.unreadable.grant.full.disk.access.to.include": {
+      "comment": "ReconciliationViewModel: {scan.unreadableLocations} locations unreadable — grant Full Disk Access to include them.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld location unreadable — grant Full Disk Access to include them"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld locations unreadable — grant Full Disk Access to include them"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.not.applicable": {
+      "comment": "ReconciliationViewModel: Not applicable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not applicable"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.nothing.unaccounted.for": {
+      "comment": "ReconciliationViewModel: nothing unaccounted for.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nothing unaccounted for"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.read.only.not.scanned.by.default": {
+      "comment": "ReconciliationViewModel: read-only, not scanned by default.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "read-only, not scanned by default"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.residual": {
+      "comment": "ReconciliationViewModel: Residual.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Residual"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.scanned": {
+      "comment": "ReconciliationViewModel: Scanned.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanned"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.space.breakdown": {
+      "comment": "ReconciliationViewModel: Space breakdown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space breakdown"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.space.breakdown.is.available.when.you.scan.a": {
+      "comment": "ReconciliationViewModel: Space breakdown is available when you scan a whole volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space breakdown is available when you scan a whole volume."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.space.the.scan.can.t.see": {
+      "comment": "ReconciliationViewModel: space the scan can't see.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "space the scan can't see"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.system.volume": {
+      "comment": "ReconciliationViewModel: System volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System volume"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.system.volume.information.unavailable": {
+      "comment": "ReconciliationViewModel: System volume information unavailable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System volume information unavailable."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.the.scan.is.double.counting.shared.blocks": {
+      "comment": "ReconciliationViewModel: The scan is double-counting shared blocks.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan is double-counting shared blocks."
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.the.scan.is.double.counting.shared.blocks.v2": {
+      "comment": "ReconciliationViewModel: the scan is double-counting shared blocks.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the scan is double-counting shared blocks"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.too.large.to.compute": {
+      "comment": "ReconciliationViewModel: Too large to compute.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too large to compute"
+          }
+        }
+      }
+    },
+    "reconciliationViewModel.volume.information.unavailable": {
+      "comment": "ReconciliationViewModel: Volume information unavailable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volume information unavailable"
+          }
+        }
+      }
+    },
+    "scan.partialResult": {
+      "comment": "Warning banner. The placeholder lists translated stop reasons and counts.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partial result — %@"
+          }
+        }
+      }
+    },
+    "scanBanner.at": {
+      "comment": "ScanBanner: at.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " at "
+          }
+        }
+      }
+    },
+    "scanBanner.errors": {
+      "comment": "ScanBanner: {stats.errors} errors.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu error"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu errors"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scanBanner.scan.cancelled": {
+      "comment": "ScanBanner: Scan cancelled.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan cancelled"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.ended.with.unknown.incomplete.code": {
+      "comment": "ScanBanner: Scan ended with unknown incomplete code {stats.incomplete}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan ended with unknown incomplete code %u"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.exhausted.file.descriptors": {
+      "comment": "ScanBanner: Scan exhausted file descriptors.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan exhausted file descriptors"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.ran.out.of.memory": {
+      "comment": "ScanBanner: Scan ran out of memory.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan ran out of memory"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.reached.its.node.limit": {
+      "comment": "ScanBanner: Scan reached its node limit.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan reached its node limit"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.stalled": {
+      "comment": "ScanBanner: Scan stalled.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan stalled"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.stopped.at.a.malformed.filesystem.batch": {
+      "comment": "ScanBanner: Scan stopped at a malformed filesystem batch.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan stopped at a malformed filesystem batch"
+          }
+        }
+      }
+    },
+    "scanBanner.scan.volume.became.unavailable": {
+      "comment": "ScanBanner: Scan volume became unavailable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan volume became unavailable"
+          }
+        }
+      }
+    },
+    "scanBanner.unreadable.folders": {
+      "comment": "ScanBanner: {stats.unreadable_count} unreadable folders.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu unreadable folder"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%llu unreadable folders"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scanReport.access": {
+      "comment": "ScanReport: Access.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access"
+          }
+        }
+      }
+    },
+    "scanReport.app": {
+      "comment": "Scan report row: App: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App: %@"
+          }
+        }
+      }
+    },
+    "scanReport.dataless.directories": {
+      "comment": "Scan report row: Dataless directories: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dataless directories: %@"
+          }
+        }
+      }
+    },
+    "scanReport.dataless.files": {
+      "comment": "Scan report row: Dataless files: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dataless files: %@"
+          }
+        }
+      }
+    },
+    "scanReport.dataless.logical.bytes": {
+      "comment": "Scan report row: Dataless logical bytes: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dataless logical bytes: %@"
+          }
+        }
+      }
+    },
+    "scanReport.depth.capped": {
+      "comment": "Scan report row: Depth capped: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Depth capped: %@"
+          }
+        }
+      }
+    },
+    "scanReport.directories": {
+      "comment": "Scan report row: Directories: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directories: %@"
+          }
+        }
+      }
+    },
+    "scanReport.engine": {
+      "comment": "Scan report row: Engine: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Engine: %@"
+          }
+        }
+      }
+    },
+    "scanReport.entries": {
+      "comment": "Scan report row: Entries: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entries: %@"
+          }
+        }
+      }
+    },
+    "scanReport.errors": {
+      "comment": "Scan report row: Errors: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errors: %@"
+          }
+        }
+      }
+    },
+    "scanReport.files": {
+      "comment": "Scan report row: Files: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files: %@"
+          }
+        }
+      }
+    },
+    "scanReport.full.disk.access.denied": {
+      "comment": "ScanReport: Full Disk Access: denied —.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: denied — "
+          }
+        }
+      }
+    },
+    "scanReport.full.disk.access.granted": {
+      "comment": "ScanReport: Full Disk Access: granted.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: granted"
+          }
+        }
+      }
+    },
+    "scanReport.full.disk.access.unknown": {
+      "comment": "ScanReport: Full Disk Access: unknown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: unknown"
+          }
+        }
+      }
+    },
+    "scanReport.hardlink.duplicates": {
+      "comment": "Scan report row: Hardlink duplicates: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hardlink duplicates: %@"
+          }
+        }
+      }
+    },
+    "scanReport.incomplete": {
+      "comment": "ScanReport: Incomplete.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete"
+          }
+        }
+      }
+    },
+    "scanReport.lost.entries": {
+      "comment": "Scan report row: Lost entries: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lost entries: %@"
+          }
+        }
+      }
+    },
+    "scanReport.none": {
+      "comment": "ScanReport: None.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "scanReport.permission.denied": {
+      "comment": "ScanReport: permission denied.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "permission denied"
+          }
+        }
+      }
+    },
+    "scanReport.permission.denied.v2": {
+      "comment": "ScanReport: — permission denied.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " — permission denied"
+          }
+        }
+      }
+    },
+    "scanReport.reconciliation.caveats": {
+      "comment": "ScanReport: Reconciliation caveats.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconciliation caveats"
+          }
+        }
+      }
+    },
+    "scanReport.root": {
+      "comment": "Scan report row: Root: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Root: %@"
+          }
+        }
+      }
+    },
+    "scanReport.scan.time": {
+      "comment": "Scan report row: Scan time: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan time: %@"
+          }
+        }
+      }
+    },
+    "scanReport.skipped": {
+      "comment": "ScanReport: Skipped ({reason}):.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped (%@): "
+          }
+        }
+      }
+    },
+    "scanReport.skipped.locations": {
+      "comment": "ScanReport: Skipped locations.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped locations"
+          }
+        }
+      }
+    },
+    "scanReport.summary": {
+      "comment": "ScanReport: Summary.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary"
+          }
+        }
+      }
+    },
+    "scanReport.this.report.contains.file.and.folder.names.from": {
+      "comment": "ScanReport: This report contains file and folder names from your Mac. Review it before sharing.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This report contains file and folder names from your Mac. Review it before sharing."
+          }
+        }
+      }
+    },
+    "scanReport.unreadable": {
+      "comment": "Scan report row: Unreadable: The placeholder is its formatted value.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unreadable: %@"
+          }
+        }
+      }
+    },
+    "scanReport.unreadable.locations": {
+      "comment": "ScanReport: Unreadable locations.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unreadable locations"
+          }
+        }
+      }
+    },
+    "scanReport.versions": {
+      "comment": "ScanReport: Versions.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versions"
+          }
+        }
+      }
+    },
+    "snapshot.dataless.directory": {
+      "comment": "Snapshot: dataless directory.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "dataless directory"
+          }
+        }
+      }
+    },
+    "snapshot.limited.scan": {
+      "comment": "Snapshot: limited scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "limited scan"
+          }
+        }
+      }
+    },
+    "snapshot.non.local.mount": {
+      "comment": "Snapshot: non-local mount.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non-local mount"
+          }
+        }
+      }
+    },
+    "snapshot.not.present": {
+      "comment": "Snapshot: not present.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "not present"
+          }
+        }
+      }
+    },
+    "snapshot.other.volume": {
+      "comment": "Snapshot: other volume.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "other volume"
+          }
+        }
+      }
+    },
+    "snapshot.system.managed.macos.index": {
+      "comment": "Snapshot: system-managed (macOS index).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "system-managed (macOS index)"
+          }
+        }
+      }
+    },
+    "snapshot.unknown": {
+      "comment": "Snapshot: unknown.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unknown"
+          }
+        }
+      }
+    },
+    "snapshot.unknown.v2": {
+      "comment": "Snapshot: unknown ({reason}).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unknown (%u)"
+          }
+        }
+      }
+    },
+    "snapshot.unnamed": {
+      "comment": "Snapshot: (unnamed).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(unnamed)"
+          }
+        }
+      }
+    },
+    "toolbar.cancel.help": {
+      "comment": "L10n: Cancel the scan (⌘.).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel the scan (⌘.)"
+          }
+        }
+      }
+    },
+    "toolbar.cancel.title": {
+      "comment": "L10n: Cancel.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "toolbar.colour.help": {
+      "comment": "L10n: Colour by folder, age or file type (⌘1–⌘3).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colour by folder, age or file type (⌘1–⌘3)"
+          }
+        }
+      }
+    },
+    "toolbar.colour.title": {
+      "comment": "L10n: Colour.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colour"
+          }
+        }
+      }
+    },
+    "toolbar.folder.help": {
+      "comment": "L10n: Scan a folder (⌘O).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan a folder (⌘O)"
+          }
+        }
+      }
+    },
+    "toolbar.folder.title": {
+      "comment": "L10n: Scan Folder….",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Folder…"
+          }
+        }
+      }
+    },
+    "toolbar.reclaim.help": {
+      "comment": "L10n: Show or hide Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show or hide Reclaim Space"
+          }
+        }
+      }
+    },
+    "toolbar.reclaim.title": {
+      "comment": "L10n: Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reclaim Space"
+          }
+        }
+      }
+    },
+    "toolbar.report.help": {
+      "comment": "L10n: Show or hide the scan report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show or hide the scan report"
+          }
+        }
+      }
+    },
+    "toolbar.report.title": {
+      "comment": "L10n: Scan report.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan report"
+          }
+        }
+      }
+    },
+    "toolbar.rescan.help": {
+      "comment": "L10n: Rescan this location (⌘R).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rescan this location (⌘R)"
+          }
+        }
+      }
+    },
+    "toolbar.rescan.title": {
+      "comment": "L10n: Rescan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rescan"
+          }
+        }
+      }
+    },
+    "toolbar.startupDisk.help": {
+      "comment": "L10n: Scan {startupDiskName} (⌘⇧O).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan %@ (⌘⇧O)"
+          }
+        }
+      }
+    },
+    "toolbar.startupDisk.title": {
+      "comment": "L10n: Scan {startupDiskName}.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan %@"
+          }
+        }
+      }
+    },
+    "toolbar.location.title": {
+      "comment": "Show the start screen to choose a new scan location.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan another location"
+          }
+        }
+      }
+    },
+    "toolbar.location.help": {
+      "comment": "Show the start screen and its keyboard shortcut.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan another location (⌘⇧N)"
+          }
+        }
+      }
+    },
+    "volume.filesystem.apfs": {
+      "comment": "Display name of the APFS filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "APFS"
+          }
+        }
+      }
+    },
+    "volume.filesystem.hfs": {
+      "comment": "Display name of the Mac OS Extended filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac OS Extended"
+          }
+        }
+      }
+    },
+    "volume.filesystem.exfat": {
+      "comment": "Display name of the exFAT filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "exFAT"
+          }
+        }
+      }
+    },
+    "volume.filesystem.msdos": {
+      "comment": "Display name of the MS-DOS (FAT) filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MS-DOS (FAT)"
+          }
+        }
+      }
+    },
+    "volume.filesystem.ntfs": {
+      "comment": "Display name of the NTFS filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NTFS"
+          }
+        }
+      }
+    },
+    "volume.filesystem.smb": {
+      "comment": "Display name of the SMB filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMB"
+          }
+        }
+      }
+    },
+    "volume.filesystem.afp": {
+      "comment": "Display name of the AFP filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AFP"
+          }
+        }
+      }
+    },
+    "volume.filesystem.nfs": {
+      "comment": "Display name of the NFS filesystem.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NFS"
+          }
+        }
+      }
+    },
+    "folderTree.items": {
+      "comment": "Directory descendant count column.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items"
+          }
+        }
+      }
+    },
+    "folderTree.share": {
+      "comment": "Share of the navigation root's allocated bytes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        }
+      }
+    },
+    "folderTree.size": {
+      "comment": "Size on disk column.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size"
+          }
+        }
+      }
+    },
+    "folderTree.smaller": {
+      "comment": "Summary of the contiguous suffix beyond 500 children: count and size on disk.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@count@ — %2$@"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld smaller item"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld smaller items"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "compress.actionUnavailable": {
+      "comment": "Refuse an executor action that has no implementation yet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This action is unavailable."
+          }
+        }
+      }
+    },
+    "compress.freeSpace": {
+      "comment": "Refusal with formatted required and available free space, in that order.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This operation needs %@ free; %@ are available."
+          }
+        }
+      }
+    },
+    "compress.helperUnavailable": {
+      "comment": "Compression is unavailable when the bundled helper fails validation.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The compression helper is missing or damaged. Reinstall Tesserae."
+          }
+        }
+      }
+    },
+    "compress.refused": {
+      "comment": "Compression refused after a fresh identity, guard or inspection check.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compression couldn't proceed. Files or permissions changed, or no files could be inspected."
+          }
+        }
+      }
+    },
+    "compress.result": {
+      "comment": "Measured compression result with signed formatted savings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compressed %#@count@ — saved %2$@"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld file"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld files"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "compress.undoResult": {
+      "comment": "Decompression result with signed formatted allocation change.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decompressed %#@count@ — allocation changed by %2$@"
+          },
+          "substitutions": {
+            "count": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld file"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%lld files"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "archive.refused": {
+      "comment": "Archive refused after an identity, guard, content or verification check.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive couldn't proceed. Files or permissions changed, or verification failed."
+          }
+        }
+      }
+    },
+    "archive.freeSpace": {
+      "comment": "Archive refusal with formatted required and available free space, in that order.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive needs %@ free; %@ are available."
+          }
+        }
+      }
+    },
+    "archive.noTrash": {
+      "comment": "A verified archive is kept when this volume does not support Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive kept. This disk has no Trash, so the originals remain in place."
+          }
+        }
+      }
+    },
+    "archive.sidecarItem": {
+      "comment": "Archive is disabled when the selected item itself is a recognized AppleDouble metadata sidecar.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is a macOS metadata sidecar. Archive its sibling instead."
+          }
+        }
+      }
+    },
+    "archive.realAppleDouble": {
+      "comment": "Disable an archive format that cannot preserve dot-underscore content, including orphan sidecars.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contains macOS metadata files this format can't store."
+          }
+        }
+      }
+    },
+    "archive.created": {
+      "comment": "Successful archive result and explanation that the new archive appears after rescanning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive verified. Originals moved to Trash. Rescan to see the archive in the map."
+          }
+        }
+      }
+    },
+    "archive.writeFailed": {
+      "comment": "Archive creation failure with the subprocess or encoder status.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive creation failed (status %d). The originals were kept."
+          }
+        }
+      }
+    },
+    "archive.verifyFailed": {
+      "comment": "Archive verification failure with the verifier error code.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive verification failed (code %d). The originals were kept."
+          }
+        }
+      }
+    },
+    "archive.cleanupFailed": {
+      "comment": "An archive failure also failed to discard the incomplete or stale archive.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The incomplete archive couldn't be moved to Trash."
+          }
+        }
+      }
+    },
+    "reclaim.archiveFailed": {
+      "comment": "Archive failure and its reason.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive failed: %@"
+          }
+        }
+      }
+    },
+    "reclaim.estimateCompress": {
+      "comment": "Estimated savings for in-place compression.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves about %@ (estimated)"
+          }
+        }
+      }
+    },
+    "reclaim.estimateArchive": {
+      "comment": "Estimated archive savings require emptying the Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves about %@ once you empty the Trash (estimated)"
+          }
+        }
+      }
+    },
+    "reclaim.decompressConfirm": {
+      "comment": "Decompression confirmation names the manifest file count.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Decompress %lld file?"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Decompress %lld files?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaim.preparingEstimate": {
+      "comment": "Read-only estimate has not completed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing estimate…"
+          }
+        }
+      }
+    },
+    "reclaim.review": {
+      "comment": "Open the confirmation for all staged actions.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review actions…"
+          }
+        }
+      }
+    },
+    "reclaim.advanced": {
+      "comment": "Collapsed disclosure for advanced archive formats.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advanced"
+          }
+        }
+      }
+    },
+    "reclaim.recentlyCompressed": {
+      "comment": "Heading for reversible compression runs.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recently compressed"
+          }
+        }
+      }
+    },
+    "reclaim.decompress": {
+      "comment": "Review decompression of this run.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decompress…"
+          }
+        }
+      }
+    },
+    "reclaim.actionTrash": {
+      "comment": "Move this staged item to Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        }
+      }
+    },
+    "reclaim.actionCompress": {
+      "comment": "Compress this staged item in place.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compress"
+          }
+        }
+      }
+    },
+    "reclaim.actionArchive": {
+      "comment": "Archive this staged item beside its original.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive"
+          }
+        }
+      }
+    },
+    "reclaim.formatZIP": {
+      "comment": "ZIP format name.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZIP"
+          }
+        }
+      }
+    },
+    "reclaim.formatXZ": {
+      "comment": "XZ tar format name.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tar.xz"
+          }
+        }
+      }
+    },
+    "reclaim.formatZst": {
+      "comment": "Zstandard tar format name.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tar.zst"
+          }
+        }
+      }
+    },
+    "reclaim.formatFast": {
+      "comment": "Fast Apple Archive format.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Archive, fast (.aar, LZFSE)"
+          }
+        }
+      }
+    },
+    "reclaim.formatSmallest": {
+      "comment": "Small Apple Archive format.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Archive, smallest (.aar, LZMA)"
+          }
+        }
+      }
+    },
+    "reclaim.noteZIP": {
+      "comment": "ZIP compatibility note.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens anywhere, including Finder and Windows."
+          }
+        }
+      }
+    },
+    "reclaim.noteXZ": {
+      "comment": "XZ compatibility note.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smallest; slow to create. Opens in Finder (Archive Utility)."
+          }
+        }
+      }
+    },
+    "reclaim.noteZst": {
+      "comment": "Zstandard compatibility note.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Very fast, with good compression. Finder and macOS's tar can't open it; install zstd (for example with Homebrew) or use an app such as Keka."
+          }
+        }
+      }
+    },
+    "reclaim.noteFast": {
+      "comment": "Fast Apple Archive compatibility note.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Very fast; about ZIP's size; keeps all Mac metadata. Opens in Finder on a Mac only."
+          }
+        }
+      }
+    },
+    "reclaim.noteSmallest": {
+      "comment": "Small Apple Archive compatibility note.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nearly as small as tar.xz and several times faster; keeps all Mac metadata. Opens in Finder on a Mac only."
+          }
+        }
+      }
+    },
+    "reclaim.cancelled": {
+      "comment": "Cancellation preserves completed compression changes.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled between batches."
+          }
+        }
+      }
+    },
+    "reclaim.failedFiles": {
+      "comment": "Number of files that did not complete compression.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld file failed."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld files failed."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaim.skippedFiles": {
+      "comment": "Compression exclusion count and reason.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld skipped: %@"
+          }
+        }
+      }
+    },
+    "reclaim.processWarning": {
+      "comment": "Best effort open-file inspection limitation.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Processes belonging to other users could not all be inspected."
+          }
+        }
+      }
+    },
+    "reclaim.manifestFailed": {
+      "comment": "Compression manifest failure.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The compression manifest could not be written. Some files may be unavailable for Decompress."
+          }
+        }
+      }
+    },
+    "reclaim.proceeding": {
+      "comment": "Count of confirmed staged actions that can proceed.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld item will proceed"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld items will proceed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reclaim.preparingActions": {
+      "comment": "Volume capabilities are being prepared before action selection.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing actions…"
+          }
+        }
+      }
+    },
+    "archive.freeSpaceUnknown": {
+      "comment": "Archive refused because the available disk space could not be read.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tesserae couldn't read this disk's free space."
+          }
+        }
+      }
+    },
+    "archive.trashFailed": {
+      "comment": "A verified archive and the originals are kept; the placeholder is the Trash error message.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive kept. The originals couldn't be moved to the Trash: %@"
+          }
+        }
+      }
+    },
+    "reclaim.signaturePassed": {
+      "comment": "Successful app signature verification after compression.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App signature check passed."
+          }
+        }
+      }
+    },
+    "reclaim.signatureFailed": {
+      "comment": "Failed app signature verification with the labelled exit code.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App signature check failed (exit code %d)."
+          }
+        }
+      }
+    },
+    "reclaim.archiveFailedRestorable": {
+      "comment": "Failed archive can be restored with the Put Back button.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive failed: %@ The incomplete archive is in the Trash. Use Put Back to restore it."
+          }
+        }
+      }
+    },
+    "reclaim.skippedUnavailable": {
+      "comment": "An unavailable staged action was skipped with this reason.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped: %@"
+          }
+        }
+      }
+    },
+    "reclaim.savingsHeadline": {
+      "comment": "Archive and Trash savings become available after emptying Trash.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saves about %@ once you empty the Trash"
+          }
+        }
+      }
+    },
+    "reclaim.pathBytes": {
+      "comment": "Label for a base64-encoded path that is not valid UTF-8.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path bytes: "
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

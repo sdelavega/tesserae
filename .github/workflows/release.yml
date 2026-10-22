@@ -1,0 +1,203 @@
+# Tesserae: a disk-space visualizer.
+# Copyright (C) 2026 Stephen de la Vega
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency: { group: release-publish, cancel-in-progress: false }
+
+jobs:
+  release:
+    # Deliberately inactive until the repository is public. Pushing a release
+    # tag then confirms publication of that specific version.
+    if: github.event.repository.private == false
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pinned Xcode is installed
+        run: |
+          ls -d /Applications/Xcode*.app
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode 26.6 ($DEVELOPER_DIR) is not on this runner image; pick one listed above and update DEVELOPER_DIR in release.yml"
+            exit 1
+          fi
+
+      - name: Xcode in use
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: Install gate tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-deny
+
+      - name: Cache cbindgen
+        id: cbindgen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cbindgen
+        if: steps.cbindgen-cache.outputs.cache-hit != 'true'
+        run: cargo install cbindgen --version 0.29.4 --locked
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: apple-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Metal toolchain
+        run: |
+          if ! echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null; then
+            echo "The Metal compiler is missing from this Xcode (a separate component since Xcode 26); downloading MetalToolchain."
+            xcodebuild -downloadComponent MetalToolchain
+            echo 'kernel void k() {}' | xcrun metal -x metal -c - -o /dev/null
+          fi
+
+      # Keep the second clone in an ignored build directory so release.sh's
+      # clean-tree preflight still checks the main checkout accurately.
+      - name: Check out Homebrew tap
+        uses: actions/checkout@v4
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        with:
+          repository: sdelavega/homebrew-tap
+          path: apple/build/release-tap
+          token: ${{ env.TAP_PUSH_TOKEN }}
+
+      - name: Set up signing and notarization
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ vars.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ vars.NOTARY_ISSUER_ID }}
+        run: |
+          source scripts/release-tools.sh
+          umask 077
+          keychain="$RUNNER_TEMP/tesserae-ci.keychain-db"
+          tool security list-keychains -d user > "$RUNNER_TEMP/tesserae-keychains.txt"
+          keychain_password=$(tool openssl rand -base64 32)
+          printf '::add-mask::%s\n' "$keychain_password"
+          tool security create-keychain -p "$keychain_password" "$keychain"
+          tool security set-keychain-settings -lut 21600 "$keychain"
+          tool security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | tool base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          tool security import "$RUNNER_TEMP/developer-id.p12" -P "$DEVELOPER_ID_P12_PASSWORD" -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
+          tool rm -f "$RUNNER_TEMP/developer-id.p12"
+          tool security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          # Keep paths with spaces intact without running an unscoped subprocess.
+          previous=()
+          while IFS= read -r -d '' entry; do previous+=("$entry"); done < <(tool python3 -I -c 'import pathlib,shlex,sys; [print(p,end="\0") for p in shlex.split(pathlib.Path(sys.argv[1]).read_text())]' "$RUNNER_TEMP/tesserae-keychains.txt")
+          tool security list-keychains -d user -s "$keychain" "${previous[@]}"
+          printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/notary-api.p8"
+          tool xcrun notarytool store-credentials tesserae-ci --key "$RUNNER_TEMP/notary-api.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --keychain "$keychain"
+          tool rm -f "$RUNNER_TEMP/notary-api.p8"
+
+      - name: Write release configuration
+        env:
+          DEVELOPMENT_TEAM: ${{ vars.DEVELOPMENT_TEAM }}
+          CODE_SIGN_IDENTITY: ${{ vars.CODE_SIGN_IDENTITY }}
+        run: |
+          source scripts/release-tools.sh
+          umask 077
+          tool python3 -I - "$DEVELOPMENT_TEAM" "$CODE_SIGN_IDENTITY" <<'PYTHON'
+          import pathlib, re, sys
+          team, identity = sys.argv[1:]
+          if not re.fullmatch(r"[A-Za-z0-9]+", team) or not (re.fullmatch(r"[A-Fa-f0-9]{40}", identity) or identity.startswith("Developer ID Application:")) or any(c in identity for c in "\r\n"):
+              raise SystemExit("Missing or invalid release configuration variables")
+          pathlib.Path("apple/Release.local.xcconfig").write_text(f"DEVELOPMENT_TEAM = {team}\nCODE_SIGN_IDENTITY = {identity}\nNOTARY_PROFILE = tesserae-ci\n")
+          PYTHON
+
+      - name: Build, verify and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          TESSERAE_TAP_DIR: ${{ github.workspace }}/apple/build/release-tap
+          NOTARY_KEYCHAIN: ${{ runner.temp }}/tesserae-ci.keychain-db
+        run: |
+          source scripts/release-tools.sh
+          tool git config --global user.name 'github-actions[bot]'
+          tool git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          sparkle_key=$SPARKLE_ED_PRIVATE_KEY
+          unset SPARKLE_ED_PRIVATE_KEY
+          version=${GITHUB_REF_NAME#v}
+          publish_release() (
+            # The release orchestrator needs these explicit controls and GH auth;
+            # its own tool() further restricts every build/provisioning child.
+            for name in $(compgen -e); do
+              case "$name" in
+                PATH|HOME|TMPDIR|LANG|LC_*|USER|DEVELOPER_DIR|GH_TOKEN|TESSERAE_TAP_DIR|NOTARY_KEYCHAIN) ;;
+                *) unset "$name" ;;
+              esac
+            done
+            CI=true scripts/release.sh "$version" --ci-publish
+          )
+          printf '%s\n' "$sparkle_key" | publish_release
+          unset sparkle_key
+
+      - name: Upload Xcode results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-xcode-results
+          path: |
+            apple/build/*.xcresult
+            apple/build/DerivedData/Logs
+          if-no-files-found: ignore
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          source scripts/release-tools.sh
+          status=0
+          if [ -f "$RUNNER_TEMP/tesserae-ci.keychain-db" ]; then
+            tool security delete-keychain "$RUNNER_TEMP/tesserae-ci.keychain-db" || status=$?
+          fi
+          if [ -f "$RUNNER_TEMP/tesserae-keychains.txt" ]; then
+            previous=()
+            while IFS= read -r -d '' entry; do previous+=("$entry"); done < <(tool python3 -I -c 'import pathlib,shlex,sys; [print(p,end="\0") for p in shlex.split(pathlib.Path(sys.argv[1]).read_text())]' "$RUNNER_TEMP/tesserae-keychains.txt")
+            tool security list-keychains -d user -s "${previous[@]}" || status=$?
+          fi
+          tool rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-api.p8" "$RUNNER_TEMP/tesserae-keychains.txt" apple/Release.local.xcconfig || status=$?
+          exit "$status"

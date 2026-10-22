@@ -20,6 +20,7 @@ import TesseraeKit
 
 @main
 struct TesseraeApp: App {
+    @StateObject private var updates: Updates
     private let accessReport: AccessReportConfiguration?
 
     init() {
@@ -29,6 +30,8 @@ struct TesseraeApp: App {
             FileHandle.standardError.write(Data("tesserae access report: \(error)\n".utf8))
             exit(2)
         }
+        let startUpdates = accessReport == nil && !FrameTimer.shared.isEnabled
+        _updates = StateObject(wrappedValue: Updates(startingUpdater: startUpdates))
         if let configuration = accessReport {
             Task {
                 do {
@@ -48,14 +51,48 @@ struct TesseraeApp: App {
     }
 
     var body: some Scene {
-        Window("Tesserae", id: "main") {
+        Window(String(
+            localized: "tesseraeApp.tesserae",
+            defaultValue: "Tesserae",
+            comment: "TesseraeApp: Tesserae."
+        ), id: "main") {
             if accessReport != nil {
-                ProgressView("Writing access report…").padding()
+                ProgressView(String(
+                    localized: "tesseraeApp.writing.access.report",
+                    defaultValue: "Writing access report…",
+                    comment: "TesseraeApp: Writing access report…."
+                )).padding()
             } else {
                 ContentView()
             }
         }
-        .commands { JetsamCommands() }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1440, height: 900)
+        .commands {
+            ReclaimCommands()
+            ScanCommands()
+            ColourCommands()
+            CommandGroup(replacing: .appInfo) {
+                Button(String(
+                    localized: "tesseraeApp.about.tesserae",
+                    defaultValue: "About Tesserae",
+                    comment: "TesseraeApp: About Tesserae."
+                )) { AppChrome.showAbout() }
+                Button(String(
+                    localized: "tesseraeApp.check.for.updates",
+                    defaultValue: "Check for Updates…",
+                    comment: "TesseraeApp: Check for Updates…."
+                )) { updates.checkForUpdates() }
+                    .disabled(!updates.canCheckForUpdates)
+            }
+            CommandGroup(after: .help) {
+                Button(String(
+                    localized: "tesseraeApp.support.tesserae",
+                    defaultValue: "Support Tesserae…",
+                    comment: "TesseraeApp: Support Tesserae…."
+                )) { AppChrome.openSupport() }
+            }
+        }
         #if DEBUG
         .commands {
             CommandMenu("Diagnostics") {
@@ -70,5 +107,8 @@ struct TesseraeApp: App {
             }
         }
         #endif
+        Settings {
+            UpdateSettingsView(updates: updates)
+        }
     }
 }

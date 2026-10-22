@@ -23,3 +23,13 @@ confidence-threshold = 0.93
 [[licenses.exceptions]]
 crate = "libfuzzer-sys"
 allow = ["NCSA"]
+
+# zstd's Rust safety layer and bundled C implementation are BSD-3-Clause.
+# Keep this scoped to these two dependencies; the main allowlist stays narrow.
+[[licenses.exceptions]]
+crate = "zstd-safe"
+allow = ["BSD-3-Clause"]
+
+[[licenses.exceptions]]
+crate = "zstd-sys"
+allow = ["BSD-3-Clause"]

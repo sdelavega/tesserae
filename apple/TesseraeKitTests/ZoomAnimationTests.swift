@@ -102,8 +102,8 @@ final class ZoomAnimationTests: XCTestCase {
 
         let device = MTLCreateSystemDefaultDevice()
         let renderer = device.flatMap { TreemapRenderer(device: $0) }
-        let palette = Palette.colours(.depth, dark: false)
-        let colourOf: (Tile) -> UInt16 = { UInt16(Palette.firstColourIndex + Int($0.depth) % 5) }
+        let palette = Palette.colours(.folder, dark: false)
+        let colourOf: (Tile) -> UInt16 = { UInt16(Palette.firstColourIndex + min(Int($0.depth), 3)) }
         var animatedFrames = 0
 
         for side in [0.0, 0.5, 1.0] as [CGFloat] {
@@ -175,7 +175,7 @@ final class ZoomAnimationTests: XCTestCase {
         let size = CGSize(width: 100, height: 80)
         let old = [Tile(rect: CGRect(origin: .zero, size: size), node: 0, depth: 3)]
         var next = [Tile(rect: CGRect(x: 0, y: 0, width: 60, height: 50), node: 1, depth: 0)]
-        var palette = Palette.colours(.depth, dark: false)
+        var palette = Palette.colours(.folder, dark: false)
         let index: (Tile) -> UInt16 = { UInt16(2 + $0.depth) }
         renderer.update(tiles: old, colourOf: index, palette: palette)
         XCTAssertTrue(renderer.beginZoom())
@@ -245,7 +245,7 @@ final class ZoomAnimationTests: XCTestCase {
     func test_zoom_cross_fade_is_uniform_where_tiles_overlap() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
         let r = try XCTUnwrap(TreemapRenderer(device: device))
-        let palette = Palette.colours(.depth, dark: false)
+        let palette = Palette.colours(.folder, dark: false)
         let colourOf: (Tile) -> UInt16 = { UInt16(Palette.firstColourIndex + Int($0.depth)) }
         func colour(_ depth: UInt8) -> Px { Self.q(palette[Palette.firstColourIndex + Int(depth)]) }
         let size = CGSize(width: 100, height: 80)

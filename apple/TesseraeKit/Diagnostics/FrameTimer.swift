@@ -45,7 +45,7 @@ public final class FrameTimer: @unchecked Sendable {
     private let enabled: Bool
     private var generation: UInt64 = 0
     private var recording = false
-    private var pass = "depth"
+    private var pass = "folder"
     private var label = ""
     private var values: [Sample] = []
     private var lastPresentation: Double?
@@ -67,7 +67,7 @@ public final class FrameTimer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         generation &+= 1
         values.removeAll(keepingCapacity: true)
-        pass = "depth"
+        pass = "folder"
         label = ""
         lastPresentation = nil
         lastFrame = nil
@@ -239,7 +239,7 @@ public struct FrameGateConfiguration: Equatable, Sendable {
 /// Runs the actual window's navigation and MTKView, with normal labels/table
 /// updates, rather than substituting an offscreen render benchmark: the five
 /// largest sized, readable directories directly under the root, each entered
-/// and left three times in Depth, Age and Type focus, followed by a hover sweep.
+/// and left three times in Folder, Age and Type focus, followed by a hover sweep.
 @MainActor
 public final class PhaseGateRunner: ObservableObject {
     public enum Outcome: Equatable, Sendable {
@@ -300,8 +300,8 @@ public final class PhaseGateRunner: ObservableObject {
             try? await Task.sleep(for: pause * 3)
             timer.startCapture()
             var settleTimeouts = 0
-            let passes = ["depth", "age", "type-focus", "hover"]
-            let modes: [ColourMode] = [.depth,
+            let passes = ["folder", "age", "type-focus", "hover"]
+            let modes: [ColourMode] = [.folder,
                 .age(now: Date(timeIntervalSince1970: Double(snapshot.stats.started_at))),
                 .typeFocus([.video, .images, .audio])]
             for (pass, mode) in zip(passes, modes) {

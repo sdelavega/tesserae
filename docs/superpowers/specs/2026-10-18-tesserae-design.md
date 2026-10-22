@@ -4,7 +4,8 @@
 **Status:** Approved design. Phase 1 (the scan engine and C ABI, §§4–7 and
 the FFI of §6) is built; its plan is
 `docs/superpowers/plans/2026-10-18-tesserae-phase-1-engine.md`, and the
-sections it touches describe it as built. Later phases are not yet planned.
+sections it touches describe it as built. Phases 2–6 are also built; dated
+Phase 6 notes below record the final implementation and safety rulings.
 
 ---
 
@@ -81,8 +82,8 @@ These are the author's inferences, recorded so they can be challenged:
 - The default scan root is the data volume, not `/`.
 - Allocated size (not logical) is the default display, because the user's
   question is "how much will I get back."
-- Depth is the default colour encoding; age is one click away. This is a
-  UX judgment to confirm against a prototype, not a settled fact.
+- Folder is the default colour encoding as built in Phase 6 (§8); age is
+  one click away. It supersedes the original Depth-default assumption.
 
 ---
 
@@ -90,15 +91,27 @@ These are the author's inferences, recorded so they can be challenged:
 
 ### v1
 
+- A start screen listing the mounted volumes to scan, plus Choose a Folder… (§8).
 - Full-volume scan, stateless, no persistent index.
-- Squarified treemap with level-of-detail and smooth zoom.
-- Sortable file table, selection synced with the treemap.
+- Squarified treemap with level-of-detail and smooth zoom, coloured by
+  top-level folder by default, with folder name strips (§8).
+- A folder tree sorted by size, with a Largest Files view, selection synced
+  with the treemap (§8).
 - Space reconciliation with a signed residual (§9).
 - Snapshot count and dates, reported not deleted.
-- Jetsam staging and trash-only deletion with a two-layer guard list (§10).
+- Reclaim Space: staging, then Move to Trash, Compress or Archive, all behind
+  a two-layer guard list (§10, §10a).
+- Every user-facing string in a strings catalog, ready for translation.
 - Full Disk Access onboarding, and a clearly-labelled Limited scan when
   declined.
 - Scan report surfacing every incompleteness.
+
+**As built (Phase 6), 2026-10-22.** The v1 surfaces above are implemented:
+the volume start screen, Folder colour, name strips and relative hover paths,
+folder tree / Largest Files switch, catalogued English strings, and all three
+Reclaim Space actions. Compress is limited to local writable APFS/HFS+;
+Archive defaults to Apple Archive LZFSE there and ZIP elsewhere (§10a).
+Non-Apple-filesystem compression remains 1.x work, including NTFS.
 
 ### 1.x
 
@@ -109,6 +122,58 @@ These are the author's inferences, recorded so they can be challenged:
   directories. This is curation work, not API work.
 - One-click cleanup presets (DerivedData, caches, Homebrew), deliberately
   deferred until there is a bug history to design them against.
+- **Compress in place on non-Apple filesystems** (user request 2026-10-21,
+  tabled from Phase 6). Investigate each before designing; offer only what
+  can be done safely through the mounted driver and verified afterwards:
+  - **NTFS XPRESS (WOF) compression — the headline of the release after
+    0.1.0, as its own phase with its own spec** (user decision 2026-10-21).
+    XPRESS16K is the default; XPRESS4K, XPRESS8K and LZX are Advanced.
+    Only Windows ships a writer, which is what makes this distinctive, but
+    the format is known: the reparse point (`IO_REPARSE_TAG_WOF`
+    0x80000017, `WOF_EXTERNAL_INFO`, `FILE_PROVIDER_EXTERNAL_INFO_V1`) and
+    algorithms/chunk sizes are Microsoft-documented; the sparse main stream
+    plus `:WofCompressedData` stream (chunk-offset table, 4-byte offsets
+    under 4 GiB and 8-byte at or above, then chunks) is documented by woftool
+    and implemented by Linux's `fs/ntfs/wof.c`; XPRESS Huffman is in
+    Microsoft's MS-XCA; wimlib's XPRESS/LZX compressors are LGPL-3/GPL-3.
+    Needs a read-write NTFS driver (ntfs-3g on macFUSE, which exposes
+    streams and reparse data as extended attributes, or our own FSKit
+    driver). Safety: build the compressed file beside the original, decode
+    its stream with our own decompressor and compare byte for byte, then
+    replace — never compress in place. Release gate: files compressed on a
+    Mac pass Windows `chkdsk` and read back identically on Windows, Linux
+    and macOS (ntfs-3g plus its system-compression plugin), on disposable
+    NTFS images. Classic LZNT1 (ntfs-3g compresses only newly created files
+    in a compressed directory) is a possible Advanced extra.
+  - **ZFS** (OpenZFS on macOS): compression is a dataset property
+    (`zstd`, `lz4`, `gzip`) that applies to new writes; existing files are
+    recompressed only by rewriting them. Approach (user decision
+    2026-10-21): when OpenZFS on OS X is installed, drive its own `zfs`
+    tools as a separate program (no code combined, so CDDL and GPL never
+    mix); for read-only scans without it, build on the GPL read-only ZFS
+    reader Sun contributed to GRUB. A clean-room read-write implementation
+    is a separate long-term project: it needs human implementers who never
+    saw OpenZFS source (AI-written code can't credibly claim that) and
+    legal review of the remaining ZFS patents, since CDDL's patent grant
+    would not cover it.
+  - **Btrfs** (no maintained macOS read-write driver known): per-file and
+    per-directory `zstd`, `lzo`, `zlib`, applied to new writes or by
+    `btrfs filesystem defragment -c` on Linux.
+  - Others to survey: bcachefs, F2FS, and whatever FSKit-based drivers ship
+    by then.
+  - **If macOS has no workable driver, build one and publish it** (user
+    direction 2026-10-21: many devops engineers use Macs daily). Likely
+    shape: open-source FSKit (user-space) modules, a separate project from
+    Tesserae that Tesserae then drives. Starting facts to check: NTFS is
+    already reverse-engineered (ntfs-3g, GPL-2.0-or-later, compatible) and
+    Microsoft documents XPRESS and LZX in [MS-XCA]; Btrfs and ZFS are open
+    source, but Btrfs's kernel code is GPL-2.0-only (incompatible with
+    GPL-3; clean-room or a separate GPL-2 project) and OpenZFS is CDDL
+    (GPL-incompatible; keep it a separate component). FSKit needs a recent
+    macOS, so check its version floor against Tesserae's macOS 13 floor.
+    Write support must be proven against the reference implementations
+    (Windows `chkdsk`, `btrfs check`, `zpool scrub`) on disposable images
+    before any user data touches it.
 
 ### Explicitly never
 
@@ -116,7 +181,8 @@ These are the author's inferences, recorded so they can be challenged:
   private frameworks or guessing. The purgeable **total** is a different
   matter and is directly obtainable (§9); only the per-file or
   per-category breakdown is out of reach.
-- Permanent delete or secure erase.
+- Permanent delete or secure erase. (Archiving moves the originals to the
+  Trash like any other removal; it never unlinks them.)
 - Snapshot deletion.
 - Background or scheduled deletion.
 - Telemetry.
@@ -196,7 +262,7 @@ Tesserae.app
 │   ├── Labels · Inspector    label placement, hover inspector
 │   ├── FileTable             NSTableView via NSViewRepresentable
 │   ├── SpaceReconciler       volume facts, snapshots, signed residual
-│   ├── Jetsam                staging set + trash execution
+│   ├── Reclaim               staging set + trash execution
 │   └── Permissions           FDA probe + onboarding
 └── libtesserae_ffi.a (Rust staticlib)
     ├── walk · pool           getattrlistbulk traversal + worker pool
@@ -210,7 +276,7 @@ Tesserae.app
 ```
 
 The Swift side is a **framework, not app-target code**, so layout,
-reconciliation, guard lists and Jetsam are unit-testable without launching
+reconciliation, guard lists and Reclaim Space are unit-testable without launching
 a window. The engine stays replaceable behind the FFI surface.
 
 As built in Phase 2, everything that holds an index into a snapshot (the
@@ -849,24 +915,70 @@ Validated under `--pairs all`, the eight-slot categorical palette caps at
 **three slots**. So a rainbow-by-file-type is not available, which is
 fortunate, because a twelve-hue legend was never readable anyway.
 
-**Mode 1 — Depth (default).** Ordinal blue ramp, steps 250–700 light (with
-step 3 darkened to `#256bc0`), anchor-flipped dark.
+**Mode 1 — Folder (default; Phase 6, replaces the single-hue Depth ramp).**
+Each child of the current navigation root (a "top-level folder" of the view)
+gets one hue, and everything inside it wears that hue, so the eye groups a
+folder's contents at a glance. Depth inside the folder is lightness within
+the hue. Loose files directly under the root, aggregates of root children and
+the root's own tile are neutral.
+
+The hues are the reference eight-slot categorical palette, with two
+substitutions so every depth step clears 4.5:1 for its label ink: light blue
+`#2a78d6` → `#256bc0` (as in Type focus, below) and green `#008300` →
+`#007a00` (4.30:1 → 4.83:1) in both modes. Each row is slot 1–8 at depth step
+0–3:
 
 ```
-light  #86b6ef  #5598e7  #256bc0  #184f95  #0d366b
-dark   #184f95  #256abf  #3987e5  #6da7ec  #9ec5f4
+slot          light                                  dark
+1 blue    #256bc0 #0d59ac #004893 #003976     #3987e5 #4c9afa #6faefe #92c2ff
+2 orange  #eb6834 #ff7d4b #ff9e7b #febca5     #d95926 #ee6c3b #fe8458 #ffa484
+3 aqua    #1baf7a #3bc28c #53d69e #69eab1     #199e70 #37b182 #4ec494 #64d8a6
+4 yellow  #eda100 #ffb63e #ffd08f #ffe9cc     #c98500 #dd982a #f1ab43 #ffc16c
+5 magenta #e87ba4 #fd8eb7 #ffaeca #ffcddd     #d55181 #ea6493 #ff78a5 #ff9dba
+6 green   #007a00 #036602 #025301 #014001     #007a00 #036602 #025301 #014001
+7 violet  #6250d6 #533cc1 #4427ad #370a99     #9085e9 #a298fe #b5b0fe #c9c7fe
+8 red     #e34948 #f95d5a #fe8079 #fea29a     #e66767 #fb7a79 #fe9a97 #feb9b6
 ```
 
-Validated: monotone L, adjacent ΔL ≥ 0.06, light-end contrast 2.06:1 light
-/ 2.15:1 dark, hue spread 4° light / 3° dark. Passes both modes.
+Step 0 is the folder's own tile; a descendant at relative depth *d* takes step
+min(*d*, 3). Steps move 0.06 in OKLCH L per level (chroma reduced only to stay
+in gamut), **in the direction that raises the better ink's contrast**: lighter
+where `#0b0b0b` wins at step 0, darker where `#f0efec` wins. So contrast only
+grows with depth; the minimum over all 64 fills is 4.63:1 (`#256bc0`). Step 0
+of each mode passes the validator on the adjacent pairlist (light: CVD 9.1,
+normal 19.6, contrast WARN for aqua, yellow and magenta, discharged by labels,
+headers and the table; dark: CVD 8.4, normal 19.3, all ≥ 3:1).
 
-Why the light ramp changed (after the Phase 2 final review): labels choose
-their ink per tile (see Labels), and the original light step 3, `#2a78d6`
-(reference step 450), gave its better ink only 4.46:1, under WCAG AA's 4.5:1
-for text. It is darkened to `#256bc0` (4.63:1 with `#f0efec`). Darkening
-step 3 alone failed the adjacent-ΔL check (0.051), so steps 4–5 moved to
-reference steps 600 and 700 (`#184f95`, `#0d366b`, were `#1c5cab`,
-`#104281`). Revalidated with `--ordinal --mode light`: all checks pass.
+**Assignment is adjacency-aware, because eight hues cannot pass all-pairs.**
+Under `--pairs all` these slots fail (light: worst CVD 3.6, normal 7.1). A
+treemap only needs *touching* folders to differ, so slots are assigned per
+view by greedy colouring of the touching graph, using the union of both
+modes' failing pairs as conflicts (a pair conflicts if CVD ΔE < 8 or normal
+ΔE < 15 in either mode, measured 2026-10-21 with the dataviz validator):
+
+```
+1–7  2–4  2–5  2–6  2–8  3–5  3–6  3–8  4–8  5–8  6–8
+```
+
+- Two root children *touch* when their rects share an edge segment longer than
+  1pt (the 2px surface gap between folder tiles does not count as separation).
+- Children are coloured largest first; each takes the lowest slot that is
+  neither used by nor in conflict with any already-coloured touching
+  neighbour. If none exists, it takes the lowest slot not *used* by a touching
+  neighbour (a conflicting but distinct hue); if all eight are used, slot 1.
+  Folder header strips and the gap are the secondary encoding for those rare
+  cases.
+- The assignment is a pure function of the root's laid-out rects, so it is
+  stable across appearance changes and redraws, and recomputed on navigation,
+  resize and overlay changes. Colour follows the folder within a view; a
+  different view may colour it differently, which is the price of eight hues
+  in an all-pairs form.
+
+The old Depth ramp (`#86b6ef … #0d366b`) is removed with this mode.
+
+Why `#256bc0` (after the Phase 2 final review): labels choose their ink per
+tile (see Labels), and `#2a78d6` gave its better ink only 4.46:1, under WCAG
+AA's 4.5:1 for text; `#256bc0` gives 4.63:1 with `#f0efec`.
 
 **Mode 2 — Age.** Sequential blue ramp, full 100→700, light = recently
 modified, dark = stale, flipped in dark mode. Old-and-large is the reclaim
@@ -899,11 +1011,20 @@ it spends the identity channel re-encoding what the rectangle says.
 
 **The palette buffer** has one layout in every mode, so the shader and the
 CoreGraphics renderer index it alike: `[0]` neutral (light `#d6d5cf`, dark
-`#3a3a37`), `[1]` status (`#fab219`), `[2…]` the mode's ramp. A
-permission-denied tile is the status colour in every mode, including the
-collapsed "N unreadable folders" square. Any other aggregate tile has no single
-age or kind, so it takes its depth colour in Depth mode and the neutral colour
-in the other two.
+`#3a3a37`), `[1]` status (`#fab219`), `[2…]` the mode's ramp. In Folder
+mode the ramp is the 32 fills above, slot *s* (1–8) at step *d* at index
+`2 + (s − 1) × 4 + d`. A permission-denied tile is the status colour in every
+mode, including the collapsed "N unreadable folders" square. Any other
+aggregate tile has no single age or kind, so it takes its folder's colour at
+its step in Folder mode (neutral directly under the root) and the neutral
+colour in the other two.
+
+The colour modes are a segmented control and the View menu: Folder ⌘1,
+Age ⌘2, Type focus ⌘3.
+
+**As built (Phase 6), 2026-10-22.** Folder replaces Depth as the default.
+The adjacency assignment and capped depth steps above are implemented;
+Age and Type focus retain their existing meanings.
 
 Two binding obligations:
 
@@ -967,9 +1088,45 @@ As built:
   that will delete them; a crafted name must not reorder or hide what the user
   reads.
 
+### Folder headers and paths (Phase 6)
+
+Folders are outlined two ways, as in WizTree: a permanent **header strip**
+on large folders, and a hover callout everywhere.
+
+- **Header strips are reserved by the layout**, not drawn over children. A
+  subdivided directory whose rect is at least 96pt wide and 48pt tall gets a
+  16pt strip across its top; its children are squarified in the rect below.
+  Root children always qualify when they meet the size rule; deeper folders
+  qualify by the same rule, so strips nest only where there is room. The
+  folder's tile area (strip included) stays proportional to its size; its
+  children's areas stay proportional among themselves. The strip is part of
+  the folder's own tile, so hit testing, hover, click-to-zoom and selection
+  treat it as the folder.
+- The strip shows name and size, left-aligned, 4pt padding, in the per-tile
+  ink chosen against the folder's fill, with the same truncation and
+  neutralisation rules as labels. A folder with a strip gets no other label.
+  Strips are labels for motion purposes: hidden during zoom, faded in after.
+- **View → Show Folder Names** (on by default, persisted) turns strips off;
+  the layout then reserves nothing.
+- **Hover callout.** After 500ms resting on a tile, a callout near the pointer
+  shows the path **relative to the scan root**, its components joined by
+  " › " and starting with the scan root's display name (for example
+  `USB321FD › Projects › tesserae`), plus the size. It hides on pointer
+  movement out of the tile, scroll, click or motion. The inspector shows the
+  same relative path; Copy Path still copies the absolute path.
+- Path components use the label neutralisation rules; the relative path is
+  built from node names, never by string-trimming the absolute path.
+
+**As built (Phase 6), 2026-10-22.** The strips, persisted Show Folder
+Names setting and 500ms callout above are implemented. Inspector information
+is resolved only when the tile changes; the callout resolves inside its dwell,
+not on every mouse-move event (T6-R1).
+
 ### Zoom and navigation
 
-Clicking a directory tile makes it the layout root. The animation computes
+Clicking a tile zooms **one level**: the layout root becomes the root's child
+that contains the clicked tile (as built in Phase 5; a click on a deeper file
+does not jump straight to its parent). The animation computes
 the target layout, renders the *old* layout transformed so the clicked rect
 fills the viewport, and cross-fades — ~250ms ease-out, two instance buffers
 and an alpha uniform, no per-frame relayout. The static destination texture is
@@ -1023,15 +1180,45 @@ largest first, ties by node index, and sorts are stable on ties either way.
 On a navigation, the table's work (like the labels') starts once motion has
 settled.
 
+**Phase 6: a folder tree first.** The pane above the table gains a segmented
+control, **Folders** (default) and **Largest Files** (the table above,
+unchanged).
+
+- **Folders** is an `NSOutlineView` rooted at the navigation root. Each row
+  is a child: disclosure triangle for readable directories, name, size on
+  disk, a share bar (fraction of the root, drawn in neutral ink, never a tile
+  colour), item count for directories, and modified date. Children sort by
+  size on disk descending, ties by node index; columns are sortable like the
+  table, sorting each sibling list. Aggregation mirrors the treemap's
+  contiguous-suffix cut: after the first 500 children a row reads "N smaller
+  items — X".
+- It reads the snapshot through `OverlaySource`, so trashed or archived items
+  disappear and ancestors shrink. Children are produced lazily on expansion
+  (sorted ranges are already contiguous in the snapshot; affected parents use
+  `ChildList`), so a million-file root costs only its expanded rows.
+- **Selection is the same shared set.** Selecting a treemap tile expands the
+  outline to that node and scrolls it into view; selecting a row selects the
+  tile. Double-clicking a directory row navigates into it, like Return.
+  Expansion state persists per root while the session lives.
+- The Modified column is wide enough for the locale's medium date format
+  (fixing the truncation noted in Phase 5), in both views.
+
+**As built (Phase 6), 2026-10-22.** Folders is the default list; Largest
+Files retains the top-1,000 candidate set above. The outline caps each sibling
+list at 500 rows; selecting a node beyond that cut reveals the smaller-items
+row while retaining the node selection. Descendant counts use `Int32`, stale
+outline items are pruned on update, and repeating a selection does not rebuild
+it (T7-R1).
+
 ### Window and session
 
 Tesserae has one window, one `ContentView` and one `AppModel`, using a SwiftUI
 `Window` scene (macOS 13+). There is no New Window command. Scanning replaces
 the session in that window.
 
-The window is a toolbar (Scan Data Volume, Scan Folder…, Cancel, the colour
-picker), a scan progress view (counts and entries per second, never a
-percentage) while scanning, then the breadcrumb above a split of treemap over
+The window is a toolbar (Scan Another Location…, Rescan, Cancel, the colour
+picker and pane toggles), a scan progress view (counts and entries per second,
+never a percentage) while scanning, then the breadcrumb above a split of treemap over
 table with a trailing inspector column. A partial result is never shown as
 complete: a banner reads "Partial result —" followed by the stop reason
 (cancelled, node limit, out of memory, stalled at a named path, descriptors
@@ -1042,6 +1229,56 @@ an empty-state message instead of a blank canvas. **The selection outline is
 an overlay** of the tiles carrying the `selected` flag (a 2pt stroke), hidden
 while motion runs, like the labels. The window replaces its whole session on a
 rescan (§5).
+
+**Start screen (Phase 6).** With no session, the window shows a list of
+places to scan instead of two buttons, in three groups:
+
+1. **This Mac** — the startup disk, named by its localized volume name and
+   scanned as the Data volume (as built in Phase 5).
+2. **Other disks** — other local, browsable volumes, internal or external.
+3. **Network** — mounted network volumes (`volumeIsLocal` false), with the
+   note "Network volumes scan more slowly."
+
+Excluded: hidden volumes, everything under `/System/Volumes/`, disk images
+(DiskArbitration's device model "Disk Image"), Time Machine backup
+volumes, and volumes that are not browsable. Each row: a drive icon (SF
+Symbols `internaldrive`, `externaldrive`, `server.rack`), the name, the
+filesystem's display name (APFS, Mac OS Extended, exFAT, MS-DOS (FAT), NTFS,
+SMB, AFP, NFS; otherwise the raw type), "X used of Y — Z free", and a Scan
+button; a double-click also scans. Below the groups, **Choose a Folder…**
+(⌘O). The list updates live on `NSWorkspace` mount, unmount and rename
+notifications. A volume whose capacity cannot be read still appears, with
+"Size unknown". Opening the start screen again, after a scan, is **File →
+Scan Another Location…** (⌘⇧N) and the toolbar's leftmost button; it does not
+discard the session until a new scan starts. ⌘⇧O still scans the startup
+disk.
+
+**As built (Phase 6), 2026-10-22.** The start screen and live volume
+updates above are implemented. Disk-image identification uses DiskArbitration's
+**device model** `"Disk Image"`; the measured device protocol was
+`"Virtual Interface"`, not `"Disk Image"` (T4-R2). The code checks both model
+and protocol. Capacity failures keep the row visible with Size unknown.
+
+**Toolbar help (Phase 6).** Every toolbar control has a tooltip (`.help`)
+and an accessibility label naming what it does and its shortcut, for example
+"Scan another location (⌘⇧N)", "Rescan this location (⌘R)", "Show or hide
+Reclaim Space", "Show or hide the scan report", "Colour by folder, age or
+file type (⌘1–⌘3)", "Cancel the scan (⌘.)". Icon-only buttons are never
+unlabeled.
+
+**Localisation (Phase 6).** Every user-facing string, including
+accessibility labels, tooltips, menu items, alerts and the strings built by
+view models, comes from `Localizable.xcstrings` (development language
+English) through `String(localized:)` with a stable key and a translator
+comment. Plurals use the catalog's plural variants, never string
+concatenation; numbers, sizes and dates use formatters. No translations ship
+in 0.1.0; a test fails if a user-facing literal bypasses the catalog.
+
+**As built (Phase 6), 2026-10-22.** Catalog lookups select plural rules from
+the bundle's resolved language with the user's region; numbers keep the user's
+grouping. This avoids applying Russian, French or Polish plural rules to the
+English-only strings (T3-R1). Toolbar help and accessibility labels ship with
+the catalog checks.
 
 ---
 
@@ -1175,14 +1412,26 @@ likely contribution, and deep-links to Time Machine settings.
 
 ---
 
-## 10. Jetsam and deletion safety
+## 10. Reclaim Space and deletion safety
 
 ### Four invariants
 
 1. **Rust never deletes.** It computes; Swift destroys.
 2. **Trash-first, always.** No permanent delete, no secure erase in v1.
-3. **Nothing happens at selection time.** Jetsam is a staging set.
+3. **Nothing happens at selection time.** Reclaim Space is a staging set.
 4. **Every guard is re-evaluated at execution time.**
+
+**Naming (Phase 6).** This feature was called Jetsam through Phase 5. It is
+now **Reclaim Space** everywhere: the pane, menu and button titles ("Add to
+Reclaim Space", ⌘⌫), code (`Reclaim…` types, `TesseraeKit/Reclaim/`) and the
+audit log (`reclaim.log`). "Jetsam" was unclear to many people and hard to
+translate. Nothing has shipped, so there is no migration of the old log.
+
+In Phase 6 each staged item offers one of three actions, chosen in the
+review (§10a): **Move to Trash** (this section), **Compress** and
+**Archive**. The invariants hold for all three: Rust never opens, creates, renames or deletes a path (for tar.zst it only encodes between two descriptors Swift created), nothing
+is lost outright (originals go to the Trash or are rewritten byte-identically),
+nothing happens at selection time, and every guard is re-run at execution.
 
 ### Why trash
 
@@ -1270,7 +1519,7 @@ churn, not a security boundary against a local attacker.**
 
 ### Staging
 
-`JetsamItem` stores `nodeIndex`, raw `path: Data`, `recorded: Recorded`
+`ReclaimItem` stores `nodeIndex`, raw `path: Data`, `recorded: Recorded`
 (file ID, device and directory type), `recordedSize: UInt64?`, strongest
 `verdict`, frozen `warnings: [Reason]`, `hasUnknownContent` and descendant
 node references with snapshot ownership, plus `overlayRevision` and `sessionID`.
@@ -1300,7 +1549,7 @@ Newly included warnings start unchecked in a fresh review. The executor refuses
 an item from another session or revision as **“changed since review”**, without
 a Trash call, even if its path and file identity still match.
 
-One process-wide `JetsamCoordinator`, shared by every `AppModel`, holds a permit
+One process-wide `ReclaimCoordinator`, shared by every `AppModel`, holds a permit
 from scan start, preparation, restore or execution through its main-actor
 publication/overlay update. Awaiting the permit suspends without
 blocking the main actor. A restore already in flight therefore cannot change
@@ -1318,7 +1567,7 @@ sessions through the process-wide publication check below.
 - Staged verdicts are hints; execution verdicts decide. The confirmation's
   reviewed verdicts also prevent a subsequently cleared warning from granting
   consent the user withheld, or a previously denied item from executing.
-- Selection and the Add to Jetsam command only stage. They never move anything.
+- Selection and the Add to Reclaim Space command only stage. They never move anything.
 
 ### Execution
 
@@ -1416,8 +1665,8 @@ available for Put Back in the current result when audit appending fails.
 ### Audit log
 
 `Executor` accepts `AuditSink: Sendable` (`append(LogEntry) -> Bool`);
-`JettisonLog` supplies the production append-only JSONL store at
-`~/Library/Application Support/Tesserae/jettison.log`:
+`ReclaimLog` supplies the production append-only JSONL store at
+`~/Library/Application Support/Tesserae/reclaim.log`:
 
 ```json
 {"ts":"2026-10-18T14:22:03Z","action":"trash","path":"…","inode":918273,
@@ -1432,7 +1681,7 @@ directory totals. `bytes` is optional for wholly unknown sizes. Every executor o
 one entry; successful Put Back adds `action: "putBack"`. History reads across
 rotation and excludes restored volume/device identities. All wrappers for a
 canonical directory share a process-wide coordinator and failure state. An
-exclusive `flock` on `jettison.lock` covers each complete rotate/open/write or
+exclusive `flock` on `reclaim.lock` covers each complete rotate/open/write or
 read/decode transaction, including across processes;
 new files use 0600 and the directory 0700. An existing looser directory is
 re-tightened to 0700 best-effort. The default 5 MiB rotation keeps `.1` through
@@ -1456,6 +1705,414 @@ in-app under F-C1. The coordinator alone re-runs live checks after this fix.
 The full gate also retains the read-only diskutil comparison: up to three
 back-to-back paired samples, accepting any pair within the unchanged 8 MiB
 bound to reduce inter-read skew (Ruling T5-2).
+
+---
+
+## 10a. Compress and archive (Phase 6)
+
+Moving to the Trash frees space only by giving data up. Two actions keep it:
+**Compress** rewrites files with APFS/HFS+ transparent compression, so every
+app still reads them unchanged; **Archive** packs an item into one compressed
+file next to it, then moves the originals to the Trash. Both are staged and
+reviewed exactly like Move to Trash; the review picks the action per item.
+
+### Which action is offered
+
+| Action | Offered when |
+|---|---|
+| Move to Trash | As §10, on a writable volume. |
+| Compress | The item's volume is local (`MNT_LOCAL`), writable, and its `f_fstypename` is `apfs` or `hfs`. |
+| Archive | The item's volume is writable. The archive is written next to the item, so its parent must be writable. |
+
+Every §10 denial denies all three actions. An unavailable action stays visible
+in the item's action picker, disabled, with its reason as the tooltip. On a
+volume without Compress (exFAT, FAT, NTFS, network) the review explains
+"This disk can't compress files in place. Archive instead?".
+
+### Compress
+
+**The tool is applesauce, bundled.** [applesauce](https://github.com/Dr-Emann/applesauce)
+(GPL-3, Rust) refuses hard-linked files instead of corrupting them, and
+replaces each file atomically; Pomace chose it over afsctool for exactly that
+(Pomace ADR-0015). Tesserae is GPL-3 too, so it ships the binary:
+
+- Built from source at one exact upstream release, pinned by version and
+  `Cargo.lock` under `tools/applesauce/`, by `scripts/build-applesauce.sh`
+  (universal, `--locked`), copied to `Contents/Helpers/applesauce` and signed
+  with the app's identity and hardened runtime. About → Licences lists it with
+  its GPL-3 text and the exact upstream source URL and tag.
+- The app checks off the main actor, when preparing compression, that the
+  helper exists, is signed by the same team
+  (or ad-hoc in development builds) and that `compress --help` lists
+  `--verify`; otherwise Compress is unavailable with "The compression helper is
+  missing or damaged. Reinstall Tesserae." A build without `--verify` is
+  unusable, never a fallback.
+- Invocation is `posix_spawn` with an absolute executable path, a fixed argv
+  of raw bytes (so non-UTF-8 paths survive; Foundation's `Process` takes
+  `String`s) and an environment of `PATH=/usr/bin:/bin` only, never a shell:
+  `compress --verify -c lzfse -r 0.95 -- <file…>` and `decompress -- <file…>`.
+  Arguments are always **explicit regular files**, never directories, in
+  batches whose argv stays under 256 KiB. Measured 2026-10-21 on a disposable APFS image with upstream release
+  `applesauce-cli-v0.5.30` (crates.io `applesauce-cli =0.5.30`): both help
+  commands list `--verify`; compress accepts `-c lzfse -r 0.95 --` and
+  decompress accepts `--`. A 131,072-byte repeated-text file compressed to
+  4,096 allocated bytes (`st_flags = 32`); decompress restored ordinary
+  storage. Missing paths, hard-linked files (`st_nlink = 2`), and empty files
+  all exited 0 without compression. A directory argument recursively compressed
+  its child, confirming that callers must supply explicit regular files.
+  The same flags accepted a filename beginning with `-` after `--`.
+
+**As built (Phase 6), 2026-10-22.** The bundled helper uses the vendored
+CLI source from `applesauce-cli-v0.5.30`, with its provenance, pinned
+dependencies and separate lockfile (P6-R2). Helper discovery is asynchronous,
+one probe per execution batch, not a main-actor launch check (T2-R1, T10-R5).
+The raw-byte `posix_spawn` runner above implements P6-R1 for both helper and
+archive subprocesses; capture read errors other than EINTR are failures,
+never clean EOF (T2-R2).
+
+**Never compress** (per file, evaluated from a fresh `lstat` at execution;
+the review shows counts by reason). Adopted from Pomace's safety rules
+(`Pomace/docs/SAFETY.md` §2, `SafetyRules.swift`):
+
+| Exclusion | Rule |
+|---|---|
+| Not a regular file | Symlinks, devices, sockets, FIFOs are never passed. Directories are walked by Tesserae, not by the tool. |
+| Already compressed | `UF_COMPRESSED` set. |
+| Hard-linked | `st_nlink > 1`. applesauce refuses them; Tesserae excludes them first and says why. |
+| Sparse | Not compressed and `st_blocks × 512 < st_size`. Compression would materialise it (Pomace measured 0 → 32,768 bytes). |
+| Cloud-only | `SF_DATALESS`; reading would download it. |
+| Resource fork | A non-empty `com.apple.ResourceFork` on an uncompressed file. |
+| Empty | `st_size == 0`. |
+| Won't shrink | Extension in jpg, jpeg, png, heic, gif, webp, mp4, mov, m4v, mkv, avi, mp3, m4a, aac, flac, zip, gz, bz2, xz, 7z, rar, zst, icns, pdf. |
+| Live database | `.realm`, or `.sqlite`/`.sqlite3`/`.sqlitedb`/`.db` with a `-wal` or `-shm` sidecar. |
+| VM image | Extension vmdk, qcow2, utm, pvm, vbox, vdi, hds, vmwarevm, sparsebundle, dmg, or inside such a bundle. |
+| Cloud-sync folder | A path component sequence `Library/Mobile Documents`, `Library/CloudStorage`, or a component `Dropbox`, `Google Drive`, `My Drive`, `OneDrive`. |
+| Store or Adobe app | Inside a bundle with `Contents/_MASReceipt/receipt`, or an `.app` whose name contains "adobe" (case-insensitive) or is "Creative Cloud". |
+| Open for writing | Best effort: one sweep of every process Tesserae may inspect (`proc_listpids`, then `PROC_PIDLISTFDS` and `PROC_PIDFDVNODEPATHINFO`) collects the device and inode of vnodes open with `FWRITE`. Processes of other users cannot be inspected; the review says so. |
+| Not writable | The file or its directory is not writable by the user. |
+
+**Warn, then allow** (item warnings, ticked one by one like §10's): an `.app`
+bundle ("Contents are unchanged; Tesserae re-checks the signature
+afterwards", then `codesign --verify --deep --strict` on the bundle after
+compression, reported, never acted on); a Git working tree (`.git` in the item
+or an ancestor; "git status may be slow once"); any file over 4 GiB ("can't be
+interrupted mid-file"); more than 100 GB eligible.
+
+**Estimate before review.** For up to 200 eligible files, largest first,
+Tesserae reads up to 1 MiB of each in 64 KiB blocks and compresses them with
+the Compression framework's LZFSE, read-only, off the main actor and
+cancellable. A file whose sample ratio is above 0.95 counts as saving nothing;
+sampled bytes use their measured sample ratio exactly; only unsampled
+eligible bytes are extrapolated (T9-R3). The review reads "Saves about X (estimated)". The figure is labelled an estimate
+everywhere and never added to measured totals.
+
+**Preconditions.** Free space at least 2 GiB plus twice the largest eligible
+file (atomic replacement needs a temporary copy; applesauce works on several
+files at once). Otherwise refuse with both numbers.
+
+**Execution**, per item, under the same `ReclaimCoordinator` permit and with
+the same identity and guard re-checks as §10's Execution:
+
+1. Re-walk the item from raw path bytes (directories by `fstatat` with
+   `AT_SYMLINK_NOFOLLOW`, never following symlinks or crossing devices) and
+   re-evaluate every exclusion per file.
+2. Run batches. Cancel takes effect between batches; the tool is never
+   signalled mid-file.
+3. **Never trust the exit code** (applesauce exits 0 for a missing path and
+   names no skipped files). Afterwards re-`lstat` every file: compressed iff
+   `UF_COMPRESSED` is now set and `st_size` is unchanged. Allocated bytes
+   before and after come from the scan engine's own attribute set, through a
+   read-only FFI call, so both figures come from one code path (Pomace: inline
+   decmpfs types report `st_blocks = 0`).
+4. applesauce replaces files, so a compressed file has a **new file ID**. The
+   session overlay records each replaced identity (node → new file ID), and
+   every later identity check (staging, trash, Put Back) uses it. Allocated
+   deltas flow into `SizeOverlay` as for removals.
+5. Result: "Compressed N files — saved X", skipped counts by reason, and any
+   files that failed. Negative savings are shown as such, never as a gain.
+
+**Undo: Decompress.** "Recently compressed" in the Reclaim Space pane lists
+compress runs; **Decompress…** (confirmed, naming the file count) runs
+`decompress` on exactly the files that run compressed whose recorded device
+and file ID still match and that are still `UF_COMPRESSED`. Tesserae never
+decompresses files it did not compress.
+
+**As built (Phase 6), 2026-10-22.** Refused or cancelled compressions stay
+staged. A refusal after earlier successful batches reports the changed files
+and the reason, preserving partial success (T10-R1/R2). Decompress reviews
+current warnings and requires their individual acknowledgements; it is hidden
+without a scan session. Completed in-memory runs are pruned after their
+manifest is written; Decompress reads that manifest (T10-R3/R4, T12-R1).
+
+### Archive
+
+**Formats**, chosen per review (remembered between reviews):
+
+| Format | Shown on APFS / HFS+ | Shown elsewhere | Notes shown in the picker |
+|---|---|---|---|
+| Apple Archive, fast (.aar, LZFSE) | **default** | Advanced | Very fast; about ZIP's size; keeps all Mac metadata. Opens in Finder on a Mac only. |
+| ZIP | always | **default** | Opens anywhere, including Finder and Windows. |
+| tar.xz | always | always | Smallest; slow to create. Opens in Finder (Archive Utility). |
+| Apple Archive, smallest (.aar, LZMA) | Advanced | Advanced | Nearly as small as tar.xz and several times faster; keeps all Mac metadata. Opens in Finder on a Mac only. |
+| tar.zst | Advanced | Advanced | Very fast, with good compression. Finder and macOS's tar can't open it; install zstd (for example with Homebrew) or use an app such as Keka. |
+
+The volume is the item's own volume (`f_fstypename` `apfs` or `hfs`). On
+those volumes Compress (in place) remains the first action offered; this
+table only sets the default *archive* format.
+
+"Advanced" formats sit behind an Advanced disclosure in the picker, collapsed
+by default; choosing one is remembered like any other choice.
+
+Why these (user decision 2026-10-21, after a measured comparison on a 37 MB
+mixed corpus of source and an app bundle; compressed size and speed):
+deflate 39.3% at 47 MB/s, xz -6 28.8% at 6.5 MB/s, Apple Archive LZMA 30.8%
+at 25 MB/s, Apple Archive LZFSE 38.4% at 453 MB/s, zstd -3 36.6% at 741 MB/s,
+zstd -19 30.3%, bzip3 33.2% at 19 MB/s, brotli 9 31.3%, 7z 28.6% at 13 MB/s.
+LZFSE is the Apple-volume default for speed (about 18× LZMA's) at roughly
+ZIP's size; LZMA stays available for the smallest Mac-native archive. NTFS
+compression is not offered: macOS's NTFS support is read-only, Windows'
+XPRESS/LZX ("system compression") can only be written by Windows, and
+ntfs-3g's LZNT1 applies only to newly created files (user decision
+2026-10-21).
+bzip3 matched xz on source and lost on binaries and nothing on macOS opens
+it; 7z would need a bundled tool. Archive Utility opened an LZMA `.aar` and
+restored a custom extended attribute (measured on the development Mac's
+macOS, not on macOS 13).
+
+**Apple Archive** is written in-process with the AppleArchive framework
+(macOS 11+), LZFSE or LZMA as chosen, onto the same reserved descriptor, with every metadata
+field (extended attributes, ACLs, flags, resource forks), and verified in
+Swift by an AppleArchive reader that applies exactly the matching rules of
+the Rust verifier below; a parity test archives one tree as ZIP and as `.aar`
+and requires identical verdicts and counts.
+
+ZIP uses `/usr/bin/ditto -c -k --sequesterRsrc [--keepParent] <item>
+/dev/fd/1`, with `--keepParent` only for directories and stdout duplicated
+from the reserved descriptor. The raw-byte
+spawn runner passes only `PATH=/usr/bin:/bin`. This is the one additional
+mutation subprocess allowed by P6-R5. The two tar formats use `/usr/bin/tar`
+with `--one-file-system --no-read-sparse`, no `-L`, and macOS metadata kept as tar's default
+AppleDouble entries. Both write `-f -` (stdout) `-C <parent> -- <name>`:
+`-c -J --options xz:threads=0` for tar.xz (all cores), and plain `-c` for
+tar.zst. Measured 2026-10-21: `/usr/bin/tar
+--version` reports `bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12
+liblzma/5.4.3 bz2lib/1.0.8`. The original Task 2 tar-written ZIP and
+tar.xz probes extracted on a scratch APFS image with the default locale and
+`LC_ALL=C`; the ZIP writer was subsequently replaced by ditto below.
+bsdtar's `--zstd` needs an external `zstd` program that macOS does not ship
+(`Can't launch external program: zstd --no-check -3`), so **tar.zst is
+compressed by Tesserae itself** (Ruling P6-R3): tar's uncompressed stream goes
+through a pipe into a Rust FFI call that zstd-encodes it (level 3) onto the
+archive's descriptor. Swift creates and owns both descriptors; Rust only reads
+one and writes the other and never opens, creates, renames or deletes a path.
+The picker note for tar.zst therefore reads: "Fast, with good compression.
+Finder and macOS's tar can't open it; install zstd (for example with
+Homebrew) or use an app such as Keka." APFS refuses a raw `0xff` filename
+(`EILSEQ`), so non-UTF-8 names arise only on other filesystems; argv and
+verification still treat names as raw bytes.
+
+**Historical Task 2 probes (superseded for ZIP by P6-R5 below).** Additional
+APFS probes on 2026-10-21 confirmed Archive Utility extracts tar-written ZIP
+and tar.xz with byte-identical file contents. Raw tar.xz and plain tar inspection
+exposes `._` AppleDouble members plus PAX xattr records; Archive Utility's
+tar.xz extraction restored `com.tesserae.probe`. ZIP's raw member list has no
+AppleDouble entries and its extraction did **not** restore that xattr; that
+writer could not preserve ZIP metadata. The probed tar ZIP used deflate at
+default level 6:
+a deterministic 100,000-byte binary-alphabet corpus produced a raw deflate stream matching
+zlib level 6 uniquely among levels 0–9. tar.xz's default stream matched
+explicit level 6 on the earlier corpus. No exFAT measurement is required on
+this host under the initial image-only rule (P6-R4); the later coordinator
+run on real exFAT is recorded below.
+
+**Task 11 metadata measurements (2026-10-21, disposable APFS image).**
+Both writers were given an exclusively created descriptor, through stdout.
+The corpus had a custom xattr, Finder tags, a resource fork, and real
+`._data` (paired with `data`) and `._orphan` files.
+
+| Writer / settings | Custom xattr, tags, resource fork after restore | Literal `._data` / `._orphan` |
+|---|---|---|
+| `tar -c --format zip --mac-metadata` | all lost, including Archive Utility restore | both omitted |
+| `ditto -c -k --sequesterRsrc --keepParent` | all preserved by ditto and Archive Utility | both omitted |
+| tar / tar.xz with default `--mac-metadata` | all preserved | both omitted |
+| tar / tar.xz with `--no-mac-metadata` | all lost | paired file omitted; orphan stored literally |
+| Those same tar settings with `COPYFILE_DISABLE=1` | same result as without the variable | same omissions |
+| AppleArchive, LZFSE and LZMA, all metadata fields | all preserved | both literal, byte-identical |
+
+**As built (Phase 6), 2026-10-22.** ZIP uses ditto on the strength of these
+P6-R5 measurements; the resource-fork fallback restriction is unnecessary.
+A single-file probe on the same date found `--keepParent` stores
+`<parent-name>/<file>` rather than `<file>`; it is therefore omitted for regular
+files so the archive matches the original item's manifest. Both root kinds use
+fixed raw-byte flag sets. The single-file ZIP setting also preserved the
+custom xattr, Finder tags and resource fork after both ditto and Archive
+Utility restore (2026-10-21); the probe waits for metadata application to
+finish, rather than checking as soon as the output file appears. AppleArchive's directory-contents API likewise omits
+a regular-file root, so files use the SDK's single-path list (macOS 12+), while
+folders use recursive directory contents. Both are written in-process through
+the same metadata key set and descriptor streams.
+ZIP, tar.xz and tar.zst are denied for items containing real `._` content,
+with “Contains macOS metadata files this format can't store.” Only the two
+Apple Archive modes stored literal `._` files byte-identically in T8-R2's
+measurements. Apple Archive's verifier hashes these entries like every other
+original. The exFAT metadata exception below narrows what counts as content.
+Production keeps the PATH-only environment. Apple Archive round trips also
+verify ACLs and file flags. The live archive tests use a test-only Rust zstd
+decoder to inspect/extract tar.zst; it is never bundled or used in production.
+
+**As built (Phase 6), 2026-10-22 — sidecars (T8-R4–R7).** Both the Rust
+manifest/verifier and the Swift Apple Archive reader distinguish content from
+macOS-created AppleDouble companions. The sidecar flag is enabled only for
+the measured filesystem types `exfat`, `msdos`, `smbfs`, `afpfs`, `nfs`,
+`webdav` and `ntfs`. Unknown types default to zero (fail closed); APFS/HFS+
+never exclude `._` files as sidecars. Broader driver names are not enabled
+without measurement.
+
+On a flagged volume a sidecar must satisfy **all** of these conditions:
+
+- It is a regular file named `._x`, 24 bytes to 16 MiB inclusive, with
+  `UF_HIDDEN`, and sibling `x` exists in the same directory.
+- Opened with `O_NOFOLLOW`, its full 24-byte header has magic `00 05 16 07`,
+  version `00 02 00 00`, and exactly 16 filler bytes: ASCII
+  `"Mac OS X        "` (eight trailing spaces) **or** sixteen zeros.
+- Its identity/stamp remains unchanged across the descriptor read and final
+  path check. Pairing uses raw filename bytes, including control characters.
+
+The recognised companion is excluded from the content manifest; an archived
+member at that exact path may be drained as metadata, still subject to the
+duplicate/collision checks. A case or NFD variant of an excluded sidecar path
+is refused. A directory named `._x`, a symlink, an orphan, a non-hidden file,
+a bad header or a file outside the size bound remains content and needs
+Apple Archive. A reviewed item that is itself a recognised sidecar is denied
+Archive: archive its sibling instead, avoiding an empty-content verification.
+The measured macOS filler corrects T8-R6's initial zeros-only rule (T8-R7).
+Extended attribute contents are **not byte-verified** by any format. The
+collision guard uses ASCII case and Unicode NFD, not full Unicode casefold;
+the crafted-archive limitation from the T8-R3 re-review remains deferred.
+
+**As built (Phase 6), 2026-10-22 — live exFAT evidence.** Initial exFAT
+image creation returned `hdiutil: create failed - Operation not permitted`;
+that test skips with an explicit reason (P6-R4). The coordinator subsequently
+ran the opt-in harness on a UUID-verified real exFAT USB stick after T8-R5:
+all five formats archived and trashed, extracted content matched, and Compress
+was unavailable (89 s). Put Back was unavailable because exFAT lacks
+`RENAME_EXCL`, as designed. After T8-R6, a disposable FAT image and the real
+stick showed the `"Mac OS X        "` filler, motivating T8-R7. The coordinator
+rerun after `e767f46` passed all five formats on real exFAT USB321FD (UUID
+verified) in 69 s, completing the T8-R7 sidecar validation.
+Test run folders remain on the stick.
+
+**Sparse-file creation setting (2026-10-21).** The live corpus exposed a
+GNU sparse 1.0 pseudo-path (`tree/GNUSparseFile.0/sparse`) from tar.xz;
+the read-only verifier correctly refused it as an extra entry. Both tar
+writers therefore pass `--no-read-sparse` (documented in the host tar manual).
+Sparse files are stored as their complete logical byte stream and verified
+normally; extraction content hashes must match the originals.
+
+**As built (Phase 6), 2026-10-22.** tar.zst uses the Rust descriptor-to-
+descriptor zstd encoder at level 3 (P6-R3), not tar's unavailable external
+zstd program. Apple Archive stays in-process. No `.aar` format is sent to
+the tar argument builder; it returns no arguments for those formats (T9-R2).
+
+**The archive name is reserved, never overwritten.** Tesserae opens
+`<name>.zip` (or `.tar.xz`, `.aar`, `.tar.zst`) in the item's parent with
+`openat(parentFD, …, O_CREAT | O_EXCL | O_WRONLY, 0644)`, the parent opened
+and identity-checked from raw bytes; on `EEXIST` it tries `<name> 2.zip`
+through `<name> 99.zip`, then refuses. Each writer uses that reserved
+descriptor. There is no temporary name and no rename, so nothing that arrives meanwhile can be
+replaced, on any filesystem (including exFAT, which lacks `RENAME_EXCL`).
+
+**Item rules.** Archive is denied for an item containing cloud-only content
+(reading would download it), unreadable or unknown content (the archive would
+be incomplete) or another volume's mount point, and for an item that is itself
+an archive in one of the supported formats. Hard-linked content keeps §10's
+`containsHardLinks` warning. Symlinks are archived as links.
+
+**Free space.** The estimate uses the same 200-file sample, compressed with
+ZLIB for zip and LZMA for tar.xz, Apple Archive and tar.zst (no zstd in the Compression
+framework; it is a conservative proxy). Archive needs free space of at least
+1.25 × the estimate + 512 MiB, else it is refused with the numbers.
+
+**Verification comes before the originals are touched.**
+
+1. The selected writer completes successfully (the subprocess exits 0, or
+   the in-process Apple Archive writer succeeds).
+2. Rust (or the Swift AppleArchive reader), read-only, builds a manifest of the original item — every regular
+   file's relative path, size and SHA-256; every directory; every symlink's
+   target — and streams the archive (`zip`, `tar`, `xz2` and `zstd` crates),
+   hashing each entry. The two must match exactly: each original entry
+   present once with equal type, size and digest, and no extra entries other
+   than AppleDouble metadata (`._*` members and `__MACOSX/`), which are
+   matched against real originals first. Only recognised paired sidecars on
+   flagged volumes are excluded from the original manifest as above. Every
+   duplicate normalized path fails before any metadata exemption. An unmatched metadata-named entry is drained
+   only if it does not collide by ASCII case or Unicode NFD with any original
+   or earlier archive entry; other extras fail. Exposed as one FFI call (or the
+   Swift reader for .aar) returning a verdict and counts; it never writes.
+   The Swift reader also rejects duplicate header keys, unresolved data
+   clusters, contradictory HLC/CLC/SLC cluster contents, and clusters shared
+   with ignored metadata. A native APFS probe (2026-10-21) showed extraction
+   uses the first DAT in a hard-link cluster even when a later member stores
+   different bytes; matching those later bytes alone would give a false OK.
+   The executor additionally compares every original's identity, size, flags,
+   link count, modification/change timestamps, and directory membership before
+   writing and immediately before entering §10's Trash execution.
+3. Any failure, including a writer failing or running out of space, leaves the
+   originals untouched; the incomplete archive is a file Tesserae created, and
+   it goes to the Trash like anything else (never unlinked). The result names
+   the failure.
+
+**Then the originals go to the Trash** through §10's Execution, unchanged:
+identity and guard re-checks, reviewed warnings, `trashItem`, overlay, audit,
+Put Back. Where the volume has no usable Trash (SMB, measured 2026-10-20), the
+archive is kept, the originals are kept, and the result says "Archive created.
+The originals were kept because this disk has no Trash."
+
+**As built (Phase 6), 2026-10-22.** Before originals enter §10's Executor,
+the archiver attempts a best-effort `fsync` of the parent directory descriptor.
+Unknown free space has a distinct refusal. Only ENOTSUP/no-Trash produces the
+no-Trash result above; other errors retain their error message. Discarded
+archives record their Trash URL in the audit log so Put Back can restore them
+(T11-R1).
+
+**Accounting.** The archive's allocated bytes are added to its ancestors'
+overlay deltas, so totals stay right; the archive has no tile until a rescan,
+and the result says "Rescan to see the archive in the map". Savings read
+"Saves about X once you empty the Trash".
+
+### Review, audit and source checks
+
+**As built (Phase 6), 2026-10-22.** Action menus keep unavailable choices
+visible and disabled. Archive formats use native radio groups with Advanced
+in a disclosure. The confirmation groups only executable items under their
+actions; denied/unavailable items appear under Will be skipped, not as
+execution failures. Plurals use the resolved localisation (§8); results format
+sizes and use the headlines specified above, without duplicate no-Trash text.
+Compress-only results do not offer Open Trash (T12-R1).
+
+- The review groups items by action, shows each item's action picker and
+  estimate, and the confirmation sheet lists every action's items, warnings
+  and skipped items as §10 does. Cancel stays the default.
+- `ReclaimLog` gains `"action":"compress"`, `"decompress"` and `"archive"`
+  entries: item path, tool and version, argv flags (never file lists), exit
+  status, duration, files compressed/skipped by reason, bytes before and after
+  (compress), or format, archive path, archive bytes, its SHA-256 and entries
+  verified (archive). Each compress run also writes a manifest of the files it
+  compressed (raw path bytes, device, new file ID) to
+  `~/Library/Application Support/Tesserae/manifests/<run-id>.tsv` (0600), which
+  Decompress reads.
+- The production source check now allows exactly three subprocess executables
+  for mutation: the bundled `Contents/Helpers/applesauce` (with `compress` or
+  `decompress`), `/usr/bin/tar` with `-c` only, and the measured
+  `/usr/bin/ditto -c -k --sequesterRsrc` ZIP writer (plus `--keepParent` for folders); extraction is never run in
+  production. `removeItem`, `unlink` and `rmdir` stay banned.
+- Tests use disposable disk images with the existing containment: APFS for
+  compression, APFS and exFAT for archives, and a corpus with hard links,
+  sparse files, a resource fork, zero-byte and sub-block files, symlinks,
+  non-UTF-8 names, nested directories and one file over 64 MiB. Compression
+  round trips must keep every file's SHA-256; killing the helper mid-run must
+  leave no file truncated; a nearly full image must fail safely. A test that
+  inspects zero files fails.
 
 ---
 
@@ -1715,7 +2372,7 @@ startup.
   app-bundle ancestor denied, containers warn rather than deny.
 - **TOCTOU verification** — pure over (recorded, observed): inode changed,
   device changed, now a symlink, gone.
-- **Jetsam ancestry dedup** — property test: no staged set retains both an
+- **Reclaim ancestry dedup** — property test: no staged set retains both an
   ancestor and its descendant.
 - **Layout — property tests:** rects disjoint; rects plus aggregate cover
   the parent within epsilon; area proportional to size within tolerance;
@@ -2036,10 +2693,17 @@ warnings that are easy to ignore until they aren't.
 
 ```
 codesign --force --options runtime --timestamp \
-         --sign "Developer ID Application: …" Tesserae.app
-xcrun notarytool submit Tesserae.dmg --keychain-profile AC_PASSWORD --wait
+         --sign "<40-hex certificate SHA-1>" Tesserae.app
+xcrun notarytool submit Tesserae.dmg --keychain-profile notarytool --wait
 xcrun stapler staple Tesserae.dmg
 ```
+
+The release script resolves a 40-hex certificate SHA-1 (or a unique full
+identity name) through `security find-identity`, requires Developer ID
+Application and the configured team, and carries the resolved hash through
+archive, ExportOptions `signingCertificate` and DMG signing. Every nested
+framework, XPC service and helper app must show that team, hardened runtime
+and a secure timestamp.
 
 Hardened runtime is required for notarization; Rust needs no special
 entitlements under it. Ship a **DMG**, signed, notarized and stapled.
@@ -2122,13 +2786,31 @@ a 15-minute fuzz run.
 
 **On tag `v*`:** both Rust targets → lipo → `xcodebuild archive` →
 `-exportArchive` with Developer ID → DMG → sign → notarize → staple →
-`generate_appcast` → commit to `gh-pages` → GitHub Release with DMG and
-checksums → update the tap.
+`generate_appcast` → verify the feed and write the manifest → GitHub Release
+with DMG and checksums → commit to `gh-pages` in a detached worktree → update
+the tap → verify served bytes.
 
-Secrets: Developer ID `.p12` (base64) and password, notarytool credentials,
-Sparkle EdDSA private key. Importing the certificate into a temporary
-keychain inside the job is the step that breaks most release pipelines —
-get it working before a real release depends on it.
+Local notarization uses the `notarytool` keychain profile. CI uses an App
+Store Connect API key: its secret `.p8` is written with mode 0600 under
+`RUNNER_TEMP`, provisioned into a temporary keychain profile and deleted,
+including on failure through `always()` cleanup. Other secrets are the
+Developer ID `.p12` (base64), its import password, the Sparkle EdDSA private
+key (stdin only), and scoped GitHub tokens. Every child tool receives only
+`PATH HOME TMPDIR LANG LC_* USER DEVELOPER_DIR`, plus `GH_TOKEN` only for
+authenticated `gh`. The random single-use keychain password and `.p12`
+import password remain in `security` argv on the ephemeral CI runner; these
+are documented platform residuals. CI sets the bot Git identity for both
+Pages and tap commits.
+
+Appcast generation runs in isolation with only the verified current DMG,
+notes and the freshly fetched published feed; deltas are disabled. Exactly
+one new item is allowed. Historical items and the rest of the published
+document retain their original bytes; extra, changed, duplicate or delta
+items are refused. Publishing fetches origin before the confirmation diff
+and checks history again before updating Pages. Served appcast verification
+retries errors and stale bytes with capped backoff for under ten minutes,
+then fails with a resume command. See `docs/releasing.md` for setup and
+recovery.
 
 ### Repo layout
 

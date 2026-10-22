@@ -229,14 +229,14 @@ final class LabelTests: XCTestCase {
 
     private static let kinds: [FileKind] = [.video, .images, .audio]
     nonisolated(unsafe) private static let modes: [(String, ColourMode)] = [
-        ("depth", .depth), ("age", .age(now: Date(timeIntervalSince1970: 2_000_000_000))), ("type focus", .typeFocus(kinds)),
+        ("folder", .folder), ("age", .age(now: Date(timeIntervalSince1970: 2_000_000_000))), ("type focus", .typeFocus(kinds)),
     ]
 
-    /// Every colour of every shipped palette (depth, age, type focus; light and
+    /// Every colour of every shipped palette (folder, age, type focus; light and
     /// dark; with the neutral and status entries each palette carries) gets
     /// whichever ink token reads better on it, and every one clears WCAG AA
     /// for text (4.5:1). The minimum best contrast is reported and pinned
-    /// (#256bc0, the light depth step 3 and type-focus slot 1, darkened from
+    /// (#256bc0, the light folder step 0 and type-focus slot 1, darkened from
     /// #2a78d6 at 4.46:1 for exactly this), so a palette change re-reports it.
     func test_label_ink_is_the_token_with_the_higher_contrast_on_every_palette_colour() {
         let darkInk = rgb(LabelStyle.ink(dark: false)), lightInk = rgb(LabelStyle.ink(dark: true))
@@ -262,7 +262,7 @@ final class LabelTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(seen.count, 17, "precondition: every distinct shipped colour was visited")
+        XCTAssertEqual(seen.count, 69, "precondition: every distinct shipped colour was visited")
         print("label ink: minimum best contrast \(String(format: "%.3f", minimum.ratio)):1 on \(minimum.colour) (\(minimum.palette))")
         XCTAssertGreaterThanOrEqual(minimum.ratio, 4.5, "a label fails WCAG AA on \(minimum.colour)")
         XCTAssertEqual(minimum.colour, "#256bc0")
@@ -271,7 +271,7 @@ final class LabelTests: XCTestCase {
 
     /// The overlay picks each label's ink from its tile's actual colour, so the
     /// ink follows the mode and the appearance without a relayout: the darkest
-    /// depth step, a neutral aggregate and an unreadable (status) tile.
+    /// folder step, a neutral aggregate and an unreadable (status) tile.
     @MainActor
     func test_overlay_ink_follows_each_tiles_colour_in_every_mode() {
         let t = TestSnapshot(.dir("/R", [.file("deep.bin", 10), .denied("locked")]))
@@ -288,15 +288,15 @@ final class LabelTests: XCTestCase {
         func inks(_ mode: ColourMode, dark: Bool) -> [String] {
             let overlay = LabelsOverlay(
                 labels: labels, palette: Palette.colours(mode, dark: dark),
-                colourOf: { colourIndex(for: $0, in: s, mode: mode) }, dark: dark, zoomRunning: false, labelsReady: true)
+                colourOf: { colourIndex(for: $0, in: s, mode: mode, slots: [t["deep.bin"]: 1], rootChildOf: { $0 == t["deep.bin"] ? t["deep.bin"] : nil }) }, dark: dark, zoomRunning: false, labelsReady: true)
             return labels.map { hex(rgb(overlay.ink(for: $0))) }
         }
         let age = Self.modes[1].1
-        XCTAssertEqual(colourIndex(for: deep, in: s, mode: .depth), UInt16(Palette.firstColourIndex + 4), "precondition")
-        // Light depth: #0d366b (darkest) light ink; #5598e7 for the aggregate at depth 1; amber.
-        XCTAssertEqual(inks(.depth, dark: false), [lightInk, darkInk, darkInk])
-        // Dark depth: #9ec5f4 (lightest) dark ink; #256abf light ink; amber.
-        XCTAssertEqual(inks(.depth, dark: true), [darkInk, lightInk, darkInk])
+        XCTAssertEqual(colourIndex(for: deep, in: s, mode: .folder, slots: [t["deep.bin"]: 1], rootChildOf: { $0 == t["deep.bin"] ? t["deep.bin"] : nil }), UInt16(Palette.firstColourIndex + 3), "precondition")
+        // Light folder blue at step 3 takes light ink; the root aggregate and amber take dark ink.
+        XCTAssertEqual(inks(.folder, dark: false), [lightInk, darkInk, darkInk])
+        // Dark folder blue at step 3 takes dark ink; the neutral aggregate takes light ink.
+        XCTAssertEqual(inks(.folder, dark: true), [darkInk, lightInk, darkInk])
         // Age: the aggregate is neutral (#d6d5cf / #3a3a37); amber stays dark ink.
         XCTAssertEqual(inks(age, dark: false)[1...], [darkInk, darkInk])
         XCTAssertEqual(inks(age, dark: true)[1...], [lightInk, darkInk])
@@ -323,8 +323,8 @@ final class LabelTests: XCTestCase {
         XCTAssertEqual(Set(labels.map(\.tile.node)), Set(tiles.map(\.node)))
     }
 
-    /// Drawn for real: a label over the darkest light-mode depth step
-    /// (#0d366b) is painted in the light ink, so its glyphs are lighter than
+    /// Drawn for real: a label over the deepest light-mode blue folder step
+    /// (#003976) is painted in the light ink, so its glyphs are lighter than
     /// the fill, where the old fixed light-mode ink drew them darker.
     @MainActor
     func test_a_label_over_the_darkest_depth_step_renders_in_the_light_ink() throws {
@@ -332,16 +332,16 @@ final class LabelTests: XCTestCase {
         let s = t.snapshot
         let size = CGSize(width: 200, height: 40)
         let deep = Tile(rect: CGRect(origin: .zero, size: size), node: t["deep.bin"], depth: 4, parent: 0)
-        let palette = Palette.colours(.depth, dark: false)
-        let fillIndex = Int(colourIndex(for: deep, in: s, mode: .depth))
+        let palette = Palette.colours(.folder, dark: false)
+        let fillIndex = Int(colourIndex(for: deep, in: s, mode: .folder, slots: [t["deep.bin"]: 1], rootChildOf: { $0 == t["deep.bin"] ? t["deep.bin"] : nil }))
         let fill = palette[fillIndex]
-        XCTAssertEqual(hex(rgb(fill)), "#0d366b", "precondition: the darkest light-mode depth step")
+        XCTAssertEqual(hex(rgb(fill)), "#003976", "precondition: the deepest light-mode blue folder step")
         let label = PlacedLabel(rect: CGRect(x: 4, y: 4, width: 150, height: 14), text: "WWWW MMMM 4.2 GB", tile: deep)
         let view = NSHostingView(
             rootView: ZStack(alignment: .topLeading) {
                 Color(.sRGB, red: Double(fill.x), green: Double(fill.y), blue: Double(fill.z))
                 LabelsOverlay(
-                    labels: [label], palette: palette, colourOf: { colourIndex(for: $0, in: s, mode: .depth) },
+                    labels: [label], palette: palette, colourOf: { colourIndex(for: $0, in: s, mode: .folder, slots: [t["deep.bin"]: 1], rootChildOf: { $0 == t["deep.bin"] ? t["deep.bin"] : nil }) },
                     dark: false, zoomRunning: false, labelsReady: true)
             }.frame(width: size.width, height: size.height))
         view.frame = CGRect(origin: .zero, size: size)

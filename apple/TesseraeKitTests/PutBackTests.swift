@@ -181,7 +181,7 @@ final class PutBackTests: XCTestCase {
     private func check(_ scenario: String) throws {
         let f = DiskImageFixture()
         try f.setUp(); defer { XCTAssertNoThrow(try f.tearDown()) }
-        let log = JettisonLog(directory: f.root.appendingPathComponent("audit"))
+        let log = ReclaimLog(directory: f.root.appendingPathComponent("audit"))
         let mover = ContainedMover(fixtureRoot: f.root, inner: ProductionMover())
         let stat = ProductionFileStat()
         do {

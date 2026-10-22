@@ -19,8 +19,8 @@ import Foundation
 
 /// How the treemap is coloured (spec §8 "Colour").
 public enum ColourMode: Equatable {
-    /// Ordinal blue ramp by nesting depth, cycling every five levels.
-    case depth
+    /// Top-level folder hue, with four lightness steps for relative depth.
+    case folder
     /// Sequential ramp by time since last modification, relative to `now`.
     case age(now: Date)
     /// Up to three file kinds each get one slot colour; everything else,

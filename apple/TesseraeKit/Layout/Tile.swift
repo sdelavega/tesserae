@@ -25,18 +25,24 @@ public struct Tile: Equatable, Sendable {
     /// The layout sets `aggregated` (the tail aggregate, and the collapsed
     /// "N unreadable folders" placeholder) and `permDenied` (every
     /// placeholder, and an unreadable layout root). `selected` is set by the
-    /// renderer's caller from the selection (`applySelection`). `staged` follows Jetsam membership through the snapshot parent chain.
+    /// renderer's caller from the selection (`applySelection`). `staged` follows Reclaim membership through the snapshot parent chain.
     public enum Flag {
         public static let selected: UInt8 = 1 << 0
         public static let staged: UInt8 = 1 << 1
         public static let permDenied: UInt8 = 1 << 2
         public static let aggregated: UInt8 = 1 << 3
+        public static let header: UInt8 = 1 << 4
+    }
+
+    public var headerHeight: CGFloat = 16
+    public var headerRect: CGRect? {
+        flags & Flag.header != 0 ? CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: headerHeight) : nil
     }
 
     public var rect: CGRect  // points
     public var node: UInt32  // TESS_NODE_NONE for an aggregate
     public var depth: UInt8
-    public var flags: UInt8  // bit 0 selected, 1 staged, 2 permDenied, 3 aggregated (spec §8)
+    public var flags: UInt8  // bit 0 selected, 1 staged, 2 permDenied, 3 aggregated, 4 header (spec §8)
     public var aggregateCount: UInt32  // number of collapsed siblings, 0 otherwise
     public var aggregateBytes: UInt64
     /// The directory whose subtree this tile was laid out in (the node whose

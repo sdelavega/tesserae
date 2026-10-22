@@ -24,6 +24,13 @@ import TesseraeFFI
 /// outlive the `Snapshot`; never capture them in an escaping closure without
 /// capturing the class.
 public final class Snapshot {
+    static let systemIndexReason = String(
+        localized: "snapshot.system.managed.macos.index",
+        defaultValue: "system-managed (macOS index)",
+        bundle: L10n.bundle,
+        comment: "Snapshot: system-managed (macOS index)."
+    )
+
     public let root: UInt32
     /// Computed once while finish builds the snapshot off the main actor. 255 means no kind.
     let fileKinds: [UInt8]
@@ -42,6 +49,7 @@ public final class Snapshot {
     private let testingFileIDs: [UInt64]
     private let _nodes: UnsafeBufferPointer<TessNode>
     private let _names: UnsafeRawBufferPointer
+    private let descendantCounts: [Int32]
 
     #if DEBUG
     private let lock = NSLock()
@@ -99,6 +107,7 @@ public final class Snapshot {
         tess_snapshot_view(handle, &view)
         _nodes = UnsafeBufferPointer(start: view.nodes, count: Int(view.count))
         _names = UnsafeRawBufferPointer(start: view.names, count: Int(view.names_len))
+        descendantCounts = Self.countDescendants(_nodes)
         root = view.root
         fileKinds = Self.classify(nodes: _nodes, names: _names)
         var s = TessScanStats()
@@ -110,9 +119,25 @@ public final class Snapshot {
             guard let path = tess_snapshot_skipped_by_request(handle, index, &length, &reason) else { return nil }
             let description: String
             switch reason {
-            case UInt32(TESS_SKIP_LIMITED_SCAN): description = "limited scan"
-            case UInt32(TESS_SKIP_NOT_PRESENT): description = "not present"
-            default: description = "unknown"
+            case UInt32(TESS_SKIP_LIMITED_SCAN): description = String(
+                localized: "snapshot.limited.scan",
+                defaultValue: "limited scan",
+                bundle: L10n.bundle,
+                comment: "Snapshot: limited scan."
+            )
+            case UInt32(TESS_SKIP_NOT_PRESENT): description = String(
+                localized: "snapshot.not.present",
+                defaultValue: "not present",
+                bundle: L10n.bundle,
+                comment: "Snapshot: not present."
+            )
+            case UInt32(TESS_SKIP_SYSTEM_MANAGED_INDEX): description = Self.systemIndexReason
+            default: description = String(
+                localized: "snapshot.unknown",
+                defaultValue: "unknown",
+                bundle: L10n.bundle,
+                comment: "Snapshot: unknown."
+            )
             }
             return RequestedSkip(path: Data(bytes: path, count: Int(length)), reason: description)
         }
@@ -127,12 +152,43 @@ public final class Snapshot {
             guard let path = tess_snapshot_skipped(handle, index, &length, &reason) else { return nil }
             let description: String
             switch reason {
-            case UInt32(TESS_SKIP_LIMITED_SCAN): description = "limited scan"
-            case UInt32(TESS_SKIP_NOT_PRESENT): description = "not present"
-            case UInt32(TESS_SKIP_OTHER_VOLUME): description = "other volume"
-            case UInt32(TESS_SKIP_NON_LOCAL_MOUNT): description = "non-local mount"
-            case UInt32(TESS_SKIP_DATALESS_DIRECTORY): description = "dataless directory"
-            default: description = "unknown (\(reason))"
+            case UInt32(TESS_SKIP_LIMITED_SCAN): description = String(
+                localized: "snapshot.limited.scan",
+                defaultValue: "limited scan",
+                bundle: L10n.bundle,
+                comment: "Snapshot: limited scan."
+            )
+            case UInt32(TESS_SKIP_NOT_PRESENT): description = String(
+                localized: "snapshot.not.present",
+                defaultValue: "not present",
+                bundle: L10n.bundle,
+                comment: "Snapshot: not present."
+            )
+            case UInt32(TESS_SKIP_SYSTEM_MANAGED_INDEX): description = Self.systemIndexReason
+            case UInt32(TESS_SKIP_OTHER_VOLUME): description = String(
+                localized: "snapshot.other.volume",
+                defaultValue: "other volume",
+                bundle: L10n.bundle,
+                comment: "Snapshot: other volume."
+            )
+            case UInt32(TESS_SKIP_NON_LOCAL_MOUNT): description = String(
+                localized: "snapshot.non.local.mount",
+                defaultValue: "non-local mount",
+                bundle: L10n.bundle,
+                comment: "Snapshot: non-local mount."
+            )
+            case UInt32(TESS_SKIP_DATALESS_DIRECTORY): description = String(
+                localized: "snapshot.dataless.directory",
+                defaultValue: "dataless directory",
+                bundle: L10n.bundle,
+                comment: "Snapshot: dataless directory."
+            )
+            default: description = String(
+                localized: "snapshot.unknown.v2",
+                defaultValue: "unknown (\(reason))",
+                bundle: L10n.bundle,
+                comment: "Snapshot: unknown ({reason})."
+            )
             }
             return RequestedSkip(path: Data(bytes: path, count: Int(length)), reason: description)
         }
@@ -157,12 +213,23 @@ public final class Snapshot {
         testingFileIDs = fileIDs
         _nodes = nodes
         _names = names
+        descendantCounts = Self.countDescendants(nodes)
         fileKinds = Self.classify(nodes: nodes, names: names)
         self.root = root
         self.stats = stats
         self.unreadable = unreadable
         self.skipped = skipped
-        skippedByRequest = skipped.filter { ["limited scan", "not present"].contains($0.reason) }
+        skippedByRequest = skipped.filter { [String(
+            localized: "snapshot.limited.scan",
+            defaultValue: "limited scan",
+            bundle: L10n.bundle,
+            comment: "Snapshot: limited scan."
+        ), String(
+            localized: "snapshot.not.present",
+            defaultValue: "not present",
+            bundle: L10n.bundle,
+            comment: "Snapshot: not present."
+        )].contains($0.reason) }
         self.stalledAt = stalledAt
         #if DEBUG
         bornAt = 0
@@ -262,7 +329,30 @@ public final class Snapshot {
             out.append(s.value < 0x20 ? "\u{FFFD}" : s)
         }
         let result = String(out)
-        return result.isEmpty ? "(unnamed)" : result
+        return result.isEmpty ? String(
+            localized: "snapshot.unnamed",
+            defaultValue: "(unnamed)",
+            bundle: L10n.bundle,
+            comment: "Snapshot: (unnamed)."
+        ) : result
+    }
+
+    /// Computed once with the snapshot, not by walking subtrees while drawing rows.
+    private static func countDescendants(_ nodes: UnsafeBufferPointer<TessNode>) -> [Int32] {
+        precondition(nodes.count < Int(Int32.max), "Snapshot node count must fit below Int32.max")
+        var counts = [Int32](repeating: 0, count: nodes.count)
+        for i in nodes.indices.reversed() {
+            let parent = nodes[i].parent
+            // Malformed test snapshots remain constructible; their accessors
+            // enforce the structural bounds when the offending node is read.
+            if Int(parent) < i { counts[Int(parent)] += counts[i] + 1 }
+        }
+        return counts
+    }
+
+    public func descendantCount(_ node: UInt32) -> Int {
+        _ = self.node(node)
+        return Int(descendantCounts[Int(node)])
     }
 
     /// The children of node `i`, contiguous in `nodes`; empty for a leaf.

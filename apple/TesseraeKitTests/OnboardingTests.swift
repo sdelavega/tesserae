@@ -15,10 +15,129 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import XCTest
+import SwiftUI
 @testable import TesseraeKit
 
 final class OnboardingTests: XCTestCase {
+    @MainActor
+    func test_colour_menu_shares_toolbar_state_and_keeps_one_checkmark() async {
+        let app = AppModel(coordinator: ScanCoordinator(factory: { _, _ in nil }), accessLoader: { .unknown })
+        await app.waitForAccess()
+        let commands = ColourCommandsValue(choice: Binding(get: { app.colourChoice }, set: { app.colourChoice = $0 }))
+        XCTAssertEqual(ColourMenuMode.allCases.map(\.title), ["Folder", "Age", "Type focus"])
+        XCTAssertEqual(ColourMenuMode.allCases.map { $0.shortcut.character }, ["1", "2", "3"])
+        XCTAssertEqual(app.colourChoice, 0)
+        for mode in ColourMenuMode.allCases {
+            commands.selection(for: mode).wrappedValue = true
+            XCTAssertEqual(app.colourChoice, mode.rawValue, "menu updates the toolbar's model")
+            XCTAssertEqual(ColourMenuMode.allCases.filter { commands.selection(for: $0).wrappedValue }, [mode])
+            commands.selection(for: mode).wrappedValue = false
+            XCTAssertEqual(app.colourChoice, mode.rawValue, "cannot turn off the current colour mode")
+        }
+        app.colourChoice = 1
+        XCTAssertTrue(commands.selection(for: .age).wrappedValue, "toolbar updates menu checkmark")
+        XCTAssertFalse(commands.selection(for: .typeFocus).wrappedValue)
+    }
+
+    func test_rescan_command_requires_model_availability_and_enabled_scene() {
+        for enabled in [false, true] {
+            for canRescan in [false, true] {
+                var calls = 0
+                let commands = ScanCommandsValue(startupDiskTitle: "Scan disk", enabled: enabled,
+                    scanStartupDisk: {}, chooseFolder: {}, canRescan: canRescan, rescan: { calls += 1 })
+                XCTAssertEqual(commands.rescanEnabled, enabled && canRescan)
+                commands.rescanIfEnabled()
+                XCTAssertEqual(calls, enabled && canRescan ? 1 : 0)
+            }
+        }
+    }
+
     let states: [AccessState] = [.granted, .denied(evidence: "EPERM"), .unknown]
+
+    @MainActor
+    func test_startup_disk_picker_mapping_reaches_existing_scan_factory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tesserae-startup-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let alias = directory.appendingPathComponent("Boot Volume")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: URL(fileURLWithPath: "/"))
+        XCTAssertEqual(alias.resolvingSymlinksInPath().path, "/", "precondition: boot-volume alias resolves to root")
+        for selected in [URL(fileURLWithPath: "/"), alias, URL(fileURLWithPath: "/System/Volumes/Data"), URL(fileURLWithPath: "/fixture/subfolder")] {
+            let name = "Tesserae.StartupDiskTests." + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+            defer { defaults.removePersistentDomain(forName: name) }
+            let probe = StartupScanProbe()
+            let coordinator = ScanCoordinator(factory: { root, _ in probe.record(root); return nil })
+            let app = AppModel(coordinator: coordinator, accessLoader: { .unknown }, onboardingStore: OnboardingStore(defaults: defaults))
+            app.scan(selected)
+            await app.waitForAccess()
+            XCTAssertNil(probe.root, "precondition: onboarding gates the scan")
+            app.sendOnboarding(.useLimited)
+            for _ in 0..<1000 {
+                if probe.root != nil { break }
+                try await Task.sleep(for: .milliseconds(2))
+            }
+            let expected = selected.path == "/fixture/subfolder" ? selected.path : "/System/Volumes/Data"
+            XCTAssertEqual(probe.root?.path, expected, selected.path)
+            app.cancel()
+        }
+    }
+
+    @MainActor
+    func test_primary_startup_disk_action_uses_data_root_and_localized_window_title() async throws {
+        let name = "Tesserae.PrimaryStartupTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let probe = StartupScanProbe()
+        let coordinator = ScanCoordinator(factory: { root, _ in probe.record(root); return nil })
+        let app = AppModel(coordinator: coordinator, accessLoader: { .granted },
+            onboardingStore: OnboardingStore(defaults: defaults), startupDiskName: "Studio SSD",
+            contextLoader: { _ in nil }, factsLoader: { _, scan in
+                ReconciliationViewModel(wholeVolume: true, reconciliation: nil, scan: scan,
+                    locale: Locale(identifier: "en_US"), timeZone: TimeZone(secondsFromGMT: 0)!)
+            })
+        app.refreshAccess()
+        await app.waitForAccess()
+        XCTAssertTrue(app.onboarding.canScan, "precondition: no privacy gate remains")
+        XCTAssertEqual(app.windowTitle, "Tesserae")
+        XCTAssertEqual(app.startupDiskScanTitle, "Scan Studio SSD")
+        app.scanStartupDisk()
+        for _ in 0..<1000 {
+            if probe.root != nil { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(probe.root?.path, "/System/Volumes/Data")
+        app.cancel()
+        let tree = TestSnapshot(.dir("/System/Volumes/Data", [.dir("Users", [.file("file", 5)])]))
+        app.prepareSnapshot(tree.snapshot)
+        await app.waitForFacts()
+        let session = try XCTUnwrap(app.session)
+        XCTAssertEqual(app.windowTitle, "Studio SSD")
+        XCTAssertEqual(session.navigator.breadcrumbItems.map(\.title), ["Studio SSD"])
+        session.navigator.descend(into: tree["Users"])
+        XCTAssertEqual(session.navigator.breadcrumbItems.map(\.title), ["Studio SSD", "Users"])
+        XCTAssertEqual(tree.snapshot.rawPath(tree.snapshot.root), Data("/System/Volumes/Data".utf8))
+    }
+
+    @MainActor
+    func test_startup_disk_breadcrumb_uses_boot_volume_localized_name() throws {
+        var requested: URL?
+        let renamed = StartupDisk.loadDisplayName { url in requested = url; return "Studio SSD" }
+        XCTAssertEqual(requested?.path, "/", "query the boot volume rather than the Data volume")
+        XCTAssertEqual(renamed, "Studio SSD")
+        XCTAssertEqual(StartupDisk.loadDisplayName { _ in nil }, "Macintosh HD")
+        let boot = URL(fileURLWithPath: "/")
+        let name = try XCTUnwrap(boot.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName)
+        XCTAssertFalse(name.isEmpty, "precondition: boot volume supplies a localized name")
+        let tree = TestSnapshot(.dir("/System/Volumes/Data", [.dir("Users", [.file("file", 5)])]))
+        let navigator = Navigator(snapshot: tree.snapshot)
+        XCTAssertEqual(tree.snapshot.rawPath(tree.snapshot.root), Data("/System/Volumes/Data".utf8))
+        XCTAssertEqual(navigator.breadcrumbItems.map(\.title), [name])
+        navigator.descend(into: tree["Users"])
+        XCTAssertEqual(navigator.breadcrumbItems.map(\.title), [name, "Users"])
+        let folder = TestSnapshot(.dir("/fixture", [.file("file", 5)]))
+        XCTAssertEqual(Navigator(snapshot: folder.snapshot).breadcrumbItems.map(\.title), ["/fixture"])
+    }
 
     func test_access_choice_activation_matrix() {
         for access in states {
@@ -281,4 +400,11 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(terminations, 1)
     }
 
+}
+
+private final class StartupScanProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedRoot: URL?
+    var root: URL? { lock.lock(); defer { lock.unlock() }; return recordedRoot }
+    func record(_ root: URL) { lock.lock(); recordedRoot = root; lock.unlock() }
 }

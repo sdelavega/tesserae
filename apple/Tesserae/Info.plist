@@ -36,5 +36,15 @@
 	<string>Tesserae reads the sizes of the files on removable volumes to show what is using their space.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>Tesserae reads the sizes of the files on network volumes to show what is using their space.</string>
+	<key>SUPublicEDKey</key>
+	<string>JmdB15uy9xCZWWUsHHSeWzC7p7BehSvODXvK1EYi1Ig=</string>
+	<key>SUFeedURL</key>
+	<string>https://sdelavega.github.io/tesserae/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
 </dict>
 </plist>

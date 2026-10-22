@@ -907,7 +907,7 @@ The baseline used the existing release CLI. The after run used
 `PATH="$HOME/.cargo/bin:$PATH" RUSTUP_TOOLCHAIN=stable cargo build --release -p tesserae-cli`.
 Both scans completed with 261 unreadable directories and zero lost entries.
 No cache purge was performed. Raw outputs are local scratch at
-`.superpowers/sdd/2026-10-20-tesserae-phase-4-jetsam/task-1-{before,after}.log`.
+the Phase 4 task 1 before/after logs in local implementation reports.
 
 | Build | Nodes (dirs + files) | Walk s | Freeze s | Maximum resident set size (bytes) |
 |---|---:|---:|---:|---:|
@@ -926,7 +926,7 @@ The transient file-ID copy could be removed by keeping walk IDs in a contiguous 
 
 ## Phase 4 gate
 
-2026-10-20, `phase-4-jetsam`, macOS 27.2 / Apple silicon. Run:
+2026-10-20, the Phase 4 branch, macOS 27.2 / Apple silicon. Run:
 `RUSTUP_TOOLCHAIN=stable just gate`. The full gate passes: formatting, clippy,
 Rust tests, generated header, shipped-library checks, licences, universal FFI
 build and Xcode tests. Rust: 252 passing executions including the isolated
@@ -938,13 +938,13 @@ real-snapshot measurements and the coordinator-only live Trash check).
 |---|---:|
 | Guard list (`GuardTests`) | 22 |
 | TOCTOU (`IdentityTests`) | 7 |
-| Staging (`JetsamTests`) | 8 |
+| Staging (`ReclaimTests`) | 8 |
 | Executor (`ExecutorTests`) | 14 |
-| Audit log (`JettisonLogTests`) | 3 |
+| Audit log (`ReclaimLogTests`) | 3 |
 | Put Back (`PutBackTests`) | 15 |
 | Overlay (`SizeOverlayTests`) | 8 |
 | Snapshot identity (`SnapshotIdentityTests`) | 1 |
-| Jetsam view model / snapshots | 8 / 3 |
+| Reclaim Space view model / snapshots | 8 / 3 |
 | AppModel disk-image end to end | 1 |
 | Live-harness safety on disposable images | 2 |
 

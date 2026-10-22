@@ -55,6 +55,10 @@ pub(crate) trait DirOpener: Sync {
         .map_err(io::Error::from_raw_os_error)
     }
 
+    fn is_volume_root(&self, fd: RawFd) -> io::Result<bool> {
+        crate::boundary::is_volume_root(fd)
+    }
+
     /// Open the directory `name`, a single entry name, relative to the
     /// directory open as `parent`. Returns the errno on failure.
     fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int>;

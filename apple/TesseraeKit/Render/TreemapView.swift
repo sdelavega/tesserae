@@ -42,6 +42,8 @@ import SwiftUI
 /// CoreGraphics renderer's image instead (spec §11 "Rendering"), with no zoom
 /// animation (ruling P2): there every navigation redraws at once.
 public struct TreemapView: NSViewRepresentable {
+    /// Disable Metal to render deterministic CoreGraphics screenshots.
+    public var useMetal: Bool
     public var tiles: [Tile]
     public var palette: [SIMD4<Float>]
     public var colourOf: (Tile) -> UInt16
@@ -56,14 +58,18 @@ public struct TreemapView: NSViewRepresentable {
     public var navigator: Navigator?
     public var onStage: (() -> Void)?
     public var onHover: ((Int?) -> Void)?
+    public var onPointer: ((Int?, CGPoint?) -> Void)?
+    public var onDismissCallout: ((HoverCallout.Event) -> Void)?
 
     public init(
         tiles: [Tile], palette: [SIMD4<Float>], dark: Bool, navigator: Navigator? = nil,
         snapshot: Snapshot? = nil, mode: ColourMode? = nil,
-        selection: Selection? = nil, onZoomChanged: ((Bool) -> Void)? = nil,
+        selection: Selection? = nil, useMetal: Bool = true, onZoomChanged: ((Bool) -> Void)? = nil,
         onDroppedTiles: ((Int) -> Void)? = nil,
-        onHover: ((Int?) -> Void)? = nil, onStage: (() -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
+        onHover: ((Int?) -> Void)? = nil, onPointer: ((Int?, CGPoint?) -> Void)? = nil,
+        onDismissCallout: ((HoverCallout.Event) -> Void)? = nil, onStage: (() -> Void)? = nil, colourOf: @escaping (Tile) -> UInt16
     ) {
+        self.useMetal = useMetal
         self.snapshot = snapshot
         self.mode = mode
         self.selection = selection
@@ -75,6 +81,8 @@ public struct TreemapView: NSViewRepresentable {
         self.navigator = navigator
         self.onStage = onStage
         self.onHover = onHover
+        self.onPointer = onPointer
+        self.onDismissCallout = onDismissCallout
         self.colourOf = colourOf
     }
 
@@ -86,17 +94,19 @@ public struct TreemapView: NSViewRepresentable {
         interaction.selection = selection
         interaction.navigator = navigator
         interaction.onHover = onHover
+        interaction.onPointer = onPointer
+        interaction.onDismissCallout = onDismissCallout
         _ = interaction.setTiles(tiles)
-        guard let device = MTLCreateSystemDefaultDevice(), let renderer = TreemapRenderer(device: device) else {
+        guard useMetal, let device = MTLCreateSystemDefaultDevice(), let renderer = TreemapRenderer(device: device) else {
             let fallback = FallbackView(frame: .zero)
             fallback.interaction = interaction
-            fallback.jetsamMenu = context.coordinator.contextMenu
+            fallback.reclaimMenu = context.coordinator.contextMenu
             fallback.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark, snapshot: snapshot, mode: mode)
             return fallback
         }
         let view = InteractiveMTKView(frame: .zero, device: device)
         view.interaction = interaction
-        view.jetsamMenu = context.coordinator.contextMenu
+        view.reclaimMenu = context.coordinator.contextMenu
         // The palette's sRGB-encoded values are written unconverted into a
         // non-sRGB drawable; the colorspace says how to read them.
         view.colorPixelFormat = TreemapRenderer.pixelFormat
@@ -120,6 +130,8 @@ public struct TreemapView: NSViewRepresentable {
         let previousTiles = coordinator.interaction.tiles
         coordinator.interaction.navigator = navigator
         coordinator.interaction.onHover = onHover
+        coordinator.interaction.onPointer = onPointer
+        coordinator.interaction.onDismissCallout = onDismissCallout
         let pending = coordinator.interaction.setTiles(tiles)
         let inferred = sameNavigator ? Self.navigationZoomRect(old: previousTiles, new: tiles, viewport: nsView.bounds) : nil
         let zoomFrom = pending ?? inferred
@@ -186,10 +198,10 @@ public struct TreemapView: NSViewRepresentable {
 
     final class InteractiveMTKView: MTKView {
         weak var interaction: TreemapInteraction?
-        var jetsamMenu: JetsamContextMenu?
+        var reclaimMenu: ReclaimContextMenu?
         override func menu(for event: NSEvent) -> NSMenu? {
             guard interaction?.selectForContext(at: TreemapView.tilePoint(event, in: self)) == true else { return nil }
-            return jetsamMenu?.make()
+            return reclaimMenu?.make()
         }
 
         override init(frame: CGRect, device: MTLDevice?) {
@@ -200,6 +212,10 @@ public struct TreemapView: NSViewRepresentable {
         required init(coder: NSCoder) { fatalError("InteractiveMTKView is not decoded from a nib") }
 
         override var acceptsFirstResponder: Bool { true }
+        override func scrollWheel(with event: NSEvent) {
+            interaction?.onDismissCallout?(.scroll)
+            super.scrollWheel(with: event)
+        }
         override func mouseMoved(with event: NSEvent) { interaction?.hover(at: TreemapView.tilePoint(event, in: self)) }
         override func mouseExited(with event: NSEvent) { interaction?.hover(at: nil) }
         override func mouseDown(with event: NSEvent) {
@@ -237,10 +253,10 @@ public struct TreemapView: NSViewRepresentable {
         private var dark = false
         private var lastKey: Key?
         weak var interaction: TreemapInteraction?
-        var jetsamMenu: JetsamContextMenu?
+        var reclaimMenu: ReclaimContextMenu?
         override func menu(for event: NSEvent) -> NSMenu? {
             guard interaction?.selectForContext(at: TreemapView.tilePoint(event, in: self)) == true else { return nil }
-            return jetsamMenu?.make()
+            return reclaimMenu?.make()
         }
         /// How many times the image has been rendered (for tests).
         private(set) var renderCount = 0
@@ -258,6 +274,10 @@ public struct TreemapView: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError("FallbackView is not decoded from a nib") }
 
         override var acceptsFirstResponder: Bool { true }
+        override func scrollWheel(with event: NSEvent) {
+            interaction?.onDismissCallout?(.scroll)
+            super.scrollWheel(with: event)
+        }
         override func mouseMoved(with event: NSEvent) { interaction?.hover(at: TreemapView.tilePoint(event, in: self)) }
         override func mouseExited(with event: NSEvent) { interaction?.hover(at: nil) }
         override func mouseDown(with event: NSEvent) {
@@ -318,7 +338,7 @@ public struct TreemapView: NSViewRepresentable {
     public final class Coordinator: NSObject, MTKViewDelegate {
         var renderer: TreemapRenderer?
         let interaction = TreemapInteraction()
-        let contextMenu = JetsamContextMenu()
+        let contextMenu = ReclaimContextMenu()
         private(set) var player = ZoomPlayer()
         var onZoomChanged: ((Bool) -> Void)?
         var onDroppedTiles: ((Int) -> Void)?

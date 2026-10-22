@@ -23,7 +23,7 @@ fileprivate func onMainThread() -> Bool { pthread_main_np() != 0 }
 
 /// A column the file table can sort by.
 public enum SortKey: Sendable, Equatable {
-    case name, allocated, logical, modified, kind
+    case name, allocated, logical, modified, kind, items
 }
 
 /// The rows of the file table: node indices into one snapshot, never copied
@@ -104,6 +104,9 @@ public final class FileTableModel: @unchecked Sendable {
         // Keys are computed once per row; the sort then orders positions.
         let order: (Int, Int) -> Int  // <0: a before b, ascending
         switch key {
+        case .items:
+            let k = rows.map { OverlaySource(s, overlay).descendantCount($0) }
+            order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }
         case .allocated:
             let k = rows.map { OverlaySource(s, overlay).allocated($0) }
             order = { k[$0] < k[$1] ? -1 : (k[$0] > k[$1] ? 1 : 0) }

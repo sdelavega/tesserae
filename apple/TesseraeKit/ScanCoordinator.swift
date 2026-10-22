@@ -24,6 +24,7 @@ public struct ScanProgress: Equatable, Sendable {
     public var files: UInt64
     public var bytes: UInt64
     public var errors: UInt64
+    public var displayedEntriesPerSecond: Int { entriesPerSecond > 0 ? max(1, Int(ceil(entriesPerSecond))) : 0 }
     public var entriesPerSecond: Double
 
     public init(
@@ -35,6 +36,25 @@ public struct ScanProgress: Equatable, Sendable {
         self.bytes = bytes
         self.errors = errors
         self.entriesPerSecond = entriesPerSecond
+    }
+}
+
+/// Smooth batch-published counters over one second, retaining the sample
+/// just before the window boundary so irregular polls keep a real denominator.
+struct ScanRateSampler {
+    private var samples: [(time: Double, entries: UInt64)]
+
+    init(start: Double) { samples = [(start, 0)] }
+
+    mutating func sample(entries: UInt64, at time: Double) -> Double {
+        samples.append((time, entries))
+        while samples.count > 2 && samples[1].time <= time - 1 {
+            samples.removeFirst()
+        }
+        let first = samples[0]
+        let elapsed = time - first.time
+        guard elapsed > 0, entries > first.entries else { return 0 }
+        return Double(entries - first.entries) / elapsed
     }
 }
 
@@ -322,21 +342,19 @@ public final class ScanCoordinator: ObservableObject {
         _ handle: any ScanDriving, generation gen: UInt64, interval: Double,
         observer: (@MainActor (Snapshot?, UInt64) -> Void)?, owner: WeakCoordinator
     ) async {
-        var lastAt = ContinuousClock.now
-        var lastEntries: UInt64 = 0
+        let startedAt = ContinuousClock.now
+        var rateSampler = ScanRateSampler(start: 0)
         var status = handle.status()
         while status == Int32(TESS_STATUS_RUNNING) {
             try? await Task.sleep(for: .seconds(interval))
             status = handle.status()
             let now = ContinuousClock.now
-            let elapsed = (now - lastAt).seconds
+            let elapsed = (now - startedAt).seconds
             guard let me = owner.value, me.generation == gen,
                 status == Int32(TESS_STATUS_RUNNING), elapsed > 0, let p = handle.progress()
             else { continue }
             let entries = p.dirs_done + p.files_done
-            let rate = Double(entries &- lastEntries) / elapsed
-            lastAt = now
-            lastEntries = entries
+            let rate = rateSampler.sample(entries: entries, at: elapsed)
             me.state = .scanning(
                 ScanProgress(
                     dirs: p.dirs_done, files: p.files_done, bytes: p.bytes_seen,

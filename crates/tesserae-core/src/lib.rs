@@ -14,12 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+pub mod archive_verify;
 pub mod arena;
 pub mod attrs;
 pub mod boundary;
 pub mod dataless;
 pub mod dedup;
 pub mod freeze;
+pub mod measure;
 pub mod node;
 pub mod parse;
 pub mod pool;

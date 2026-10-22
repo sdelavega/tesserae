@@ -94,8 +94,8 @@ final class ColourTests: XCTestCase {
             XCTAssertEqual(got[Palette.statusIndex], "#fab219", file: file, line: line)
         }
         let kinds: [FileKind] = [.video, .images, .audio]
-        expect(.depth, dark: false, ["#86b6ef", "#5598e7", "#256bc0", "#184f95", "#0d366b"])
-        expect(.depth, dark: true, ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4"])
+        XCTAssertEqual(hexes(.folder, dark: false).count, 34)  // exact fills in FolderColourTests
+        XCTAssertEqual(hexes(.folder, dark: true).count, 34)
         let age = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
         expect(.age(now: now), dark: false, age)
         expect(.age(now: now), dark: true, age.reversed())
@@ -103,7 +103,7 @@ final class ColourTests: XCTestCase {
         expect(.typeFocus(kinds), dark: true, ["#3987e5", "#d95926", "#199e70"])
         XCTAssertEqual(hex(Palette.surface(dark: false)), "#fcfcfb")
         XCTAssertEqual(hex(Palette.surface(dark: true)), "#1a1a19")
-        for c in Palette.colours(.depth, dark: false) { XCTAssertEqual(c.w, 1) }
+        for c in Palette.colours(.folder, dark: false) { XCTAssertEqual(c.w, 1) }
     }
 
     func test_light_mode_aqua_contrast_is_the_documented_2_74() {
@@ -121,20 +121,13 @@ final class ColourTests: XCTestCase {
         XCTAssertEqual((ratio * 100).rounded() / 100, 2.74)
     }
 
-    func test_depth_cycles_every_five_levels() {
+    func test_folder_node_without_layout_context_is_neutral_at_every_depth() {
         let f = Fake([.init(name: "d", dir: true), .init(name: "f.txt")])
-        var seen = Set<UInt16>()
-        for d in 0..<15 {
-            let a = colourIndex(1, depth: UInt8(d), in: f.snapshot, mode: .depth)
-            let b = colourIndex(0, depth: UInt8(d), in: f.snapshot, mode: .depth)
-            XCTAssertEqual(a, b)
-            XCTAssertEqual(Int(a), Palette.firstColourIndex + d % 5)
-            if d < 5 { seen.insert(a) } else {
-                XCTAssertEqual(a, colourIndex(1, depth: UInt8(d - 5), in: f.snapshot, mode: .depth))
+        for d: UInt8 in [0, 1, 4, 5, 255] {
+            for node: UInt32 in [0, 1] {
+                XCTAssertEqual(colourIndex(node, depth: d, in: f.snapshot, mode: .folder), 0)
             }
         }
-        XCTAssertEqual(seen.count, 5)
-        XCTAssertEqual(Int(colourIndex(1, depth: 255, in: f.snapshot, mode: .depth)), Palette.firstColourIndex)
     }
 
     func test_age_buckets_boundaries() {
@@ -211,7 +204,7 @@ final class ColourTests: XCTestCase {
             .init(name: "ok", dir: true, modified: 2_000_000_000),
         ])
         let status = UInt16(Palette.statusIndex)
-        let modes: [ColourMode] = [.depth, .age(now: now), .typeFocus([.video])]
+        let modes: [ColourMode] = [.folder, .age(now: now), .typeFocus([.video])]
         for m in modes {
             XCTAssertEqual(colourIndex(0, depth: 3, in: f.snapshot, mode: m), status)
             XCTAssertNotEqual(colourIndex(1, depth: 3, in: f.snapshot, mode: m), status)
@@ -221,9 +214,9 @@ final class ColourTests: XCTestCase {
                 flags: Tile.Flag.permDenied | Tile.Flag.aggregated, aggregateCount: 3)
             XCTAssertEqual(colourIndex(for: placeholder, in: f.snapshot, mode: m), status)
         }
-        // Aggregate tiles: depth colour in depth mode, neutral otherwise.
+        // Aggregates without folder context are neutral.
         let agg = Tile(rect: .zero, node: Tile.noNode, depth: 7, flags: Tile.Flag.aggregated, aggregateCount: 9)
-        XCTAssertEqual(Int(colourIndex(for: agg, in: f.snapshot, mode: .depth)), Palette.firstColourIndex + 2)
+        XCTAssertEqual(Int(colourIndex(for: agg, in: f.snapshot, mode: .folder)), Palette.neutralIndex)
         XCTAssertEqual(colourIndex(for: agg, in: f.snapshot, mode: .age(now: now)), UInt16(Palette.neutralIndex))
         XCTAssertEqual(colourIndex(for: agg, in: f.snapshot, mode: .typeFocus([.video])), UInt16(Palette.neutralIndex))
     }

@@ -117,6 +117,30 @@ pub fn volume_of(fd: c_int) -> io::Result<VolumeId> {
     Ok(volume_info(fd)?.id)
 }
 
+/// Compare the open root's identity with the mount directory reported by
+/// fstatfs. Unlike st_dev comparisons, this also recognises the APFS Data root.
+/// Only metadata is read; no child directory is opened.
+pub(crate) fn is_volume_root(fd: c_int) -> io::Result<bool> {
+    let fs = fstatfs(fd)?;
+    // SAFETY: successful stat calls initialise the output structures. The
+    // kernel's f_mntonname is NUL-terminated and remains live for fstatat.
+    unsafe {
+        let mut root: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut root) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut mount: libc::stat = std::mem::zeroed();
+        retry_eintr(|| {
+            if libc::fstatat(libc::AT_FDCWD, fs.f_mntonname.as_ptr(), &mut mount, 0) == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        })?;
+        Ok(root.st_dev == mount.st_dev && root.st_ino == mount.st_ino)
+    }
+}
+
 /// [`volume_of`] and the volume's [`Sizing`], from the same one `fstatfs`.
 pub fn volume_info(fd: c_int) -> io::Result<Volume> {
     let st = fstatfs(fd)?;

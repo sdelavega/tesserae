@@ -7,31 +7,51 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F60700000000000000000006 /* FolderOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000005 /* FolderOutlineView.swift */; };
+		F60700000000000000000004 /* FolderTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000003 /* FolderTreeModel.swift */; };
+		F60700000000000000000002 /* FolderTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60700000000000000000001 /* FolderTreeTests.swift */; };
+		E60400000000000000000006 /* StartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60400000000000000000105; };
+		E60400000000000000000005 /* StartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60400000000000000000105; };
+		E60400000000000000000004 /* VolumeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60400000000000000000104; };
+		E60400000000000000000003 /* VolumeList.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60400000000000000000103; };
+		E60400000000000000000001 /* VolumeListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60400000000000000000002; };
+		E60300000000000000000010 /* ToolbarHelp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60300000000000000000011; };
+		E60300000000000000000003 /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60300000000000000000004; };
+		E60300000000000000000005 /* App Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = E60300000000000000000006; };
+		E60300000000000000000007 /* Kit Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = E60300000000000000000008; };
+		E60300000000000000000001 /* ToolbarHelpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60300000000000000000002; };
+		E12000000000000000000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2143F348021411D5954085B; };
+		E12000000000000000000002 /* AppChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000002; };
+		E10C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E10C00000000000000000002; };
+		E10B00000000000000000001 /* Updates.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10B00000000000000000002; };
+		E10200000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E10200000000000000000003 /* Sparkle */; };
+		E10100000000000000000001 /* AppChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000002; };
+		E10100000000000000000003 /* Licenses in Resources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000004; };
 		E09100000000000000000001 /* LiveTrashCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09000000000000000000001; };
-		E08100000000000000000006 /* JetsamSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000006; };
-		E08200000000000000000005 /* TrashSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000005; };
-		E08100000000000000000005 /* TrashSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000005; };
-		E08200000000000000000004 /* ConfirmTrashSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000004; };
-		E08100000000000000000004 /* ConfirmTrashSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000004; };
-		E08200000000000000000003 /* JetsamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000003; };
-		E08100000000000000000003 /* JetsamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000003; };
-		E08100000000000000000002 /* JetsamViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000002; };
-		E08100000000000000000001 /* JetsamViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000001; };
+		E08100000000000000000006 /* ReclaimSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000006; };
+		E08200000000000000000005 /* ReclaimSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000005; };
+		E08100000000000000000005 /* ReclaimSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000005; };
+		E08200000000000000000004 /* ConfirmReclaimSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000004; };
+		E08100000000000000000004 /* ConfirmReclaimSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000004; };
+		E08200000000000000000003 /* ReclaimView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000003; };
+		E08100000000000000000003 /* ReclaimView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000003; };
+		E08100000000000000000002 /* ReclaimViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000002; };
+		E08100000000000000000001 /* ReclaimViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E08000000000000000000001; };
 		E04200000000000000000003 /* Guard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04200000000000000000004; };
 		E04300000000000000000003 /* Identity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04300000000000000000004; };
-		E04400000000000000000003 /* Jetsam.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04400000000000000000004; };
+		E04400000000000000000003 /* Reclaim.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04400000000000000000004; };
 		E04600000000000000000003 /* AuditLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04600000000000000000004; };
 		E05300000000000000000003 /* PutBack.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05300000000000000000004; };
-		E05200000000000000000003 /* JettisonLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05200000000000000000004; };
+		E05200000000000000000003 /* ReclaimLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05200000000000000000004; };
 		E04500000000000000000003 /* Executor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04500000000000000000004; };
 		E04200000000000000000001 /* GuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04200000000000000000002; };
 		E04300000000000000000001 /* IdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04300000000000000000002; };
-		E04400000000000000000001 /* JetsamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04400000000000000000002; };
+		E04400000000000000000001 /* ReclaimTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04400000000000000000002; };
 		E04900000000000000000003 /* ContainedTrasher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04900000000000000000004; };
 		E04800000000000000000003 /* DiskImageFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04800000000000000000004; };
 		E04700000000000000000003 /* ExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04700000000000000000004; };
 		E05100000000000000000003 /* PutBackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05100000000000000000004; };
-		E05000000000000000000003 /* JettisonLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05000000000000000000004; };
+		E05000000000000000000003 /* ReclaimLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05000000000000000000004; };
 		E04000000000000000000007 /* ScanStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04000000000000000000004; };
 		E04000000000000000000006 /* ScanReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03900000000000000000004; };
 		E04000000000000000000005 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E03600000000000000000004; };
@@ -82,9 +102,11 @@
 		D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift */; };
 		D5B2C3D4E5F60718293A4B5C /* SplitMix64.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B2C3D4E5F60718293A4B5C /* SplitMix64.swift */; };
 		B6B2C3D4E5F60718293A4B5C /* Palette.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B2C3D4E5F60718293A4B5C /* Palette.swift */; };
+		F60500000000000000000004 /* FolderSlots.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60500000000000000000003 /* FolderSlots.swift */; };
 		B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */; };
 		B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B2C3D4E5F60718293A4B5C /* FileKind.swift */; };
 		D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */; };
+		F60500000000000000000002 /* FolderColourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60500000000000000000001 /* FolderColourTests.swift */; };
 		B9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift */; };
 		BAB2C3D4E5F60718293A4B5C /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AAB2C3D4E5F60718293A4B5C /* Shaders.metal */; };
 		BBB2C3D4E5F60718293A4B5C /* TreemapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */; };
@@ -113,6 +135,30 @@
 		E01400000000000000000011 /* FrameTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01400000000000000000010 /* FrameTimer.swift */; };
 		E07100000000000000000001 /* SizeOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E07100000000000000000002; };
 		E07100000000000000000003 /* SizeOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = E07100000000000000000004; };
+		E60200000000000000000001 /* HelperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60200000000000000000002; };
+		E60200000000000000000003 /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60200000000000000000004; };
+		E60200000000000000000005 /* applesauce in Copy Helpers */ = {isa = PBXBuildFile; fileRef = E60200000000000000000006 /* applesauce */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		F62000000000000000000000 /* LayoutHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000000 /* LayoutHeaderTests.swift */; };
+		F62000000000000000000001 /* RelativePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000001 /* RelativePathTests.swift */; };
+		F62000000000000000000002 /* HoverCalloutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61000000000000000000002 /* HoverCalloutTests.swift */; };
+		F64000000000000000000000 /* RelativePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63000000000000000000000 /* RelativePath.swift */; };
+		F64000000000000000000001 /* HoverCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63000000000000000000001 /* HoverCallout.swift */; };
+		E60900000000000000000001 /* CompressEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000002; };
+		E60900000000000000000011 /* ReclaimActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000012; };
+		E60900000000000000000021 /* EstimateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000022; };
+		E60900000000000000000031 /* ReclaimAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000032; };
+		E60900000000000000000041 /* CompressEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000042; };
+		E60900000000000000000051 /* OpenFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000052; };
+		E60900000000000000000061 /* Estimate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60900000000000000000062; };
+		EEC6E0589C4A4D1FBA5FA7FF /* CompressorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3FEF4083A2450B9C2C750E; };
+		9BF4AB3F069842E18C311945 /* LiveCompressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE91A04D75564DCDA818E933; };
+		3DC29313B8BB4605A6648C60 /* Compressor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5941AB876B5B4B0FB8354D70; };
+		384C23B337BF4414B2AB07E8 /* CompressManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A2F3FFBDB0945939F1411D3; };
+		C69BB4B284894B3EB4A84E30 /* ArchiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD63A8654FC49929AF3A62B; };
+		D296F87F6FD24D839F96667B /* Archiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2E1B248DB14C788F7121BE; };
+		E5B09A91D4AB4A6397553648 /* ArchiveContents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3ACC4D83664E4485EE9185; };
+		4EDAFFAC853048859939B4BE /* AppleArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E6B6AA57904CCFB72C35DF; };
+		1923A40347E8440CB017B5B8 /* LiveArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DD69098C5246E7A14959DD; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -155,31 +201,57 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E60200000000000000000007 /* Copy Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (E60200000000000000000005 /* applesauce in Copy Helpers */, );
+			name = "Copy Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F60700000000000000000005 /* FolderOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderOutlineView.swift; sourceTree = "<group>"; };
+		F60700000000000000000003 /* FolderTreeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderTreeModel.swift; sourceTree = "<group>"; };
+		F60700000000000000000001 /* FolderTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderTreeTests.swift; sourceTree = "<group>"; };
+		E60400000000000000000105 /* StartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StartView.swift"; sourceTree = "<group>"; };
+		E60400000000000000000104 /* VolumeSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Volumes/VolumeSource.swift"; sourceTree = "<group>"; };
+		E60400000000000000000103 /* VolumeList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Volumes/VolumeList.swift"; sourceTree = "<group>"; };
+		E60400000000000000000002 /* VolumeListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeListTests.swift; sourceTree = "<group>"; };
+		E60300000000000000000011 /* ToolbarHelp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolbarHelp.swift; sourceTree = "<group>"; };
+		E60300000000000000000004 /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
+		E60300000000000000000006 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		E60300000000000000000008 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		E60300000000000000000002 /* ToolbarHelpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolbarHelpTests.swift; sourceTree = "<group>"; };
+		E10C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E10B00000000000000000002 /* Updates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Updates.swift; sourceTree = "<group>"; };
+		E10100000000000000000002 /* AppChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppChrome.swift; sourceTree = "<group>"; };
+		E10100000000000000000004 /* Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Licenses; sourceTree = "<group>"; };
+		E10100000000000000000005 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = SOURCE_ROOT; };
 		E09000000000000000000001 /* LiveTrashCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTrashCheckTests.swift; sourceTree = "<group>"; };
-		E08000000000000000000006 /* JetsamSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetsamSnapshotTests.swift; sourceTree = "<group>"; };
-		E08000000000000000000005 /* TrashSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashSummaryView.swift; sourceTree = "<group>"; };
-		E08000000000000000000004 /* ConfirmTrashSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmTrashSheet.swift; sourceTree = "<group>"; };
-		E08000000000000000000003 /* JetsamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetsamView.swift; sourceTree = "<group>"; };
-		E08000000000000000000002 /* JetsamViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetsamViewModel.swift; sourceTree = "<group>"; };
-		E08000000000000000000001 /* JetsamViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetsamViewModelTests.swift; sourceTree = "<group>"; };
+		E08000000000000000000006 /* ReclaimSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimSnapshotTests.swift; sourceTree = "<group>"; };
+		E08000000000000000000005 /* ReclaimSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimSummaryView.swift; sourceTree = "<group>"; };
+		E08000000000000000000004 /* ConfirmReclaimSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmReclaimSheet.swift; sourceTree = "<group>"; };
+		E08000000000000000000003 /* ReclaimView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimView.swift; sourceTree = "<group>"; };
+		E08000000000000000000002 /* ReclaimViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimViewModel.swift; sourceTree = "<group>"; };
+		E08000000000000000000001 /* ReclaimViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimViewModelTests.swift; sourceTree = "<group>"; };
 		E04200000000000000000004 /* Guard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Guard.swift; sourceTree = "<group>"; };
 		E04300000000000000000004 /* Identity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identity.swift; sourceTree = "<group>"; };
-		E04400000000000000000004 /* Jetsam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Jetsam.swift; sourceTree = "<group>"; };
+		E04400000000000000000004 /* Reclaim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reclaim.swift; sourceTree = "<group>"; };
 		E04600000000000000000004 /* AuditLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuditLog.swift; sourceTree = "<group>"; };
 		E05300000000000000000004 /* PutBack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PutBack.swift; sourceTree = "<group>"; };
-		E05200000000000000000004 /* JettisonLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JettisonLog.swift; sourceTree = "<group>"; };
+		E05200000000000000000004 /* ReclaimLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimLog.swift; sourceTree = "<group>"; };
 		E04500000000000000000004 /* Executor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Executor.swift; sourceTree = "<group>"; };
 		E04200000000000000000002 /* GuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardTests.swift; sourceTree = "<group>"; };
 		E04300000000000000000002 /* IdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityTests.swift; sourceTree = "<group>"; };
-		E04400000000000000000002 /* JetsamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetsamTests.swift; sourceTree = "<group>"; };
+		E04400000000000000000002 /* ReclaimTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimTests.swift; sourceTree = "<group>"; };
 		E04900000000000000000004 /* ContainedTrasher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/ContainedTrasher.swift; sourceTree = "<group>"; };
 		E04800000000000000000004 /* DiskImageFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/DiskImageFixture.swift; sourceTree = "<group>"; };
 		E04700000000000000000004 /* ExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutorTests.swift; sourceTree = "<group>"; };
 		E05100000000000000000004 /* PutBackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PutBackTests.swift; sourceTree = "<group>"; };
-		E05000000000000000000004 /* JettisonLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JettisonLogTests.swift; sourceTree = "<group>"; };
+		E05000000000000000000004 /* ReclaimLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimLogTests.swift; sourceTree = "<group>"; };
 		E04000000000000000000004 /* ScanStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanStatusViews.swift; sourceTree = "<group>"; };
 		E04000000000000000000002 /* DegradedModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DegradedModeTests.swift; sourceTree = "<group>"; };
 		E03900000000000000000004 /* ScanReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanReportView.swift; sourceTree = "<group>"; };
@@ -229,9 +301,11 @@
 		C4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticTree.swift; sourceTree = "<group>"; };
 		C5B2C3D4E5F60718293A4B5C /* SplitMix64.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitMix64.swift; sourceTree = "<group>"; };
 		A6B2C3D4E5F60718293A4B5C /* Palette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Palette.swift; sourceTree = "<group>"; };
+		F60500000000000000000003 /* FolderSlots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderSlots.swift; sourceTree = "<group>"; };
 		A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourMode.swift; sourceTree = "<group>"; };
 		A8B2C3D4E5F60718293A4B5C /* FileKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileKind.swift; sourceTree = "<group>"; };
 		C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourTests.swift; sourceTree = "<group>"; };
+		F60500000000000000000001 /* FolderColourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderColourTests.swift; sourceTree = "<group>"; };
 		A9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapRenderer.swift; sourceTree = "<group>"; };
 		AAB2C3D4E5F60718293A4B5C /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		ABB2C3D4E5F60718293A4B5C /* TreemapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapView.swift; sourceTree = "<group>"; };
@@ -260,6 +334,30 @@
 		E01400000000000000000010 /* FrameTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Diagnostics/FrameTimer.swift"; sourceTree = "<group>"; };
 		E07100000000000000000002 /* SizeOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizeOverlayTests.swift; sourceTree = "<group>"; };
 		E07100000000000000000004 /* SizeOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizeOverlay.swift; sourceTree = "<group>"; };
+		E60200000000000000000002 /* HelperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperTests.swift; sourceTree = "<group>"; };
+		E60200000000000000000004 /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
+		E60200000000000000000006 /* applesauce */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = build/applesauce; sourceTree = SOURCE_ROOT; };
+		F61000000000000000000000 /* LayoutHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutHeaderTests.swift; sourceTree = "<group>"; };
+		F61000000000000000000001 /* RelativePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativePathTests.swift; sourceTree = "<group>"; };
+		F61000000000000000000002 /* HoverCalloutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverCalloutTests.swift; sourceTree = "<group>"; };
+		F63000000000000000000000 /* RelativePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativePath.swift; sourceTree = "<group>"; };
+		F63000000000000000000001 /* HoverCallout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverCallout.swift; sourceTree = "<group>"; };
+		E60900000000000000000002 /* CompressEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressEligibilityTests.swift; sourceTree = "<group>"; };
+		E60900000000000000000012 /* ReclaimActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimActionTests.swift; sourceTree = "<group>"; };
+		E60900000000000000000022 /* EstimateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EstimateTests.swift; sourceTree = "<group>"; };
+		E60900000000000000000032 /* ReclaimAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReclaimAction.swift; sourceTree = "<group>"; };
+		E60900000000000000000042 /* CompressEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressEligibility.swift; sourceTree = "<group>"; };
+		E60900000000000000000052 /* OpenFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenFiles.swift; sourceTree = "<group>"; };
+		E60900000000000000000062 /* Estimate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Estimate.swift; sourceTree = "<group>"; };
+		8D3FEF4083A2450B9C2C750E /* CompressorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressorTests.swift; sourceTree = "<group>"; };
+		DE91A04D75564DCDA818E933 /* LiveCompressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCompressTests.swift; sourceTree = "<group>"; };
+		5941AB876B5B4B0FB8354D70 /* Compressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Compressor.swift; sourceTree = "<group>"; };
+		8A2F3FFBDB0945939F1411D3 /* CompressManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressManifest.swift; sourceTree = "<group>"; };
+		ADD63A8654FC49929AF3A62B /* ArchiverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiverTests.swift; sourceTree = "<group>"; };
+		BC2E1B248DB14C788F7121BE /* Archiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Archiver.swift; sourceTree = "<group>"; };
+		CE3ACC4D83664E4485EE9185 /* ArchiveContents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveContents.swift; sourceTree = "<group>"; };
+		18E6B6AA57904CCFB72C35DF /* AppleArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleArchiveTests.swift; sourceTree = "<group>"; };
+		72DD69098C5246E7A14959DD /* LiveArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveArchiveTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -275,6 +373,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10200000000000000000001 /* Sparkle in Frameworks */,
 				B9F4D7E61CDD4E11F1C9342D /* TesseraeKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -282,20 +381,29 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		E04200000000000000000005 /* Jetsam */ = {
+		E04200000000000000000005 /* Reclaim */ = {
 			isa = PBXGroup;
 			children = (
 				E04200000000000000000004 /* Guard.swift */,
 				E04300000000000000000004 /* Identity.swift */,
-				E04400000000000000000004 /* Jetsam.swift */,
-				E08000000000000000000002 /* JetsamViewModel.swift */,
+				E60200000000000000000004 /* Helpers.swift */,
+				E60900000000000000000062 /* Estimate.swift */,
+				E60900000000000000000052 /* OpenFiles.swift */,
+				E60900000000000000000042 /* CompressEligibility.swift */,
+				8A2F3FFBDB0945939F1411D3 /* CompressManifest.swift */,
+				5941AB876B5B4B0FB8354D70 /* Compressor.swift */,
+				CE3ACC4D83664E4485EE9185 /* ArchiveContents.swift */,
+				BC2E1B248DB14C788F7121BE /* Archiver.swift */,
+				E60900000000000000000032 /* ReclaimAction.swift */,
+				E04400000000000000000004 /* Reclaim.swift */,
+				E08000000000000000000002 /* ReclaimViewModel.swift */,
 				E07100000000000000000004 /* SizeOverlay.swift */,
 				E04600000000000000000004 /* AuditLog.swift */,
 				E05300000000000000000004 /* PutBack.swift */,
-				E05200000000000000000004 /* JettisonLog.swift */,
+				E05200000000000000000004 /* ReclaimLog.swift */,
 				E04500000000000000000004 /* Executor.swift */,
 			);
-			path = Jetsam;
+			path = Reclaim;
 			sourceTree = "<group>";
 		};
 		E03500000000000000000009 /* Permissions */ = {
@@ -335,9 +443,11 @@
 		0866F50D291F796035D5ED3B /* TesseraeKitTests */ = {
 			isa = PBXGroup;
 			children = (
+				E60300000000000000000002 /* ToolbarHelpTests.swift */,
+				E60400000000000000000002 /* VolumeListTests.swift */,
 				E04000000000000000000002 /* DegradedModeTests.swift */,
-				E08000000000000000000006 /* JetsamSnapshotTests.swift */,
-				E08000000000000000000001 /* JetsamViewModelTests.swift */,
+				E08000000000000000000006 /* ReclaimSnapshotTests.swift */,
+				E08000000000000000000001 /* ReclaimViewModelTests.swift */,
 				E09000000000000000000001 /* LiveTrashCheckTests.swift */,
 				E03100000000000000000004 /* VolumeFactsTests.swift */,
 				E03300000000000000000002 /* ReconcileTests.swift */,
@@ -350,13 +460,22 @@
 				E04100000000000000000002 /* SnapshotIdentityTests.swift */,
 				E04200000000000000000002 /* GuardTests.swift */,
 				E04300000000000000000002 /* IdentityTests.swift */,
-				E04400000000000000000002 /* JetsamTests.swift */,
+				E60200000000000000000002 /* HelperTests.swift */,
+				E60900000000000000000022 /* EstimateTests.swift */,
+				E60900000000000000000012 /* ReclaimActionTests.swift */,
+				E60900000000000000000002 /* CompressEligibilityTests.swift */,
+				DE91A04D75564DCDA818E933 /* LiveCompressTests.swift */,
+				8D3FEF4083A2450B9C2C750E /* CompressorTests.swift */,
+				72DD69098C5246E7A14959DD /* LiveArchiveTests.swift */,
+				18E6B6AA57904CCFB72C35DF /* AppleArchiveTests.swift */,
+				ADD63A8654FC49929AF3A62B /* ArchiverTests.swift */,
+				E04400000000000000000002 /* ReclaimTests.swift */,
 				E04900000000000000000004 /* ContainedTrasher.swift */,
 				E04800000000000000000004 /* DiskImageFixture.swift */,
 				E04700000000000000000004 /* ExecutorTests.swift */,
 				E05100000000000000000004 /* PutBackTests.swift */,
 				E07100000000000000000002 /* SizeOverlayTests.swift */,
-				E05000000000000000000004 /* JettisonLogTests.swift */,
+				E05000000000000000000004 /* ReclaimLogTests.swift */,
 				E03200000000000000000006 /* CommandRunnerTests.swift */,
 				E01300000000000000000001 /* AppModelTests.swift */,
 				8723AA9194DE0F498DAC322F /* LinkTests.swift */,
@@ -364,6 +483,8 @@
 				C2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift */,
 				C3B2C3D4E5F60718293A4B5C /* LayoutTests.swift */,
 				C6B2C3D4E5F60718293A4B5C /* ColourTests.swift */,
+				F60700000000000000000001 /* FolderTreeTests.swift */,
+				F60500000000000000000001 /* FolderColourTests.swift */,
 				C7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift */,
 				A1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift */,
 				F1A0061D2E3F4A5B6C7D8E /* NavigatorTests.swift */,
@@ -372,6 +493,9 @@
 				F1B012A52E3F4A5B6C7D8E /* TableTests.swift */,
 				F1A0091D2E3F4A5B6C7D8E /* InspectorTests.swift */,
 				F1A00C1D2E3F4A5B6C7D8E /* LabelTests.swift */,
+				F61000000000000000000002 /* HoverCalloutTests.swift */,
+				F61000000000000000000001 /* RelativePathTests.swift */,
+				F61000000000000000000000 /* LayoutHeaderTests.swift */,
 				E2B2C3D4E5F60718293A4B5C /* Support */,
 			);
 			path = TesseraeKitTests;
@@ -388,16 +512,23 @@
 		675361416C3060D7EE6539E3 /* Tesserae */ = {
 			isa = PBXGroup;
 			children = (
+				E60300000000000000000006 /* Localizable.xcstrings */,
 				E03600000000000000000004 /* OnboardingView.swift */,
+				E60400000000000000000105 /* StartView.swift */,
 				E04000000000000000000004 /* ScanStatusViews.swift */,
 				C2143F348021411D5954085B /* ContentView.swift */,
-				E08000000000000000000005 /* TrashSummaryView.swift */,
-				E08000000000000000000004 /* ConfirmTrashSheet.swift */,
-				E08000000000000000000003 /* JetsamView.swift */,
+				E08000000000000000000005 /* ReclaimSummaryView.swift */,
+				E08000000000000000000004 /* ConfirmReclaimSheet.swift */,
+				E08000000000000000000003 /* ReclaimView.swift */,
 				E03900000000000000000004 /* ScanReportView.swift */,
 				D48C8DD9DA800BE9728D7A62 /* Info.plist */,
 				B9642A9CE095BEB5C5D01E19 /* Tesserae.entitlements */,
 				25C795E77AC247CB2BB2A411 /* TesseraeApp.swift */,
+				E10100000000000000000002 /* AppChrome.swift */,
+				E10B00000000000000000002 /* Updates.swift */,
+				E10100000000000000000004 /* Licenses */,
+				E10C00000000000000000002 /* Assets.xcassets */,
+				E10100000000000000000005 /* Release.xcconfig */,
 			);
 			path = Tesserae;
 			sourceTree = "<group>";
@@ -405,7 +536,12 @@
 		B44C549377661B3C8A9D0A6E /* TesseraeKit */ = {
 			isa = PBXGroup;
 			children = (
-				E04200000000000000000005 /* Jetsam */,
+				E60300000000000000000008 /* Localizable.xcstrings */,
+				E60300000000000000000004 /* L10n.swift */,
+				E60300000000000000000011 /* ToolbarHelp.swift */,
+				E60400000000000000000104 /* VolumeSource.swift */,
+				E60400000000000000000103 /* VolumeList.swift */,
+				E04200000000000000000005 /* Reclaim */,
 				E03500000000000000000009 /* Permissions */,
 				E03100000000000000000005 /* Reconciliation */,
 				E01400000000000000000010 /* FrameTimer.swift */,
@@ -452,6 +588,7 @@
 			isa = PBXGroup;
 			children = (
 				A6B2C3D4E5F60718293A4B5C /* Palette.swift */,
+				F60500000000000000000003 /* FolderSlots.swift */,
 				A7B2C3D4E5F60718293A4B5C /* ColourMode.swift */,
 				A8B2C3D4E5F60718293A4B5C /* FileKind.swift */,
 			);
@@ -483,6 +620,8 @@
 			isa = PBXGroup;
 			children = (
 				F1A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift */,
+				F63000000000000000000001 /* HoverCallout.swift */,
+				F63000000000000000000000 /* RelativePath.swift */,
 				F1A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift */,
 			);
 			path = Labels;
@@ -510,6 +649,8 @@
 		F3B0040000000000000000A4 /* Table */ = {
 			isa = PBXGroup;
 			children = (
+				F60700000000000000000003 /* FolderTreeModel.swift */,
+				F60700000000000000000005 /* FolderOutlineView.swift */,
 				F1B012A12E3F4A5B6C7D8E /* FileTableModel.swift */,
 				F1B012A22E3F4A5B6C7D8E /* FileTableView.swift */,
 				F1B012A32E3F4A5B6C7D8E /* TopK.swift */,
@@ -559,6 +700,8 @@
 				5BE10DB10A57F59C832C3AC6 /* Sources */,
 				A2B9481593810DBE6A2D3BAD /* Frameworks */,
 				4718CBF7185D0CB837691A4E /* Embed Frameworks */,
+				E10100000000000000000006 /* Resources */,
+				E60200000000000000000007 /* Copy Helpers */,
 			);
 			buildRules = (
 			);
@@ -567,6 +710,7 @@
 			);
 			name = Tesserae;
 			packageProductDependencies = (
+				E10200000000000000000003 /* Sparkle */,
 			);
 			productName = Tesserae;
 			productReference = 217A1A74C4A12984EA94399A /* Tesserae.app */;
@@ -579,6 +723,7 @@
 				AFC7B459036AADB412F6491E /* Verify Rust library is fresh */,
 				E780BB0C15E407F3826CE305 /* Headers */,
 				396EFBC4DB8C13D8FB9ACDDA /* Sources */,
+				E60300000000000000000009 /* Kit Resources */,
 			);
 			buildRules = (
 			);
@@ -623,6 +768,9 @@
 			);
 			mainGroup = 06703E27D4C362736298C050;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E10200000000000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D979F5EDE069F32EF41826FA /* Products */;
 			projectDirPath = "";
@@ -634,6 +782,21 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E60300000000000000000009 /* Kit Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (E60300000000000000000007 /* Kit Localizable.xcstrings in Resources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E10100000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (E60300000000000000000005 /* App Localizable.xcstrings in Resources */, E10100000000000000000003 /* Licenses in Resources */, E10C00000000000000000001 /* Assets.xcassets in Resources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		AFC7B459036AADB412F6491E /* Verify Rust library is fresh */ = {
@@ -671,14 +834,27 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E60300000000000000000003 /* L10n.swift in Sources */,
+				E60300000000000000000010 /* ToolbarHelp.swift in Sources */,
+				E60400000000000000000004 /* VolumeSource.swift in Sources */,
+				E60400000000000000000003 /* VolumeList.swift in Sources */,
 				E04200000000000000000003 /* Guard.swift in Sources */,
 				E04300000000000000000003 /* Identity.swift in Sources */,
-				E04400000000000000000003 /* Jetsam.swift in Sources */,
-				E08100000000000000000002 /* JetsamViewModel.swift in Sources */,
+				E60200000000000000000003 /* Helpers.swift in Sources */,
+				E60900000000000000000061 /* Estimate.swift in Sources */,
+				E60900000000000000000051 /* OpenFiles.swift in Sources */,
+				E60900000000000000000041 /* CompressEligibility.swift in Sources */,
+				384C23B337BF4414B2AB07E8 /* CompressManifest.swift in Sources */,
+				3DC29313B8BB4605A6648C60 /* Compressor.swift in Sources */,
+				E5B09A91D4AB4A6397553648 /* ArchiveContents.swift in Sources */,
+				D296F87F6FD24D839F96667B /* Archiver.swift in Sources */,
+				E60900000000000000000031 /* ReclaimAction.swift in Sources */,
+				E04400000000000000000003 /* Reclaim.swift in Sources */,
+				E08100000000000000000002 /* ReclaimViewModel.swift in Sources */,
 				E07100000000000000000003 /* SizeOverlay.swift in Sources */,
 				E04600000000000000000003 /* AuditLog.swift in Sources */,
 				E05300000000000000000003 /* PutBack.swift in Sources */,
-				E05200000000000000000003 /* JettisonLog.swift in Sources */,
+				E05200000000000000000003 /* ReclaimLog.swift in Sources */,
 				E04500000000000000000003 /* Executor.swift in Sources */,
 				E03100000000000000000001 /* VolumeFacts.swift in Sources */,
 				E03300000000000000000003 /* Reconcile.swift in Sources */,
@@ -701,6 +877,7 @@
 				B4B2C3D4E5F60718293A4B5C /* SquarifiedLayout.swift in Sources */,
 				B5B2C3D4E5F60718293A4B5C /* Tile.swift in Sources */,
 				B6B2C3D4E5F60718293A4B5C /* Palette.swift in Sources */,
+				F60500000000000000000004 /* FolderSlots.swift in Sources */,
 				B7B2C3D4E5F60718293A4B5C /* ColourMode.swift in Sources */,
 				B8B2C3D4E5F60718293A4B5C /* FileKind.swift in Sources */,
 				B9B2C3D4E5F60718293A4B5C /* TreemapRenderer.swift in Sources */,
@@ -712,8 +889,12 @@
 				F2A0031D2E3F4A5B6C7D8E /* HitTester.swift in Sources */,
 				F2A0041D2E3F4A5B6C7D8E /* Inspector.swift in Sources */,
 				F2A0F11D2E3F4A5B6C7D8E /* LabelPlacer.swift in Sources */,
+				F64000000000000000000001 /* HoverCallout.swift in Sources */,
+				F64000000000000000000000 /* RelativePath.swift in Sources */,
 				F2A00B1D2E3F4A5B6C7D8E /* LabelsOverlay.swift in Sources */,
 				F2A0051D2E3F4A5B6C7D8E /* TreemapInteraction.swift in Sources */,
+				F60700000000000000000004 /* FolderTreeModel.swift in Sources */,
+				F60700000000000000000006 /* FolderOutlineView.swift in Sources */,
 				F2B012A12E3F4A5B6C7D8E /* FileTableModel.swift in Sources */,
 				F2B012A22E3F4A5B6C7D8E /* FileTableView.swift in Sources */,
 				F2B012A32E3F4A5B6C7D8E /* TopK.swift in Sources */,
@@ -725,14 +906,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E08100000000000000000005 /* TrashSummaryView.swift in Sources */,
-				E08100000000000000000004 /* ConfirmTrashSheet.swift in Sources */,
-				E08100000000000000000003 /* JetsamView.swift in Sources */,
+				E08100000000000000000005 /* ReclaimSummaryView.swift in Sources */,
+				E08100000000000000000004 /* ConfirmReclaimSheet.swift in Sources */,
+				E08100000000000000000003 /* ReclaimView.swift in Sources */,
 				E03600000000000000000003 /* OnboardingView.swift in Sources */,
+				E60400000000000000000005 /* StartView.swift in Sources */,
 				E04000000000000000000003 /* ScanStatusViews.swift in Sources */,
 				434DDC8E332E0EE5E1372929 /* ContentView.swift in Sources */,
 				E03900000000000000000003 /* ScanReportView.swift in Sources */,
 				B41FDD4DF9CD58338B9470A8 /* TesseraeApp.swift in Sources */,
+				E10100000000000000000001 /* AppChrome.swift in Sources */,
+				E10B00000000000000000001 /* Updates.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -740,14 +924,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E08100000000000000000006 /* JetsamSnapshotTests.swift in Sources */,
-				E08200000000000000000005 /* TrashSummaryView.swift in Sources */,
-				E08200000000000000000004 /* ConfirmTrashSheet.swift in Sources */,
-				E08200000000000000000003 /* JetsamView.swift in Sources */,
-				E08100000000000000000001 /* JetsamViewModelTests.swift in Sources */,
+				E60300000000000000000001 /* ToolbarHelpTests.swift in Sources */,
+				E60400000000000000000001 /* VolumeListTests.swift in Sources */,
+				E08100000000000000000006 /* ReclaimSnapshotTests.swift in Sources */,
+				E08200000000000000000005 /* ReclaimSummaryView.swift in Sources */,
+				E08200000000000000000004 /* ConfirmReclaimSheet.swift in Sources */,
+				E08200000000000000000003 /* ReclaimView.swift in Sources */,
+				E08100000000000000000001 /* ReclaimViewModelTests.swift in Sources */,
 				E09100000000000000000001 /* LiveTrashCheckTests.swift in Sources */,
 				E04000000000000000000001 /* DegradedModeTests.swift in Sources */,
+				E12000000000000000000001 /* ContentView.swift in Sources */,
+				E12000000000000000000002 /* AppChrome.swift in Sources */,
 				E04000000000000000000005 /* OnboardingView.swift in Sources */,
+				E60400000000000000000006 /* StartView.swift in Sources */,
 				E04000000000000000000006 /* ScanReportView.swift in Sources */,
 				E04000000000000000000007 /* ScanStatusViews.swift in Sources */,
 				E03100000000000000000003 /* VolumeFactsTests.swift in Sources */,
@@ -761,13 +950,22 @@
 				E04100000000000000000001 /* SnapshotIdentityTests.swift in Sources */,
 				E04200000000000000000001 /* GuardTests.swift in Sources */,
 				E04300000000000000000001 /* IdentityTests.swift in Sources */,
-				E04400000000000000000001 /* JetsamTests.swift in Sources */,
+				E60200000000000000000001 /* HelperTests.swift in Sources */,
+				E60900000000000000000021 /* EstimateTests.swift in Sources */,
+				E60900000000000000000011 /* ReclaimActionTests.swift in Sources */,
+				E60900000000000000000001 /* CompressEligibilityTests.swift in Sources */,
+				9BF4AB3F069842E18C311945 /* LiveCompressTests.swift in Sources */,
+				EEC6E0589C4A4D1FBA5FA7FF /* CompressorTests.swift in Sources */,
+				1923A40347E8440CB017B5B8 /* LiveArchiveTests.swift in Sources */,
+				4EDAFFAC853048859939B4BE /* AppleArchiveTests.swift in Sources */,
+				C69BB4B284894B3EB4A84E30 /* ArchiverTests.swift in Sources */,
+				E04400000000000000000001 /* ReclaimTests.swift in Sources */,
 				E04900000000000000000003 /* ContainedTrasher.swift in Sources */,
 				E04800000000000000000003 /* DiskImageFixture.swift in Sources */,
 				E04700000000000000000003 /* ExecutorTests.swift in Sources */,
 				E05100000000000000000003 /* PutBackTests.swift in Sources */,
 				E07100000000000000000001 /* SizeOverlayTests.swift in Sources */,
-				E05000000000000000000003 /* JettisonLogTests.swift in Sources */,
+				E05000000000000000000003 /* ReclaimLogTests.swift in Sources */,
 				E03200000000000000000005 /* CommandRunnerTests.swift in Sources */,
 				E01500000000000000000002 /* AppModelTests.swift in Sources */,
 				4AD32EA6DAEEE56249B35629 /* LinkTests.swift in Sources */,
@@ -775,6 +973,8 @@
 				D2B2C3D4E5F60718293A4B5C /* ScanCoordinatorTests.swift in Sources */,
 				D3B2C3D4E5F60718293A4B5C /* LayoutTests.swift in Sources */,
 				D6B2C3D4E5F60718293A4B5C /* ColourTests.swift in Sources */,
+				F60700000000000000000002 /* FolderTreeTests.swift in Sources */,
+				F60500000000000000000002 /* FolderColourTests.swift in Sources */,
 				D7B2C3D4E5F60718293A4B5C /* MetalRendererTests.swift in Sources */,
 				B1C9D4E5F60718293A4B5C02 /* RenderSnapshotTests.swift in Sources */,
 				D4B2C3D4E5F60718293A4B5C /* SyntheticTree.swift in Sources */,
@@ -785,6 +985,9 @@
 				F2B012A52E3F4A5B6C7D8E /* TableTests.swift in Sources */,
 				F2A0091D2E3F4A5B6C7D8E /* InspectorTests.swift in Sources */,
 				F2A00C1D2E3F4A5B6C7D8E /* LabelTests.swift in Sources */,
+				F62000000000000000000002 /* HoverCalloutTests.swift in Sources */,
+				F62000000000000000000001 /* RelativePathTests.swift in Sources */,
+				F62000000000000000000000 /* LayoutHeaderTests.swift in Sources */,
 				F2A00A1D2E3F4A5B6C7D8E /* TestSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -857,7 +1060,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 100;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -928,7 +1131,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 100;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -958,10 +1161,9 @@
 		};
 		7F4DD5B4074C79AB47850AE0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E10100000000000000000005 /* Release.xcconfig */;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
@@ -974,7 +1176,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/build";
-				OTHER_LDFLAGS = "-ltesserae";
+				OTHER_LDFLAGS = "-ltesserae -lAppleArchive";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -984,7 +1186,9 @@
 		};
 		9A58F18000EFFDBF4E2DB821 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E10100000000000000000005 /* Release.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Tesserae/Tesserae.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
@@ -1018,6 +1222,7 @@
 		B0373835AD75326F762E3A56 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Tesserae/Tesserae.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
@@ -1037,7 +1242,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 100;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
@@ -1050,7 +1255,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/build";
-				OTHER_LDFLAGS = "-ltesserae";
+				OTHER_LDFLAGS = "-ltesserae -lAppleArchive";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sdelavega.TesseraeKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1059,6 +1264,25 @@
 			name = Debug;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E10200000000000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E10200000000000000000003 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10200000000000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		1CF7FF0D223A87EB52D9BF8D /* Build configuration list for PBXNativeTarget "Tesserae" */ = {

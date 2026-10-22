@@ -6,6 +6,13 @@ the item is and, where it matters, why it waited. Reconstructed from the executi
 record after the scratch ledger was deleted; the decisions themselves are in the
 rulings list kept outside the repo.
 
+## Post-0.1.0
+
+- **Include system volume.** Add an explicit opt-in scan of the sealed system
+  volume alongside the startup disk's Data volume. For 0.1.0, Scan Macintosh HD
+  and selecting the boot volume in the folder picker scan `/System/Volumes/Data`;
+  scanning `/` as "include system volume" is deferred.
+
 ## Do first
 
 - ~~**Link the static library from Xcode.**~~ Closed in Phase 2 Task 3;

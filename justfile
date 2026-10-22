@@ -16,13 +16,17 @@ default:
     @just --list
 
 # Every check CI runs, in CI's order.
-gate: no-home-paths lint test header ship-lib deny ffi app-test
+gate: no-home-paths strings-test lint test header ship-lib deny ffi app-test release-metadata-test release-test demo-volume-test
 
 # Reject the running user's home path in every tracked text file. Matching
 # $HOME exactly (not any "/Users/") lets docs discuss macOS paths such as
 # /System/Volumes/Data/Users/… while still catching a leaked home directory.
 no-home-paths:
     @status=0; git grep -n -I -F -e "$HOME/" -- . || status=$?; test "$status" -eq 1
+
+# Enforce the production UI localization boundary.
+strings-test:
+    python3 scripts/tests/strings_test.py
 
 # The disk-image integration tests attach and detach real images with hdiutil.
 # `setrlimit` is process-wide, so the descriptor-limit test is `#[ignore]`d in
@@ -31,6 +35,7 @@ no-home-paths:
 # All tests, then the serialized descriptor-limit test.
 test:
     cargo test --workspace --locked
+    cargo test --manifest-path tools/applesauce/Cargo.toml --locked
     cargo test -p tesserae-core --lib --locked -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
 
 # Formatting and clippy, for the workspace and for fuzz/ (a separate crate).
@@ -40,10 +45,11 @@ lint:
     cargo fmt --check --manifest-path fuzz/Cargo.toml
     cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
 
-# Licences, for the workspace and for fuzz/.
+# Licences, including the separately configured bundled helper.
 deny:
     cargo deny check licenses
     cargo deny --manifest-path fuzz/Cargo.toml check licenses
+    cargo deny --manifest-path tools/applesauce/Cargo.toml --config tools/applesauce/deny.toml check licenses
 
 # Regenerate crates/tesserae-ffi/include/tesserae.h and fail if it differs from what is committed.
 header:
@@ -63,14 +69,30 @@ ffi:
 
 # TesseraeKit's XCTest suite (Debug, this machine's architecture). The result
 # bundle (xcodebuild refuses to overwrite one) is what CI uploads on failure.
-app-test:
+app-test: applesauce
+    cargo build -p tesserae-core --example archive_decode --locked
     rm -rf apple/build/TesseraeKit-test.xcresult
     xcodebuild test -project apple/Tesserae.xcodeproj -scheme TesseraeKit -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/TesseraeKit-test.xcresult
 
+# Build the pinned universal compression helper.
+applesauce:
+    scripts/build-applesauce.sh
+
 # Unsigned universal Release build of the app, as CI builds it.
-app-build:
+app-build: applesauce
     rm -rf apple/build/Tesserae-build.xcresult
     xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO
+
+# Release metadata, bundled licence and app chrome checks.
+release-metadata-test: app-build
+    python3 scripts/tests/icon_test.py
+    python3 scripts/tests/applesauce_bundle_test.py
+    python3 scripts/tests/release_metadata_test.py
+    python3 scripts/tests/updates_test.py
+    xcrun swiftc -parse-as-library apple/Tesserae/AppChrome.swift scripts/tests/AppChromeTests.swift -o apple/build/app-chrome-tests
+    apple/build/app-chrome-tests apple/build/DerivedData/Build/Products/Release/Tesserae.app
+    xcrun swiftc -parse-as-library -F apple/build/DerivedData/Build/Products/Release -framework Sparkle -Xlinker -rpath -Xlinker '@executable_path/DerivedData/Build/Products/Release' apple/Tesserae/Updates.swift apple/Tesserae/AppChrome.swift scripts/tests/UpdatesTests.swift -o apple/build/updates-tests
+    apple/build/updates-tests
 
 # FDA grants need a real code signature; if testing again, the user must toggle FDA off/on for the new signature.
 fda-copy:
@@ -78,7 +100,7 @@ fda-copy:
     mkdir -p apple/build/fda-run
     rm -rf apple/build/fda-run/Tesserae.app
     ditto apple/build/DerivedData/Build/Products/Release/Tesserae.app apple/build/fda-run/Tesserae.app
-    codesign --force --sign - apple/build/fda-run/Tesserae.app/Contents/Frameworks/TesseraeKit.framework
+    for f in apple/build/fda-run/Tesserae.app/Contents/Frameworks/*.framework; do codesign --force --deep --sign - "$f"; done
     codesign --force --sign - --identifier com.sdelavega.Tesserae apple/build/fda-run/Tesserae.app
     codesign --verify --deep --strict apple/build/fda-run/Tesserae.app
 
@@ -97,3 +119,39 @@ fuzz seconds="60":
 # Scan a directory with the release CLI: `just scan ~/src --json`.
 scan path *flags:
     cargo run --release -p tesserae-cli -- scan "{{path}}" {{flags}}
+
+# env expands these references itself before starting Bash; no caller shell runs.
+# Local release: build and verify; --publish requires typed confirmation.
+[script("/usr/bin/env", "-S", "-i PATH=${PATH} HOME=${HOME} TMPDIR=${TMPDIR} LANG=${LANG} LC_ALL=${LC_ALL} LC_COLLATE=${LC_COLLATE} LC_CTYPE=${LC_CTYPE} LC_MESSAGES=${LC_MESSAGES} LC_MONETARY=${LC_MONETARY} LC_NUMERIC=${LC_NUMERIC} LC_TIME=${LC_TIME} USER=${USER} DEVELOPER_DIR=${DEVELOPER_DIR} GH_TOKEN=${GH_TOKEN} CI=${CI} TESSERAE_TAP_DIR=${TESSERAE_TAP_DIR} NOTARY_KEYCHAIN=${NOTARY_KEYCHAIN} /bin/bash --noprofile --norc -euo pipefail")]
+[positional-arguments]
+release version *flags:
+    /bin/bash --noprofile --norc scripts/release.sh "$@"
+
+# Release pipeline tests use fake Apple tools and never contact Apple.
+[script("/usr/bin/env", "-S", "-i PATH=${PATH} HOME=${HOME} TMPDIR=${TMPDIR} LANG=${LANG} LC_ALL=${LC_ALL} LC_COLLATE=${LC_COLLATE} LC_CTYPE=${LC_CTYPE} LC_MESSAGES=${LC_MESSAGES} LC_MONETARY=${LC_MONETARY} LC_NUMERIC=${LC_NUMERIC} LC_TIME=${LC_TIME} USER=${USER} DEVELOPER_DIR=${DEVELOPER_DIR} /bin/bash --noprofile --norc -euo pipefail")]
+release-test:
+    /bin/bash --noprofile --norc scripts/tests/release_test.sh
+    python3 -I scripts/tests/publish_test.py
+    python3 -I scripts/tests/release_workflow_test.py
+
+# Regenerate the macOS app icon and local review previews.
+icon:
+    xcrun swift scripts/make-icon.swift apple/Tesserae/Assets.xcassets --review apple/build/icon-review
+
+# Run after app-build to also verify the compiled bundle icon.
+icon-test:
+    python3 scripts/tests/icon_test.py
+
+# Synthetic screenshot disk. Flags must include --target and --volume-uuid.
+# Preview with --dry-run --manifest apple/build/demo-manifest.tsv.
+[positional-arguments]
+demo-volume *flags:
+    python3 -I scripts/make-demo-volume.py "$@"
+
+demo-volume-test:
+    python3 -I scripts/tests/demo_volume_test.py
+    python3 -I scripts/tests/demo_snapshot_test.py
+
+# Refresh the committed metadata-only source tree from HEAD.
+demo-tesserae-snapshot:
+    python3 -I scripts/demo/snapshot-tesserae-tree.py

@@ -65,6 +65,21 @@ final class ScanCoordinatorTests: XCTestCase {
         }
     }
 
+    func test_rate_window_handles_first_sample_batch_gaps_and_irregular_intervals() {
+        var rate = ScanRateSampler(start: 0)
+        XCTAssertEqual(rate.sample(entries: 100, at: 0.2), 500, accuracy: 0.001)
+        XCTAssertEqual(rate.sample(entries: 100, at: 0.35), 100 / 0.35, accuracy: 0.001)
+        XCTAssertEqual(rate.sample(entries: 400, at: 0.8), 500, accuracy: 0.001)
+        XCTAssertEqual(rate.sample(entries: 700, at: 1.3), 600 / 1.1, accuracy: 0.001)
+        XCTAssertEqual(rate.sample(entries: 700, at: 2.5), 0)
+        XCTAssertGreaterThan(rate.sample(entries: 701, at: 5), 0)
+        XCTAssertEqual(ScanProgress(entriesPerSecond: 0.4).displayedEntriesPerSecond, 1)
+        XCTAssertEqual(ScanProgress(entriesPerSecond: 1234.2).displayedEntriesPerSecond, 1235)
+        XCTAssertEqual(ScanProgress().displayedEntriesPerSecond, 0)
+        var empty = ScanRateSampler(start: 0)
+        XCTAssertEqual(empty.sample(entries: 0, at: 0.1), 0)
+    }
+
     func test_hung_root_does_not_block_a_new_scan() async throws {
         let hung = FakeScan(tag: 1)
         let next = FakeScan(tag: 2)
@@ -136,6 +151,8 @@ final class ScanCoordinatorTests: XCTestCase {
             fake.report(dirs: UInt64(step), files: files, bytes: files * 100)
             await wait(until: { seen.last?.files == files }, "progress for \(files) files")
         }
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertGreaterThan(seen.last!.entriesPerSecond, 0, "batch gaps must not reset the rate")
         XCTAssertEqual(c.state, .scanning(seen.last!), "still scanning while the fake runs")
         fake.finishNow()
         await wait(until: { self.isTerminal(c.state) }, "scan to finish")

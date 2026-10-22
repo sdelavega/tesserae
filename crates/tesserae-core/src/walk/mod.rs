@@ -468,13 +468,14 @@ pub(crate) fn walk_serial_with_inodes<O: DirOpener>(
     check_options(opts)?;
     let no_materialize_failed = opener.no_materialize().is_err();
     let started_at = now_epoch_secs();
-    let skips = SkipSet::resolve(opts)?;
+    let mut skips = SkipSet::resolve(opts)?;
     if let Some((arena, mut stats)) = skips.root_snapshot(opts, started_at, opener)? {
         stats.no_materialize_failed = no_materialize_failed;
         return Ok((arena, stats));
     }
     let root_fd = open_root(opts)?;
     let root_volume = root_volume_of(opts, &root_fd)?;
+    skips.root_is_volume_root = opener.is_volume_root(root_fd.as_raw_fd())?;
     // A budget and a halt for one walker: nothing else draws on the counter,
     // and nothing is ever there to raise the halt. Counters nobody reads, and
     // a lane nobody else locks: see `Lane` on why the serial walk keeps the

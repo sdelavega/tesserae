@@ -24,23 +24,38 @@ struct ScanReportView: View {
     /// ImageRenderer cannot draw AppKit-backed scroll content. The static form
     /// renders the same report subtree for deterministic reference images.
     var scrolls = true
+    var layout: ScanReportLayout? = nil
     @State private var copyFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Scan report").font(.headline)
-                Spacer()
-                Button("Copy Diagnostics") { copyFailed = !report.copyDiagnostics(to: GeneralDiagnosticsPasteboard()) }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(String(
+                    localized: "scanReportView.scan.report",
+                    defaultValue: "Scan report",
+                    comment: "ScanReportView: Scan report."
+                )).font(.headline)
+                Button(String(
+                    localized: "scanReportView.copy.diagnostics",
+                    defaultValue: "Copy Diagnostics",
+                    comment: "ScanReportView: Copy Diagnostics."
+                )) { copyFailed = !report.copyDiagnostics(to: GeneralDiagnosticsPasteboard()) }
+                    .background { if let layout { CopyDiagnosticsBounds(layout: layout) } }
             }
             Text(ScanReport.sharingNote).font(.caption).foregroundStyle(.secondary)
-            if copyFailed { Text("The clipboard could not be written. Try Copy Diagnostics again.").foregroundStyle(.red) }
+                .fixedSize(horizontal: false, vertical: true)
+            if copyFailed { Text(String(
+                localized: "scanReportView.the.clipboard.could.not.be.written.try.copy",
+                defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
+                comment: "ScanReportView: The clipboard could not be written. Try Copy Diagnostics again."
+            )).foregroundStyle(.red) }
             if scrolls {
-                ScrollView([.horizontal, .vertical]) { reportText.textSelection(.enabled) }
+                ScrollView(.vertical) { reportText.textSelection(.enabled) }
             } else {
                 reportText
             }
-        }.padding(16).frame(minWidth: 400, idealWidth: 520, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .padding(16).frame(minWidth: 300, idealWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var reportText: some View {
@@ -55,5 +70,29 @@ private struct GeneralDiagnosticsPasteboard: DiagnosticsPasteboard {
     func writePlaintext(_ text: String) -> Bool {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// The report control's laid-out bounds, in the window content's coordinate space.
+/// Used to check fit alongside the native file table's viewport bounds.
+final class ScanReportLayout {
+    var copyDiagnosticsFrame = CGRect.zero
+}
+private struct CopyDiagnosticsBounds: NSViewRepresentable {
+    let layout: ScanReportLayout
+    func makeNSView(context: Context) -> BoundsView { BoundsView() }
+    func updateNSView(_ view: BoundsView, context: Context) {
+        view.reportLayout = layout
+        view.needsLayout = true
+    }
+
+    final class BoundsView: NSView {
+        var reportLayout: ScanReportLayout?
+        override func layout() {
+            super.layout()
+            if let content = window?.contentView {
+                reportLayout?.copyDiagnosticsFrame = content.convert(bounds, from: self)
+            }
+        }
     }
 }

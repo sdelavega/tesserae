@@ -33,6 +33,7 @@ type Identity = (u64, u64);
 #[derive(Default)]
 pub(crate) struct SkipSet {
     ids: HashSet<Identity>,
+    pub(crate) root_is_volume_root: bool,
     pub(crate) missing: Vec<(PathBuf, &'static str)>,
 }
 

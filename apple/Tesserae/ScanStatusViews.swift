@@ -19,17 +19,41 @@ import SwiftUI
 import TesseraeKit
 
 struct LimitedAccessViewModel {
-    static let title = "Limited scan selected"
-    static let reopen = "Review Full Disk Access"
+    static let title = String(
+        localized: "scanStatusViews.limited.scan.selected",
+        defaultValue: "Limited scan selected",
+        comment: "ScanStatusViews: Limited scan selected."
+    )
+    static let reopen = String(
+        localized: "scanStatusViews.review.full.disk.access",
+        defaultValue: "Review Full Disk Access",
+        comment: "ScanStatusViews: Review Full Disk Access."
+    )
     static var text: String { title + "\n" + reopen }
 }
 
 struct ScanFailureViewModel {
     let errno: Int32
-    let title = "Couldn’t scan this folder"
-    let copyTitle = "Copy Diagnostics"
-    var reason: String { errno == EINVAL ? "Couldn’t start the scan" : String(cString: strerror(errno)) }
-    var diagnostics: String { "Tesserae scan failed\nerrno: \(errno)\n" + String(cString: strerror(errno)) }
+    let title = String(
+        localized: "scanStatusViews.couldn.t.scan.this.folder",
+        defaultValue: "Couldn’t scan this folder",
+        comment: "ScanStatusViews: Couldn’t scan this folder."
+    )
+    let copyTitle = String(
+        localized: "scanStatusViews.copy.diagnostics",
+        defaultValue: "Copy Diagnostics",
+        comment: "ScanStatusViews: Copy Diagnostics."
+    )
+    var reason: String { errno == EINVAL ? String(
+        localized: "scanStatusViews.couldn.t.start.the.scan",
+        defaultValue: "Couldn’t start the scan",
+        comment: "ScanStatusViews: Couldn’t start the scan."
+    ) : String(cString: strerror(errno)) }
+    var diagnostics: String { String(
+        localized: "scanStatusViews.tesserae.scan.failed.nerrno.n",
+        defaultValue: "Tesserae scan failed\nerrno: \(errno)\n",
+        comment: "ScanStatusViews: Tesserae scan failed errno: {errno}."
+    ) + String(cString: strerror(errno)) }
     var text: String { title + "\n" + reason + "\n" + copyTitle }
 }
 
@@ -67,8 +91,16 @@ struct ScanFailureView: View {
                 NSPasteboard.general.clearContents()
                 copyFailed = !NSPasteboard.general.setString(model.diagnostics, forType: .string)
             }
-            if copyFailed { Text("The clipboard could not be written. Try Copy Diagnostics again.").foregroundStyle(.red) }
-            Button("Choose another folder…", action: chooseFolder)
+            if copyFailed { Text(String(
+                localized: "scanStatusViews.the.clipboard.could.not.be.written.try.copy",
+                defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
+                comment: "ScanStatusViews: The clipboard could not be written. Try Copy Diagnostics again."
+            )).foregroundStyle(.red) }
+            Button(String(
+                localized: "scanStatusViews.choose.another.folder",
+                defaultValue: "Choose another folder…",
+                comment: "ScanStatusViews: Choose another folder…."
+            ), action: chooseFolder)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -80,6 +112,14 @@ struct FolderBadge {
     init(snapshot: Snapshot, node: UInt32) {
         let cloud = snapshot.isDataless(node)
         symbol = cloud ? "icloud" : "lock.fill"
-        label = cloud ? "Cloud-only folder" : "Unreadable folder"
+        label = cloud ? String(
+            localized: "scanStatusViews.cloud.only.folder",
+            defaultValue: "Cloud-only folder",
+            comment: "ScanStatusViews: Cloud-only folder."
+        ) : String(
+            localized: "scanStatusViews.unreadable.folder",
+            defaultValue: "Unreadable folder",
+            comment: "ScanStatusViews: Unreadable folder."
+        )
     }
 }

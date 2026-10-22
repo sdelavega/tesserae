@@ -66,10 +66,24 @@ final class DegradedModeTests: XCTestCase {
             let renderer = ImageRenderer(content: content)
             renderer.proposedSize = ProposedViewSize(size)
             renderer.scale = 1
-            let actual = try XCTUnwrap(renderer.cgImage, name)
+            renderer.isOpaque = true
+            renderer.colorMode = .nonLinear
+            // Draw directly into a fixed sRGB bitmap: the convenience rasterizer
+            // varies by one channel unit at antialiased glyph edges.
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            let context = try XCTUnwrap(CGContext(data: nil, width: 960, height: 1200,
+                bitsPerComponent: 8, bytesPerRow: 960 * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            withTransaction(transaction) {
+                renderer.render { _, draw in draw(context) }
+            }
+            let actual = try XCTUnwrap(context.makeImage(), name)
             XCTAssertEqual(actual.width, 960); XCTAssertEqual(actual.height, 1200)
             let url = Self.references.appendingPathComponent(name + ".png")
-            if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1" {
+            let recordNames = ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOT_NAMES"]?.split(separator: ",").map(String.init)
+            if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1",
+               recordNames == nil || recordNames!.contains(name) {
                 try png(actual, url)
                 let review = Self.references.deletingLastPathComponent().deletingLastPathComponent()
                     .appendingPathComponent("build/task-10-review")
@@ -128,6 +142,102 @@ final class DegradedModeTests: XCTestCase {
             Divider()
             ReconciliationView(model: model, grantAccess: {}).padding(16).frame(width: 240)
         }
+    }
+
+    func test_main_window_all_panes_fit_at_1440_by_900() async throws {
+        var stats = TessScanStats(); stats.files = 3; stats.dirs = 2
+        let tree = TestSnapshot(.dir("/Fixture", [
+            .dir("Projects", [.file("a-long-source-file-name.swift", 30_000_000_000), .file("archive.zip", 10_000_000_000)]),
+            .file("photo.raw", 5_000_000_000)]), stats: stats)
+        let report = ScanReport(snapshot: tree.snapshot, caveats: model(scan()).caveats, access: .granted,
+            scanTime: date, appVersion: "test-app", engineVersion: "test-engine", locale: locale, timeZone: zone)
+        let session = AppSession(snapshot: tree.snapshot, reconciliation: model(scan()), access: .granted, scanTime: date, report: report)
+        session.reclaim.publish([tree["archive.zip"], tree["photo.raw"]].map { node in
+            ReclaimItem(nodeIndex: node, path: tree.snapshot.rawPath(node),
+                recorded: Recorded(fileID: UInt64(node) + 1, device: 1, isDirectory: false),
+                recordedSize: tree.snapshot.allocated(node), verdict: .ok)
+        })
+        let volume = VolumeCapabilities(isLocal: true, isWritable: true, fsType: "apfs")
+        session.reclaim.viewModel.replace(session.reclaim.items,
+            volumes: Dictionary(uniqueKeysWithValues: session.reclaim.items.map { ($0.id, volume) }))
+        XCTAssertEqual(session.reclaim.items.count, 2, "precondition: populated Reclaim pane")
+        let app = AppModel(coordinator: ScanCoordinator(factory: { _, _ in nil }), accessLoader: { .granted })
+        await app.waitForAccess()
+        let ui = ReclaimPresentation(log: ReclaimLog(directory: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().appendingPathComponent("unused-window-log")))
+        let reportLayout = ScanReportLayout()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "TesseraeKitTests.FileList." + UUID().uuidString))
+        let content = SessionView(session: session, mode: .folder, dark: false, grantAccess: {}, stage: {},
+            stagingDisabled: true, reclaimUI: ui, showReclaim: true, showScanReport: true, useMetal: false, reportLayout: reportLayout, appModel: app)
+            .environment(\.locale, locale).environment(\.timeZone, zone)
+            .environment(\.colorScheme, .light).background(Color.white)
+            .defaultAppStorage(defaults)
+        let host = NSHostingView(rootView: content)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        host.frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            await session.waitForTable(); await session.waitForLabels()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(session.tiles.isEmpty, "precondition: populated treemap")
+        XCTAssertEqual(session.table.rows.count, 3, "precondition: populated table")
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let table = try XCTUnwrap(descendants(host).compactMap { $0 as? NSTableView }.first)
+        let scroll = try XCTUnwrap(table.enclosingScrollView)
+        XCTAssertEqual(table.numberOfColumns, 5)
+        XCTAssertLessThanOrEqual(table.rect(ofColumn: 4).maxX, scroll.contentSize.width + 1, "every column fits: \(table.tableColumns.map(\.width)), spacing=\(table.intercellSpacing)")
+        XCTAssertLessThanOrEqual(table.bounds.width, scroll.contentSize.width + 1, "no horizontal table overflow; columns: \(table.tableColumns.map(\.width))")
+        XCTAssertEqual(scroll.contentView.bounds.minX, 0, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(table.tableColumns[0].width, 180, "Name stays readable")
+        XCTAssertLessThanOrEqual(table.rect(ofColumn: 0).maxX, scroll.contentSize.width)
+        let frame = reportLayout.copyDiagnosticsFrame
+        XCTAssertGreaterThan(frame.width, 90, "precondition: full button has width")
+        XCTAssertGreaterThan(frame.height, 15)
+        XCTAssertGreaterThan(frame.minX, 1000, "precondition: button is in rightmost report pane")
+        XCTAssertTrue(host.bounds.contains(frame), "Copy Diagnostics must be fully inside window: \(frame), \(host.bounds)")
+        XCTAssertNotNil(session.reconciliation, "precondition: space breakdown visible")
+        host.displayIfNeeded()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1440, pixelsHigh: 900,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 1440 * 4, bitsPerPixel: 32))
+        bitmap.size = host.bounds.size
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let actual = try XCTUnwrap(bitmap.cgImage)
+        let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("build/ui-fixes/main-window-all-panes.actual.png")
+        try png(actual, output)
+        let reference = Self.references.appendingPathComponent("main-window-all-panes-1440x900.png")
+        guard let source = CGImageSourceCreateWithURL(reference as CFURL, nil) else {
+            XCTFail("Missing main-window reference; inspect " + output.path); return
+        }
+        let expected = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(actual.width, expected.width); XCTAssertEqual(actual.height, expected.height)
+        XCTAssertEqual(try pixels(actual), try pixels(expected), "main-window snapshot changed")
+        XCTAssertEqual(ContentView.minimumContentSize, CGSize(width: 1440, height: 720))
+        window.setContentSize(ContentView.minimumContentSize)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame), "controls also fit at the window minimum")
+        XCTAssertLessThanOrEqual(table.rect(ofColumn: 4).maxX, scroll.contentSize.width + 1)
+        withExtendedLifetime(tree) {}
+    }
+
+    func test_start_screen_shows_volume_groups() async throws {
+        let model = VolumeListModel(source: StartFixture())
+        await model.refresh()
+        XCTAssertEqual(model.volumes.map(\.name), ["Studio SSD", "External", "Server"])
+        XCTAssertEqual(model.volumes.map(\.group), [.thisMac, .otherDisks, .network])
+        // ImageRenderer cannot draw the AppKit scroll container; render its
+        // actual production contents so the reference includes every row.
+        try snapshot("start", StartView(volumes: model, scan: { _ in }, chooseFolder: {}).volumeGroups.padding(32))
+        model.stop()
     }
 
     func test_cloud_only_folder_badge_is_distinct_from_permissions() throws {
@@ -238,6 +348,7 @@ final class DegradedModeTests: XCTestCase {
     }
 
     func test_onboarding_states() throws {
+        XCTAssertEqual(OnboardingViewModel.privacy, "No telemetry. The only network traffic is the update check.")
         var state = Onboarding()
         state.send(.activated(.denied(evidence: "synthetic EPERM")))
         XCTAssertTrue(state.isPresented); XCTAssertFalse(state.needsRelaunch)
@@ -287,8 +398,18 @@ private struct FallbackPreview: View {
     var body: some View {
         let dark = scheme == .dark
         let image = CGTreemapRenderer(clearColour: Palette.surface(dark: dark)).render(tiles: tiles,
-            colours: Palette.colours(.depth, dark: dark), colourOf: { UInt16(2 + $0.depth) },
+            colours: Palette.colours(.folder, dark: dark), colourOf: { UInt16(2 + $0.depth) },
             size: CGSize(width: 720, height: 240), scale: 1)
         Image(decorative: image, scale: 1)
+    }
+}
+
+private struct StartFixture: VolumeSource {
+    func mounted() async -> [RawVolume] {
+        [("/", "Studio SSD", true), ("/Volumes/External", "External", true), ("/Volumes/Server", "Server", false)].map {
+            RawVolume(url: URL(fileURLWithPath: $0.0), name: $0.1, local: $0.2,
+                      browsable: true, hidden: false, readOnly: false, typeName: $0.2 ? "apfs" : "smbfs",
+                      isDiskImage: false, isTimeMachine: false, total: $0.2 ? 1_000_000 : nil, free: $0.2 ? 400_000 : nil)
+        }
     }
 }

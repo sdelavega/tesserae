@@ -216,12 +216,12 @@ final class SizeOverlayTests: XCTestCase {
         session.resize(to: CGSize(width: 800, height: 600))
         await session.waitForTable()
         XCTAssertTrue(session.table.rows.contains(f["a"]))
-        let item = JetsamItem(nodeIndex: f["a"], path: s.rawPath(f["a"]),
+        let item = ReclaimItem(nodeIndex: f["a"], path: s.rawPath(f["a"]),
             recorded: Recorded(fileID: try XCTUnwrap(s.fileID(f["a"])), device: 0, isDirectory: false), recordedSize: 80, verdict: .ok)
-        session.jetsam.stage([f["a"]], in: s, context: overlayContext(), stat: OverlayStat(inode: item.recorded.fileID))
-        XCTAssertEqual(session.jetsam.items.count, 1)
+        session.reclaim.stage([f["a"]], in: s, context: overlayContext(), stat: OverlayStat(inode: item.recorded.fileID))
+        XCTAssertEqual(session.reclaim.items.count, 1)
         let executor = Executor(trasher: OverlayTrasher(), stat: OverlayStat(inode: item.recorded.fileID), log: OverlayLog(), context: overlayContext())
-        let execution = await app.executeJetsam(confirmedWarnings: [], trasher: OverlayTrasher(),
+        let execution = await app.executeReclaim(confirmedWarnings: [], trasher: OverlayTrasher(),
             stat: OverlayStat(inode: item.recorded.fileID), log: OverlayLog())
         let result = try XCTUnwrap(execution)
         guard case .trashed = result.outcomes.first?.1 else { return XCTFail("precondition: trash succeeded: \(result.outcomes)") }
@@ -249,9 +249,9 @@ final class SizeOverlayTests: XCTestCase {
         XCTAssertTrue(session.table.rows.contains(f["a"]))
         // A successful execution consumes the staged entry; Put Back does not
         // grant another review. Explicitly stage the restored fixture for retry.
-        session.jetsam.stage([f["a"]], in: s, context: overlayContext(),
+        session.reclaim.stage([f["a"]], in: s, context: overlayContext(),
             stat: OverlayStat(inode: item.recorded.fileID), overlay: session.overlay)
-        XCTAssertEqual(session.jetsam.items.first?.overlayRevision, session.overlay.revision)
+        XCTAssertEqual(session.reclaim.items.first?.overlayRevision, session.overlay.revision)
         let failed = Executor(trasher: OverlayTrasher(), stat: PutBackTests.MissingStat(code: ENOENT),
             log: OverlayLog(), context: overlayContext())
         let failure = await session.execute(using: failed, confirmedWarnings: [])

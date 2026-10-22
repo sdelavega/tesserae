@@ -27,8 +27,9 @@ import CoreGraphics
 ///   with `inspect(tileAt:in:snapshot:)`. When new tiles arrive, the last
 ///   pointer position is hit-tested again, so Return works without moving
 ///   the mouse.
-/// * A click (`press` then `release` on the same tile) on a directory
-///   descends into it; clicking a node also writes the shared selection.
+/// * A click (`press` then `release` on the same tile) selects the node and
+///   descends one level into the current root's readable child containing it.
+///   A file directly under the current root only selects.
 ///   Aggregates/placeholders and release over a different tile do nothing. Return descends
 ///   into the first descendable of the hovered tile and the first tile
 ///   flagged selected. ⌘↑ ascends; ← / → move to the previous / next sibling.
@@ -69,6 +70,8 @@ final class TreemapInteraction {
     }
     var selection: Selection?
     var onHover: ((Int?) -> Void)?
+    var onPointer: ((Int?, CGPoint?) -> Void)?
+    var onDismissCallout: ((HoverCallout.Event) -> Void)?
     private(set) var tiles: [Tile] = []
     private(set) var hovered: Int?
     /// What `onHover` was last told.
@@ -104,11 +107,13 @@ final class TreemapInteraction {
     func hover(at p: CGPoint?) {
         pointer = p
         hovered = p.flatMap { hitTester.tile(at: $0, in: tiles) }
+        onPointer?(hovered, p)
         report()
     }
 
     /// The button went down at `p`.
     func selectForContext(at point: CGPoint) -> Bool {
+        onDismissCallout?(.click)
         guard let index = hitTester.tile(at: point, in: tiles) else { return false }
         let node = tiles[index].node
         guard node != Tile.noNode else { return false }
@@ -117,6 +122,7 @@ final class TreemapInteraction {
     }
 
     func press(at p: CGPoint) {
+        onDismissCallout?(.click)
         pressed = hitTester.tile(at: p, in: tiles)
     }
 
@@ -128,7 +134,7 @@ final class TreemapInteraction {
         guard let i = hitTester.tile(at: p, in: tiles), i == pressed else { return false }
         let node = tiles[i].node
         if node != Tile.noNode { selection?.nodes = [node] }
-        return descend(into: i)
+        return descendOneLevel(containing: node)
     }
 
     /// True if the key was one of ours (handled, even if it changed nothing).
@@ -151,6 +157,21 @@ final class TreemapInteraction {
                 descend(into: i)
             }
         }
+        return true
+    }
+
+    @discardableResult
+    private func descendOneLevel(containing node: UInt32) -> Bool {
+        guard let nav = navigator, node != Tile.noNode, node != nav.root,
+              Int(node) < nav.snapshot.nodes.count else { return false }
+        var child = node
+        while nav.snapshot.nodes[Int(child)].parent != nav.root {
+            child = nav.snapshot.nodes[Int(child)].parent
+            guard child != Tile.noNode, Int(child) < nav.snapshot.nodes.count else { return false }
+        }
+        guard nav.canDescend(into: child) else { return false }
+        pendingZoom = tiles.first { $0.node == child }.map { (rect: $0.rect, target: child) }
+        nav.descend(into: child)
         return true
     }
 

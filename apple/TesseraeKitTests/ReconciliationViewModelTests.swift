@@ -31,6 +31,30 @@ final class ReconciliationViewModelTests: XCTestCase {
             residual: residual, purgeableEstimate: 7, caveats: caveats)
         return ReconciliationViewModel(wholeVolume: true, reconciliation: r, scan: scan(), locale: locale, timeZone: TimeZone(secondsFromGMT: 0)!)
     }
+    func test_catalog_plural_variants_for_compound_count_phrases() throws {
+        for count in [0, 1, 2, 12_345] {
+            let facts = ScanFacts(allocatedSum: 40, unreadableLocations: count, incompleteReason: nil,
+                limited: false, datalessItems: UInt64(count), access: .unknown)
+            let reconciliation = Reconciliation(capacity: 100, scanned: 40, free: 20, systemVolume: 10,
+                snapshots: SnapshotFacts(count: count, oldest: Date(timeIntervalSince1970: 0), aggregateBytes: nil),
+                residual: 30, purgeableEstimate: nil, caveats: [.datalessNotCounted(UInt64(count))])
+            let presentation = ReconciliationViewModel(wholeVolume: true, reconciliation: reconciliation,
+                scan: facts, locale: locale, timeZone: TimeZone(secondsFromGMT: 0)!)
+            XCTAssertEqual(presentation.rows.count, 5)
+            XCTAssertEqual(presentation.caveats.count, 1)
+            let number = count.formatted(.number.locale(locale))
+            let item = count == 1 ? "item" : "items"
+            XCTAssertEqual(presentation.caveats, ["\(number) cloud-only \(item) (—) — not stored on this Mac"])
+            let residual = try XCTUnwrap(presentation.rows.first { $0.title == "Residual" })
+            let snapshot = count == 1 ? "snapshot" : "snapshots"
+            XCTAssertEqual(residual.annotation, count == 0 ? "0 local snapshots"
+                : "\(number) local \(snapshot), oldest 1 Jan — size not reported by macOS")
+            let location = count == 1 ? "location" : "locations"
+            XCTAssertEqual(presentation.warning, count == 0 ? nil
+                : "\(number) \(location) unreadable — grant Full Disk Access to include them")
+        }
+    }
+
     func test_breakdown_caveats_omit_only_the_residual_explanation() {
         let partial = model(nil, caveats: [.partialScan("Scan cancelled"), .snapshotsUnavailable, .noFullDiskAccess])
         XCTAssertEqual(partial.rows[3].detail, "Scan cancelled", "precondition: residual explains suppression")

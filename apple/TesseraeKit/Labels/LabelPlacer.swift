@@ -115,7 +115,7 @@ private func labelParts(
     }
     if t.isPermissionDenied { return nil }
     precondition(Int(t.node) < s.nodes.count, "placeLabels: tile node \(t.node) outside the snapshot")
-    if subdivided.contains(t.node) { return nil }
+    if t.headerRect != nil || subdivided.contains(t.node) { return nil }
     return (s.displayName(t.node), "  " + displaySize(OverlaySource(s, overlay).allocated(t.node), locale: locale))
 }
 
@@ -131,9 +131,16 @@ extension Snapshot {
     }
 
     static func displayName(bytes: Data) -> String {
-        let name = singleLine(String(decoding: bytes, as: UTF8.self)).trimmingCharacters(in: .whitespaces)
+        let name = neutralisedPath(bytes).trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? "(unnamed)" : name
     }
+}
+
+/// Display only. Invalid UTF-8 retains a byte-exact discriminator so two
+/// different raw names cannot collapse to the same replacement characters.
+public func neutralisedPath(_ bytes: Data) -> String {
+    let text = singleLine(String(decoding: bytes, as: UTF8.self))
+    return String(data: bytes, encoding: .utf8) == nil ? text + " ⟨" + bytes.base64EncodedString() + "⟩" : text
 }
 
 /// `text` for one line of display (see `placeLabels`): newlines, tabs and
@@ -182,4 +189,22 @@ private func fit(
     }
     let result = text(keeping: lo)
     return fits(result).map { (result, $0) }
+}
+
+/// Folder strip text shares ordinary labels' fitting and per-tile ink rules.
+public func placeHeaderLabels(
+    _ tiles: [Tile], in s: Snapshot, measure: (String) -> CGSize,
+    locale: Locale = .current, overlay: SizeOverlay = SizeOverlay()
+) -> [PlacedLabel] {
+    var out: [PlacedLabel] = []
+    for tile in tiles {
+        if Task.isCancelled { break }
+        guard let rect = tile.headerRect else { continue }
+        let room = CGSize(width: rect.width - 2 * labelPadding, height: rect.height)
+        let suffix = "  " + displaySize(OverlaySource(s, overlay).allocated(tile.node), locale: locale)
+        guard let (text, size) = fit(s.displayName(tile.node), suffix: suffix, in: room, measure: measure) else { continue }
+        out.append(PlacedLabel(rect: CGRect(x: rect.minX + labelPadding, y: rect.minY + (rect.height - size.height) / 2,
+            width: size.width, height: size.height), text: text, tile: tile))
+    }
+    return out
 }

@@ -41,6 +41,49 @@ final class NavigatorTests: XCTestCase {
                 ]))
     }
 
+    func test_click_walks_one_directory_level_and_direct_file_only_selects() throws {
+        let t = TestSnapshot(.dir("/root", [
+            .dir("Projects", [
+                .dir("x", [
+                    .dir("node_modules", [.dir("esbuild", [.file("binary", 10_000)]), .file("metadata", 2_000)]),
+                    .file("package.json", 1_500)]),
+                .file("README.md", 1_000)]),
+            .file("direct.txt", 1_000)]))
+        let nav = Navigator(snapshot: t.snapshot)
+        let selection = Selection()
+        let interaction = TreemapInteraction()
+        interaction.navigator = nav; interaction.selection = selection
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        var tiles = squarify(t.snapshot, root: nav.root, in: bounds)
+        _ = interaction.setTiles(tiles)
+        let direct = try XCTUnwrap(tiles.first { $0.node == t["direct.txt"] })
+        XCTAssertFalse(Self.click(interaction, Self.centre(direct)))
+        XCTAssertEqual(nav.root, t.snapshot.root)
+        XCTAssertEqual(selection.nodes, [t["direct.txt"]])
+        XCTAssertNil(interaction.pendingZoom)
+        for name in ["Projects", "x", "node_modules", "esbuild"] {
+            let target = t[name]
+            XCTAssertEqual(t.snapshot.nodes[Int(target)].parent, nav.root, "precondition: exactly one level")
+            let leaf = try XCTUnwrap(tiles.first { $0.node == t["binary"] }, "precondition: deep leaf is rendered")
+            let ancestor = try XCTUnwrap(tiles.first { $0.node == target }, "precondition: containing child is rendered")
+            if name != "esbuild" {
+                XCTAssertNotEqual(leaf.rect, ancestor.rect, "precondition: animation must use a larger ancestor rect")
+            }
+            XCTAssertTrue(Self.click(interaction, Self.centre(leaf)))
+            XCTAssertEqual(nav.root, target)
+            XCTAssertEqual(selection.nodes, [t["binary"]], "selection keeps the clicked node's identity")
+            XCTAssertEqual(interaction.pendingZoom?.target, target)
+            XCTAssertEqual(interaction.pendingZoom?.rect, ancestor.rect, "animate from the containing child's rect")
+            tiles = squarify(t.snapshot, root: nav.root, in: bounds)
+            XCTAssertEqual(interaction.setTiles(tiles), ancestor.rect)
+        }
+        let leaf = try XCTUnwrap(tiles.first { $0.node == t["binary"] })
+        XCTAssertFalse(Self.click(interaction, Self.centre(leaf)), "a direct-child file only selects")
+        XCTAssertEqual(nav.root, t["esbuild"])
+        XCTAssertEqual(selection.nodes, [t["binary"]])
+        XCTAssertNil(interaction.pendingZoom)
+    }
+
     func test_descend_ascend_and_breadcrumb_round_trip() {
         let t = Self.tree()
         let nav = Navigator(snapshot: t.snapshot)
@@ -124,7 +167,10 @@ final class NavigatorTests: XCTestCase {
         XCTAssertFalse(Self.click(interaction, CGPoint(x: fileTile.rect.midX, y: fileTile.rect.midY)))
         XCTAssertEqual(nav.root, t["/r"])
         let midTile = tiles.first { $0.node == t["b.bin"] }!  // inside mid/: the deepest tile is the file
-        XCTAssertFalse(Self.click(interaction, CGPoint(x: midTile.rect.midX, y: midTile.rect.midY)))
+        XCTAssertTrue(Self.click(interaction, CGPoint(x: midTile.rect.midX, y: midTile.rect.midY)))
+        XCTAssertEqual(nav.root, t["mid"])
+        nav.ascend()
+        interaction.cancelPendingZoom()
         let deepTile = tiles.first { $0.node == t["deep"] }!
         XCTAssertGreaterThanOrEqual(min(deepTile.rect.width, deepTile.rect.height), 24, "precondition: deep/ is subdivided")
         let xTile = tiles.first { $0.node == t["x.bin"] }!
@@ -144,14 +190,16 @@ final class NavigatorTests: XCTestCase {
         let deepLayout = squarify(t.snapshot, root: t["deep"], in: CGRect(x: 0, y: 0, width: 400, height: 300))
         XCTAssertEqual(interaction.setTiles(deepLayout), deepTile.rect, "the zoom starts from the hovered rect")
         XCTAssertNil(interaction.setTiles(bare), "and only once")
-        // ... and so does a click.
+        // A click instead advances one level to the containing direct child.
         nav.ascend()
         nav.ascend()
         _ = interaction.setTiles(tiles)
         _ = interaction.setTiles(bare)
         XCTAssertTrue(Self.click(interaction, CGPoint(x: deepTile.rect.midX, y: deepTile.rect.midY)))
-        XCTAssertEqual(nav.root, t["deep"])
-        XCTAssertEqual(interaction.setTiles(deepLayout), deepTile.rect, "the zoom starts from the clicked rect")
+        XCTAssertEqual(nav.root, t["big"])
+        let bigTile = try! XCTUnwrap(tiles.first { $0.node == t["big"] })
+        let bigLayout = squarify(t.snapshot, root: t["big"], in: CGRect(x: 0, y: 0, width: 400, height: 300))
+        XCTAssertEqual(interaction.setTiles(bigLayout), bigTile.rect, "zoom from the containing child's rect")
     }
 
     /// A press and a release at `p`.

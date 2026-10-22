@@ -133,6 +133,34 @@
 // A cloud-only directory; its contents were not downloaded.
 #define TESS_SKIP_DATALESS_DIRECTORY 5
 
+// macOS indexing metadata directly under a volume root.
+#define TESS_SKIP_SYSTEM_MANAGED_INDEX 6
+
+// Paired dot-underscore originals are metadata; set only on non-apfs/hfs volumes.
+#define TESS_ARCHIVE_SIDECARS_ARE_METADATA 1
+
+#define TESS_ARCHIVE_OK 0
+
+#define TESS_ARCHIVE_MISSING_ENTRY 1
+
+#define TESS_ARCHIVE_EXTRA_ENTRY 2
+
+#define TESS_ARCHIVE_SIZE_MISMATCH 3
+
+#define TESS_ARCHIVE_DIGEST_MISMATCH 4
+
+#define TESS_ARCHIVE_TYPE_MISMATCH 5
+
+#define TESS_ARCHIVE_LINK_MISMATCH 6
+
+#define TESS_ARCHIVE_UNREADABLE_ORIGINAL 7
+
+#define TESS_ARCHIVE_CORRUPT_ARCHIVE 8
+
+#define TESS_ARCHIVE_IO 9
+
+#define TESS_ARCHIVE_DUPLICATE_ENTRY 10
+
 // A scan in progress. Opaque: the app only holds the pointer.
 typedef struct TessScan TessScan;
 
@@ -276,6 +304,18 @@ typedef struct {
   // Device of the scan root (st_dev), recorded once at scan start.
   int32_t root_device;
 } TessScanStats;
+
+// Verification counts on success; first offending raw path on failure.
+typedef struct {
+  uint64_t files;
+  uint64_t dirs;
+  uint64_t links;
+  uint64_t bytes;
+  // At most 1024 bytes, without a terminating NUL.
+  uint8_t first_bad_path[1024];
+  // Full path length, which may exceed the buffer's capacity.
+  size_t first_bad_len;
+} TessArchiveReport;
 
 
 
@@ -464,5 +504,38 @@ const uint8_t *tess_snapshot_skipped_by_request(const TessSnapshot *snapshot,
 // `snapshot` must be null or a snapshot from `tess_scan_finish` that has not
 // already been released, and nothing may be reading it concurrently.
 void tess_snapshot_release(TessSnapshot *snapshot);
+
+// Measure one path without following its final symlink. Outputs change only on success.
+//
+// # Safety
+// path must hold len readable bytes; both output pointers must be writable and disjoint.
+bool tess_measure_allocated(const uint8_t *path,
+                            size_t len,
+                            uint64_t *allocated_out,
+                            uint64_t *logical_out);
+
+// Encode a tar stream into a zstd frame, using borrowed descriptors; returns zero or negative errno.
+// bytes_out is zero on failure. Neither descriptor is closed.
+//
+// # Safety
+// bytes_out must be writable. Descriptors must remain owned and stable for the call.
+int32_t tess_zstd_stream(int32_t in_fd,
+                         int32_t out_fd,
+                         int32_t level,
+                         uint64_t *bytes_out);
+
+// Verify ZIP (0), tar.xz (1), or tar.zst (2) against the original item, without extracting.
+// flags bit 0 (TESS_ARCHIVE_SIDECARS_ARE_METADATA) excludes ._ originals whose unprefixed sibling exists.
+// Returns TESS_ARCHIVE_OK or a TESS_ARCHIVE_* failure code. Counts are set only on success.
+//
+// # Safety
+// archive/item must hold alen/ilen readable bytes; out must be writable and disjoint from inputs.
+int32_t tess_archive_verify(const uint8_t *archive,
+                            size_t alen,
+                            uint32_t format,
+                            const uint8_t *item,
+                            size_t ilen,
+                            uint32_t flags,
+                            TessArchiveReport *out);
 
 #endif  /* TESSERAE_H */

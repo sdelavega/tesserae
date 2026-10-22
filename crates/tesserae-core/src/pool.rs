@@ -138,7 +138,7 @@ use crate::walk::{
     with_context, DirOpener, Halt, Incomplete, Lane, NodeBudget, OpenAt, Share, WalkOptions,
     WalkStats, Walker, WalkerCtx,
 };
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 
 /// Soft `RLIMIT_NOFILE` the walk asks for.
@@ -380,7 +380,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     check_options(opts)?;
     let no_materialize_failed = opener.no_materialize().is_err();
     let started_at = now_epoch_secs();
-    let skips = crate::walk::SkipSet::resolve(opts)?;
+    let mut skips = crate::walk::SkipSet::resolve(opts)?;
     if let Some((arena, mut stats)) = skips.root_snapshot(opts, started_at, opener.as_ref())? {
         stats.no_materialize_failed = no_materialize_failed;
         progress.set(crate::progress::ProgressValues {
@@ -397,6 +397,7 @@ pub(crate) fn walk_with<O: DirOpener + Send + Sync + 'static>(
     // cannot be read, there is no walk to parallelise.
     let root_fd = open_root(opts)?;
     let root_volume = root_volume_of(opts, &root_fd)?;
+    skips.root_is_volume_root = opener.is_volume_root(root_fd.as_raw_fd())?;
     // The root stays open for the whole walk: every published directory is
     // reopened beneath it with `open_beneath`, so nothing above it is ever
     // resolved again and nothing depends on the working directory. The root

@@ -43,7 +43,7 @@ final class DiskImageFixture: @unchecked Sendable {
         return data
     }
 
-    func setUp() throws {
+    func setUp(size: String = "64m", fs: String = "APFS") throws {
         let info = try Self.command(["info"])
         guard !String(decoding: info, as: UTF8.self).contains(name) else {
             XCTFail("Unique fixture name was already attached")
@@ -56,7 +56,7 @@ final class DiskImageFixture: @unchecked Sendable {
         image = directory.appendingPathComponent("fixture.sparseimage")
         var attachAttempted = false
         do {
-            try Self.command(["create", "-size", "64m", "-fs", "APFS", "-type", "SPARSE",
+            try Self.command(["create", "-size", size, "-fs", fs, "-type", "SPARSE",
                               "-volname", name, image.path])
             // Private mountpoint: tests never access anything under /Volumes.
             root = directory.appendingPathComponent("mnt")

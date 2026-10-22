@@ -1422,3 +1422,133 @@ fn file_ids_match_lstat_for_every_node() {
         }
     }
 }
+
+#[test]
+fn system_indexes_are_requested_skips_before_open_in_both_walkers() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct IndexOpener {
+        mount: bool,
+        opens: AtomicUsize,
+    }
+    impl DirOpener for IndexOpener {
+        fn is_volume_root(&self, _: RawFd) -> io::Result<bool> {
+            Ok(self.mount)
+        }
+        fn open_dir_at(&self, parent: RawFd, name: &CStr) -> Result<OwnedFd, c_int> {
+            if name.to_bytes() == b".Spotlight-V100" || name.to_bytes() == b".fseventsd" {
+                self.opens.fetch_add(1, Ordering::SeqCst);
+                // A bounded simulated blocked open; longer than the watchdog.
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                return Err(libc::EACCES);
+            }
+            OpenAt.open_dir_at(parent, name)
+        }
+        fn reopen_dir_beneath(&self, root: RawFd, rel: &CStr) -> Result<OwnedFd, c_int> {
+            if rel
+                .to_bytes()
+                .split(|b| *b == b'/')
+                .any(|n| n == b".Spotlight-V100" || n == b".fseventsd")
+            {
+                self.opens.fetch_add(1, Ordering::SeqCst);
+                return Err(libc::EACCES);
+            }
+            OpenAt.reopen_dir_beneath(root, rel)
+        }
+    }
+    let fx = Fixture::new().unwrap();
+    for name in [".Spotlight-V100", ".fseventsd"] {
+        fx.file(&format!("{name}/hidden"), 100).unwrap();
+    }
+    fx.file("ordinary/visible", 17).unwrap();
+    for parallel in [false, true] {
+        let opener = Arc::new(IndexOpener {
+            mount: true,
+            opens: AtomicUsize::new(0),
+        });
+        let o = WalkOptions {
+            workers: 4,
+            stall_timeout: std::time::Duration::from_millis(50),
+            ..opts(fx.path())
+        };
+        let (arenas, stats) = if parallel {
+            crate::pool::walk_with(&o, opener.clone(), &[], &Progress::default()).unwrap()
+        } else {
+            let (a, s) = walk_serial_with(&o, opener.as_ref()).unwrap();
+            (vec![a], s)
+        };
+        assert_eq!(
+            opener.opens.load(Ordering::SeqCst),
+            0,
+            "no open or reopen, even on a blocking index"
+        );
+        assert!(
+            stats.incomplete.is_none(),
+            "no watchdog stall: {:?}",
+            stats.incomplete
+        );
+        assert!(stats.stalled_at.is_none());
+        assert_eq!(stats.errors, 0);
+        assert!(stats.unreadable.is_empty());
+        let mut skipped = stats.skipped_by_request.clone();
+        skipped.sort();
+        assert_eq!(
+            skipped,
+            vec![
+                (
+                    fx.path().join(".Spotlight-V100"),
+                    "system-managed (macOS index)"
+                ),
+                (fx.path().join(".fseventsd"), "system-managed (macOS index)")
+            ]
+        );
+        assert_eq!(
+            arenas
+                .iter()
+                .map(|a| find(a, b"visible").len())
+                .sum::<usize>(),
+            1
+        );
+        for a in &arenas {
+            assert!(find(a, b"hidden").is_empty());
+            for (_, n) in a.iter().filter(|(_, n)| {
+                [b".Spotlight-V100".as_slice(), b".fseventsd".as_slice()]
+                    .contains(&a.name_bytes(n.name))
+            }) {
+                assert_ne!(n.flags & crate::arena::FLAG_SKIPPED_REQUEST, 0);
+            }
+        }
+    }
+    // Same names in an ordinary folder or deeper below a volume root are user data.
+    let ordinary = walk_serial(&opts(fx.path())).unwrap();
+    assert_eq!(find(&ordinary.0, b"hidden").len(), 2);
+    let nested = Fixture::new().unwrap();
+    nested.file("folder/.Spotlight-V100/payload", 23).unwrap();
+    let opener = IndexOpener {
+        mount: true,
+        opens: AtomicUsize::new(0),
+    };
+    let (_, stats) = walk_serial_with(&opts(nested.path()), &opener).unwrap();
+    assert!(
+        stats.skipped_by_request.is_empty(),
+        "only depth one is excluded"
+    );
+    assert_eq!(
+        opener.opens.load(Ordering::SeqCst),
+        1,
+        "nested index name reaches the opener"
+    );
+}
+
+#[test]
+fn volume_root_detection_recognises_data_and_rejects_ordinary_folders() {
+    for root in ["/", "/System/Volumes/Data"] {
+        let fd = super::open_root(&opts(std::path::Path::new(root))).unwrap();
+        assert!(OpenAt.is_volume_root(fd.as_raw_fd()).unwrap(), "{root}");
+    }
+    let fx = Fixture::new().unwrap();
+    let fd = super::open_root(&opts(fx.path())).unwrap();
+    assert!(!OpenAt.is_volume_root(fd.as_raw_fd()).unwrap());
+}

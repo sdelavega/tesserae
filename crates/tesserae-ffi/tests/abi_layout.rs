@@ -36,7 +36,7 @@ use std::process::Command;
 use std::ptr::addr_of;
 
 use tesserae_core::node::TessNode;
-use tesserae_ffi::{TessProgress, TessScanOptions, TessScanStats, TessView};
+use tesserae_ffi::{TessArchiveReport, TessProgress, TessScanOptions, TessScanStats, TessView};
 
 /// One field: its offset and the C type the header must give it. The Rust type
 /// is checked in `assert_rust_layout`, from the same table row. The types matter
@@ -108,6 +108,14 @@ macro_rules! abi {
 }
 
 abi! {
+    TessArchiveReport: 1064, 8 {
+        files = 0, "u64", "uint64_t",
+        dirs = 8, "u64", "uint64_t",
+        links = 16, "u64", "uint64_t",
+        bytes = 24, "u64", "uint64_t",
+        first_bad_path = 32, "[u8; 1024]", "uint8_t *",
+        first_bad_len = 1056, "usize", "size_t",
+    }
     TessNode: 48, 8 {
         name_off = 0, "u32", "uint32_t",
         name_len = 4, "u16", "uint16_t",
@@ -165,6 +173,7 @@ abi! {
 /// Constants the app reads, with the values the Rust side promises.
 const CONSTANTS: &[(&str, &str)] = &[
     ("TESS_ABI_VERSION", "1"),
+    ("TESS_ARCHIVE_SIDECARS_ARE_METADATA", "1"),
     ("TESS_FLAG_DIR", "0x1"),
     ("TESS_FLAG_SYMLINK", "0x2"),
     ("TESS_FLAG_HARDLINK_DUP", "0x4"),
@@ -195,6 +204,7 @@ const CONSTANTS: &[(&str, &str)] = &[
 /// `tess_snapshot_stalled_at` and `tess_snapshot_skipped_by_request`). Assigning a function to a pointer of a
 /// different type is an error under `-Werror`.
 const PROTOTYPES: &str = "\
+int32_t (*p_archive_verify)(const uint8_t *, size_t, uint32_t, const uint8_t *, size_t, uint32_t, TessArchiveReport *) = tess_archive_verify;
 const char *(*p_engine_version)(void) = tess_engine_version;
 uint32_t (*p_version)(void) = tess_abi_version;
 TessScan *(*p_begin)(const char *, const TessScanOptions *) = tess_scan_begin;
@@ -308,8 +318,8 @@ fn the_header_has_the_layout_constants_and_signatures_in_the_abi_table() {
     );
     assert_eq!(
         PROTOTYPES.lines().count(),
-        17,
-        "all seventeen functions are checked"
+        18,
+        "all eighteen functions are checked"
     );
     assert!(
         source.contains("offsetof(TessNode, modified) == 40"),

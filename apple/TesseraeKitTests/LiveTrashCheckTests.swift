@@ -153,9 +153,9 @@ private enum LiveTrashHarness {
         }
         session.selection.nodes = Set(nodes)
         model.stageSelection(); await model.waitForStaging()
-        XCTAssertEqual(session.jetsam.items.count, 2)
-        let log = JettisonLog(directory: directory.appendingPathComponent("audit"))
-        let execution = await model.executeJetsam(confirmedWarnings: [],
+        XCTAssertEqual(session.reclaim.items.count, 2)
+        let log = ReclaimLog(directory: directory.appendingPathComponent("audit"))
+        let execution = await model.executeReclaim(confirmedWarnings: [],
             trasher: ContainedTrasher(fixtureRoot: root, inner: trasher), log: log)
         let result = try XCTUnwrap(execution)
         var items: [Item] = []

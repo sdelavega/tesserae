@@ -52,10 +52,10 @@ public struct FileTableView: NSViewRepresentable {
         let c = context.coordinator
         c.contextMenu.stage = onStage
         c.onSort = onSort
-        let scroll = NSScrollView()
+        let scroll = FittingTableScrollView()
         scroll.documentView = c.makeTableView()
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
+        scroll.hasHorizontalScroller = false
         return scroll
     }
 
@@ -70,9 +70,34 @@ public struct FileTableView: NSViewRepresentable {
     @MainActor
     public final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         static let columns: [(id: String, title: String, key: SortKey, width: CGFloat)] = [
-            ("name", "Name", .name, 280), ("allocated", "Allocated", .allocated, 90),
-            ("logical", "Logical", .logical, 90), ("modified", "Modified", .modified, 140),
-            ("kind", "Kind", .kind, 100),
+            ("name", String(
+                localized: "fileTableView.name",
+                defaultValue: "Name",
+                bundle: L10n.bundle,
+                comment: "FileTableView: Name."
+            ), .name, 280), ("allocated", String(
+                localized: "fileTableView.allocated",
+                defaultValue: "Allocated",
+                bundle: L10n.bundle,
+                comment: "FileTableView: Allocated."
+            ), .allocated, 90),
+            ("logical", String(
+                localized: "fileTableView.logical",
+                defaultValue: "Logical",
+                bundle: L10n.bundle,
+                comment: "FileTableView: Logical."
+            ), .logical, 90), ("modified", String(
+                localized: "fileTableView.modified",
+                defaultValue: "Modified",
+                bundle: L10n.bundle,
+                comment: "FileTableView: Modified."
+            ), .modified, TableDates.width(locale: .current)),
+            ("kind", String(
+                localized: "fileTableView.kind",
+                defaultValue: "Kind",
+                bundle: L10n.bundle,
+                comment: "FileTableView: Kind."
+            ), .kind, 80),
         ]
 
         /// What the Modified column shows for a stored time of 0 (never read).
@@ -84,7 +109,7 @@ public struct FileTableView: NSViewRepresentable {
         let selection: Selection
         let locale: Locale
         var onSort: ((SortKey, Bool) -> Void)?
-        let contextMenu = JetsamContextMenu()
+        let contextMenu = ReclaimContextMenu()
         private(set) weak var table: NSTableView?
         private var cancellable: AnyCancellable?
         /// True while this side is writing the table's selection, so the
@@ -101,8 +126,9 @@ public struct FileTableView: NSViewRepresentable {
 
         /// The table, wired to this coordinator and to `selection`.
         public func makeTableView() -> NSTableView {
-            let t = JetsamTableView()
-            t.jetsamMenu = contextMenu
+            let t = ReclaimTableView()
+            t.style = .plain
+            t.reclaimMenu = contextMenu
             t.prepareContext = { [weak self, weak t] event in
                 guard let self, let t else { return false }
                 let row = t.row(at: t.convert(event.locationInWindow, from: nil))
@@ -114,10 +140,16 @@ public struct FileTableView: NSViewRepresentable {
             for col in Coordinator.columns {
                 let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
                 c.title = col.title
-                c.width = col.width
+                let width = col.id == "modified" ? TableDates.width(locale: locale) : col.width
+                c.width = width
+                c.minWidth = col.id == "name" ? 180 : width
+                c.maxWidth = col.id == "name" ? 10_000 : width
+                c.resizingMask = []
                 c.sortDescriptorPrototype = NSSortDescriptor(key: col.id, ascending: col.key == .name)
                 t.addTableColumn(c)
             }
+            t.intercellSpacing = NSSize(width: 3, height: 0)
+            t.columnAutoresizingStyle = .noColumnAutoresizing
             t.allowsMultipleSelection = true
             t.usesAlternatingRowBackgroundColors = true
             t.dataSource = self
@@ -170,8 +202,7 @@ public struct FileTableView: NSViewRepresentable {
             case "logical": return displaySize(n.logical, locale: locale)
             case "modified":
                 guard n.modified != 0 else { return Coordinator.unknownDate }
-                return Date(timeIntervalSince1970: TimeInterval(n.modified))
-                    .formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))
+                return TableDates.text(n.modified, locale: locale)
             default: return nodeKind(node, in: snapshot).displayName
             }
         }
@@ -181,15 +212,45 @@ public struct FileTableView: NSViewRepresentable {
         func accessibilityLabel(column id: String, row: Int) -> String {
             let node = rows[row]
             guard Int(node) < snapshot.nodes.count else { return "" }
-            let base = "\(snapshot.displayName(node)), \(displaySize(snapshot.allocated(node), locale: locale))"
+            let base = String(
+                localized: "fileTableView.locale.locale",
+                defaultValue: "\(snapshot.displayName(node)), \(displaySize(snapshot.allocated(node), locale: locale))",
+                bundle: L10n.bundle,
+                comment: "FileTableView: {snapshot.displayName(node)}, {displaySize(snapshot.allocated(node), locale: locale)}."
+            )
             switch id {
             case "name": return base
-            case "allocated": return base + " allocated"
-            case "logical": return base + ", logical \(text(column: id, row: row))"
+            case "allocated": return base + String(
+                localized: "fileTableView.allocated.v2",
+                defaultValue: " allocated",
+                bundle: L10n.bundle,
+                comment: "FileTableView: allocated."
+            )
+            case "logical": return base + String(
+                localized: "fileTableView.logical.v2",
+                defaultValue: ", logical \(text(column: id, row: row))",
+                bundle: L10n.bundle,
+                comment: "FileTableView: , logical {text(column: id, row: row)}."
+            )
             case "modified":
                 let m = snapshot.nodes[Int(node)].modified
-                return base + (m == 0 ? ", modified unknown" : ", modified \(text(column: id, row: row))")
-            default: return base + ", \(text(column: id, row: row))"
+                return base + (m == 0 ? String(
+                    localized: "fileTableView.modified.unknown",
+                    defaultValue: ", modified unknown",
+                    bundle: L10n.bundle,
+                    comment: "FileTableView: , modified unknown."
+                ) : String(
+                    localized: "fileTableView.modified.v2",
+                    defaultValue: ", modified \(text(column: id, row: row))",
+                    bundle: L10n.bundle,
+                    comment: "FileTableView: , modified {text(column: id, row: row)}."
+                ))
+            default: return base + String(
+                localized: "fileTableView.value",
+                defaultValue: ", \(text(column: id, row: row))",
+                bundle: L10n.bundle,
+                comment: "FileTableView: , {text(column: id, row: row)}."
+            )
             }
         }
 
@@ -235,11 +296,53 @@ public struct FileTableView: NSViewRepresentable {
     }
 }
 
-private final class JetsamTableView: NSTableView {
-    var jetsamMenu: JetsamContextMenu?
+private final class ReclaimTableView: NSTableView {
+    var reclaimMenu: ReclaimContextMenu?
     var prepareContext: ((NSEvent) -> Bool)?
     override func menu(for event: NSEvent) -> NSMenu? {
         guard prepareContext?(event) == true else { return nil }
-        return jetsamMenu?.make()
+        return reclaimMenu?.make()
+    }
+}
+
+
+/// Fit every column within the viewport, giving the remaining space to Name.
+private final class FittingTableScrollView: NSScrollView {
+    override func tile() {
+        super.tile()
+        guard let table = documentView as? NSTableView else { return }
+        let columns = table.tableColumns
+        guard columns.count == FileTableView.Coordinator.columns.count else { return }
+        let fixed = columns.dropFirst().reduce(CGFloat(0)) { $0 + $1.width }
+        let spacing = table.intercellSpacing.width * CGFloat(columns.count)
+        columns[0].width = max(180, contentSize.width - fixed - spacing)
+        table.setFrameSize(NSSize(width: contentSize.width, height: table.frame.height))
+    }
+}
+
+/// Shared medium-date formatting and measured column geometry for both lists.
+@MainActor
+enum TableDates {
+    static func formatter(locale: Locale) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }
+
+    static func text(_ seconds: Int64, locale: Locale) -> String {
+        guard seconds != 0 else { return FileTableView.Coordinator.unknownDate }
+        return formatter(locale: locale).string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+    }
+
+    static func width(locale: Locale) -> CGFloat {
+        let formatter = formatter(locale: locale)
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let dates = (1...12).compactMap { calendar.date(from: DateComponents(year: 2026, month: $0, day: 28, hour: 12)) }
+            + [Date(timeIntervalSince1970: 1798718400)]
+        return max(120, dates.map { ceil((formatter.string(from: $0) as NSString).size(withAttributes: [.font: font]).width) + 8 }.max() ?? 120)
     }
 }

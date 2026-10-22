@@ -132,7 +132,7 @@ final class TestSnapshot {
 
 // Small semantic fixtures can stage synchronously. Production staging always
 // uses AppModel's coordinator and background preparation actor.
-extension Jetsam {
+extension Reclaim {
     @MainActor
     func stage(_ nodes: [UInt32], in snapshot: Snapshot, context: GuardContext, stat: FileStat,
                overlay: SizeOverlay = SizeOverlay()) {

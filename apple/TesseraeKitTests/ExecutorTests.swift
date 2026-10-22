@@ -58,24 +58,39 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
         scanRootDevice: 7, appBundle: URL(fileURLWithPath: "/Applications/Tesserae.app"),
         home: Data("/Users/tester".utf8))
 
-    private func item(_ n: UInt32, path: Data? = nil, size: UInt64? = 10, warnings: [Reason] = []) -> JetsamItem {
-        JetsamItem(nodeIndex: n, path: path ?? Data("/scan/root/f\(n)".utf8),
+    private func item(_ n: UInt32, path: Data? = nil, size: UInt64? = 10, warnings: [Reason] = []) -> ReclaimItem {
+        ReclaimItem(nodeIndex: n, path: path ?? Data("/scan/root/f\(n)".utf8),
                    recorded: Recorded(fileID: UInt64(n + 10), device: 7, isDirectory: false),
                    recordedSize: size, verdict: warnings.first.map { .warn($0) } ?? .ok, warnings: warnings)
     }
 
-    private func seed(_ items: [JetsamItem], _ p: Probe, flags: UInt32 = 0, links: UInt16 = 1) {
+    private func seed(_ items: [ReclaimItem], _ p: Probe, flags: UInt32 = 0, links: UInt16 = 1) {
         for i in items {
             p.entries[i.path] = .ok(Observed(device: 7, flags: flags, isDirectory: false, linkCount: links),
                                     fileID: i.recorded.fileID, isSymlink: false)
         }
     }
 
+    func test_unavailable_review_is_skipped_and_audited_without_execution() async {
+        let probe = Probe()
+        var staged = item(1)
+        staged.actionAvailability = .unavailable("This disk is read-only.")
+        let review = TrashConfirmation(items: [staged])
+        XCTAssertEqual(review.deniedItems.map(\.id), [staged.id])
+        XCTAssertTrue(review.groupedForConfirmation.isEmpty)
+        let result = await Executor(trasher: probe, stat: probe, log: probe, context: context).run([staged], confirmedWarnings: [])
+        XCTAssertEqual(result.outcomes.count, 1)
+        XCTAssertEqual(result.outcomes[0].1, .skippedUnavailable("This disk is read-only."))
+        XCTAssertEqual(outcomeText(result.outcomes[0].1), "Skipped: This disk is read-only.")
+        XCTAssertTrue(probe.trashPaths.isEmpty)
+        XCTAssertEqual(probe.logs.map(\.result), ["skipped:unavailable"])
+    }
+
     func test_new_warning_replacement_and_hidden_addition_require_new_consent() async {
         for container in [false, true] {
             let p = Probe()
             let old = item(0, path: Data((container ? "/Users/tester/Library/Containers/app/file" : "/scan/root/file").utf8))
-            let staged = JetsamItem(nodeIndex: old.id, path: old.path, recorded: old.recorded, recordedSize: 10,
+            let staged = ReclaimItem(nodeIndex: old.id, path: old.path, recorded: old.recorded, recordedSize: 10,
                 verdict: .warn(container ? .appContainer : .otherHardLinks),
                 warnings: container ? [.appContainer, .otherHardLinks] : [.otherHardLinks])
             seed([staged], p, flags: UInt32(SF_DATALESS), links: container ? 2 : 1)
@@ -246,17 +261,17 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(try Data(contentsOf: outside), Data("fixture".utf8))
     }
 
-    private func realItem(_ url: URL, n: UInt32 = 0) throws -> JetsamItem {
+    private func realItem(_ url: URL, n: UInt32 = 0) throws -> ReclaimItem {
         let raw = url.withUnsafeFileSystemRepresentation { Data(bytes: $0!, count: strlen($0!)) }
         guard case .ok(let o, let id, false) = ProductionFileStat().lstat(raw) else {
             throw NSError(domain: "fixture stat", code: 1)
         }
-        return JetsamItem(nodeIndex: n, path: raw,
+        return ReclaimItem(nodeIndex: n, path: raw,
             recorded: Recorded(fileID: id, device: o.device, isDirectory: o.isDirectory),
             recordedSize: 7, verdict: .ok)
     }
 
-    private func realContext(_ f: DiskImageFixture, _ item: JetsamItem) -> GuardContext {
+    private func realContext(_ f: DiskImageFixture, _ item: ReclaimItem) -> GuardContext {
         GuardContext(scanRoot: Data(f.root.path.utf8), volumeRoot: Data(f.root.path.utf8),
             scanRootDevice: item.recorded.device, appBundle: context.appBundle, home: context.home)
     }
@@ -294,7 +309,7 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
         try ContainedMover(fixtureRoot: f.root, inner: ProductionMover()).move(source, to: a)
         try FileManager.default.linkItem(at: a, to: b)
         let original = try realItem(a), log = Probe()
-        let i = JetsamItem(nodeIndex: original.id, path: original.path, recorded: original.recorded,
+        let i = ReclaimItem(nodeIndex: original.id, path: original.path, recorded: original.recorded,
             recordedSize: original.recordedSize, verdict: .warn(.appContainer), warnings: [.appContainer, .otherHardLinks])
         guard case .ok(let o, _, _) = ProductionFileStat().lstat(i.path) else { return XCTFail() }
         XCTAssertEqual(o.linkCount, 2)
@@ -331,7 +346,7 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
 
     func test_deletion_suites_have_no_uncontained_foundation_moves() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let suites = ["ExecutorTests.swift", "PutBackTests.swift", "AppModelTests.swift", "JettisonLogTests.swift", "LiveTrashCheckTests.swift", "SizeOverlayTests.swift"]
+        let suites = ["ExecutorTests.swift", "PutBackTests.swift", "AppModelTests.swift", "ReclaimLogTests.swift", "LiveTrashCheckTests.swift", "SizeOverlayTests.swift"]
         let pattern = #"\bmoveItem\s*\("#
         for name in suites {
             let source = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
@@ -355,6 +370,24 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
         }
         XCTAssertEqual(destructiveOperations(in:
             #"runner.run(URL(fileURLWithPath: "/usr/bin/tmutil"), ["listlocalsnapshots", path], 5)"#), [])
+        for command in [
+            #"runner.run(helper, [Data("delete".utf8), path])"#,
+            #"runner.run(helper, Self.compressFlags + [directory])"#,
+            #"runner.run ( helper , Self.compressFlags + [directory])"#,
+            #"runner.run(helper, Self.compressFlags + fresh.map(\.path) + [directory])"#,
+            #"let compressFlags = ["compress", "--verify", "-c", "lzfse", "-r", "0.95", "--"].map { Data($0.utf8) } + [directory]"#,
+            #"SpawnRunner().run("/usr/local/bin/applesauce", args)"#,
+            #"SpawnRunner().run("/bin/rm", args)"#,
+            #"SpawnRunner().run("/usr/bin/codesign", ["--sign", "-", path])"#,
+            #"let compressFlags = ["compress", "--", "file"]"#,
+            #"let decompressFlags = ["extract", "--"]"#,
+            #"SpawnRunner().run("/usr/bin/tar", [Data("-xf".utf8), path])"#,
+            #"SpawnRunner().run("/usr/bin/tar", [Data("-tf".utf8), path])"#,
+            #"SpawnRunner().runCapturing("/usr/bin/tar", [Data("-xf".utf8), path])"#,
+            #"SpawnRunner().run("/usr/bin/ditto", [Data("-x".utf8), path])"#
+        ] { XCTAssertFalse(destructiveOperations(in: command).isEmpty, command) }
+        XCTAssertEqual(destructiveOperations(in: #"runner.run(helper, Self.compressFlags + fresh.map(\.path))"#), [])
+        XCTAssertEqual(destructiveOperations(in: #"runner.run(helper, Self.decompressFlags + fresh.map(\.path))"#), [])
     }
 
     private func scannedSources(_ repo: URL) throws -> String {
@@ -411,6 +444,46 @@ final class ExecutorTests: XCTestCase, @unchecked Sendable {
            source.range(of: arrayDelete, options: .regularExpression) != nil
             || source.range(of: shellDelete, options: .regularExpression) != nil {
             violations.append("tmutil delete")
+        }
+        // Mutation has one reviewed dispatch shape per action. File arguments
+        // originate in the fresh explicit-file batch, never a directory argument.
+        let allowedCalls = [
+            #"runner.run(helper, Self.compressFlags + fresh.map(\.path))"#,
+            #"runner.run(helper, Self.decompressFlags + fresh.map(\.path))"#
+        ]
+        var dispatch = source
+        for call in allowedCalls { dispatch = dispatch.replacingOccurrences(of: call, with: "") }
+        if dispatch.range(of: #"\.run\s*\(\s*helper\b"#, options: .regularExpression) != nil {
+            violations.append("unreviewed helper dispatch")
+        }
+        for (name, flags) in [("compressFlags", ["compress", "--verify", "-c", "lzfse", "-r", "0.95", "--"]),
+                              ("decompressFlags", ["decompress", "--"])] {
+            let definition = name + " = [" + flags.map { "\"" + $0 + "\"" }.joined(separator: ", ") + "].map { Data($0.utf8) }"
+            let pattern = try! NSRegularExpression(pattern: #"\b"# + name + #"\s*=.*"#)
+            for match in pattern.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+                let line = String(source[Range(match.range, in: source)!]).trimmingCharacters(in: .whitespaces)
+                if line != definition { violations.append("unreviewed helper flags") }
+            }
+        }
+        let codesign = #"SpawnRunner().run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--"].map { Data($0.utf8) } + [bundle])"#
+        var launches = source.replacingOccurrences(of: codesign, with: "")
+        for call in [
+            #"SpawnRunner().run("/usr/bin/tar", args, stdoutFD: fd)"#,
+            #"SpawnRunner().run("/usr/bin/tar", args, stdoutFD: destination)"#,
+            #"SpawnRunner().run("/usr/bin/ditto", args, stdoutFD: fd)"#,
+            #"SpawnRunner().runCapturing("/usr/bin/tar", [Data("--version".utf8)])"#
+        ] { launches = launches.replacingOccurrences(of: call, with: "") }
+        let executables = try! NSRegularExpression(pattern: #"\.run(?:Capturing)?\(\s*(?:URL\(fileURLWithPath:\s*)?"(/[^"]+)""#)
+        for match in executables.matches(in: launches, range: NSRange(launches.startIndex..., in: launches)) {
+            let path = String(launches[Range(match.range(at: 1), in: launches)!])
+            if path != "/usr/bin/tmutil" { violations.append("unreviewed executable") }
+        }
+        let paths = try! NSRegularExpression(pattern: #""([^"]*/applesauce)""#)
+        for match in paths.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+            let path = String(source[Range(match.range(at: 1), in: source)!])
+            if !path.hasSuffix("/Contents/Helpers/applesauce") && path != "Contents/Helpers/applesauce" {
+                violations.append("unbundled helper")
+            }
         }
         return violations
     }

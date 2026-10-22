@@ -49,13 +49,13 @@ final class InspectorTests: XCTestCase {
             InspectorInfo(
                 subject: .node(
                     t["clip.MOV"], rawPath: Data("/Volumes/X/media/clip.MOV".utf8),
-                    displayPath: "/Volumes/X/media/clip.MOV"),
+                    displayPath: "X › media › clip.MOV"),
                 allocated: 8_192_000, logical: 8_000_123,
                 kind: .fileKind(.video), modified: Date(timeIntervalSince1970: 1_700_000_900)))
         XCTAssertEqual(clip.node, t["clip.MOV"])
         XCTAssertEqual(clip.rawPath, Data("/Volumes/X/media/clip.MOV".utf8))
-        XCTAssertEqual(clip.displayPath, "/Volumes/X/media/clip.MOV")
-        XCTAssertEqual(clip.title, "/Volumes/X/media/clip.MOV")
+        XCTAssertEqual(clip.displayPath, "X › media › clip.MOV")
+        XCTAssertEqual(clip.title, "X › media › clip.MOV")
         XCTAssertEqual(clip.kind.displayName, "Video")
         XCTAssertNotEqual(clip.allocated, clip.logical, "precondition: the two sizes differ")
         XCTAssertEqual(inspect(t["notes"], in: s).kind, .file, "no extension")
@@ -70,7 +70,7 @@ final class InspectorTests: XCTestCase {
         let media = inspect(t["media"], in: s)
         XCTAssertEqual(media.kind, .folder)
         XCTAssertEqual(media.kind.displayName, "Folder")
-        XCTAssertEqual(media.displayPath, "/Volumes/X/media")
+        XCTAssertEqual(media.displayPath, "X › media")
         XCTAssertEqual(media.rawPath, Data("/Volumes/X/media".utf8))
         XCTAssertEqual(media.allocated, 8_192_000 + 4096 + 8192 + 4096, "rolled up")
         XCTAssertEqual(media.logical, 8_000_123 + 12 + 5000 + 100, "rolled up")
@@ -151,7 +151,7 @@ final class InspectorTests: XCTestCase {
         session.hover(tile: big)
         let chain = (0...256).map { "d\($0)" }.joined(separator: "/")
         XCTAssertEqual(session.inspector?.node, t["big"])
-        XCTAssertEqual(session.inspector?.displayPath, "/R/\(chain)/big")
+        XCTAssertEqual(session.inspector?.displayPath, "R › " + chain.replacingOccurrences(of: "/", with: " › ") + " › big")
         XCTAssertEqual(session.inspector?.rawPath, Data("/R/\(chain)/big".utf8))
         XCTAssertEqual(session.inspector?.logical, 99)
     }
@@ -178,9 +178,9 @@ final class InspectorTests: XCTestCase {
         let name = "a\u{2028}b\u{202E}c\u{85}d\u{200D}e"
         let t = TestSnapshot(.dir("/R", [.file(name, 10)]))
         let info = inspect(t[name], in: t.snapshot)
-        XCTAssertTrue(info.title.contains("\u{2028}"), "precondition: the raw path keeps the separator")
+        XCTAssertTrue(String(decoding: info.rawPath!, as: UTF8.self).contains("\u{2028}"), "precondition: the raw path keeps the separator")
         XCTAssertEqual(info.displayPath, info.title, "precondition: the path itself is untouched")
-        XCTAssertEqual(info.displayTitle, "/R/a b\u{FFFD}c\u{FFFD}d\u{200D}e")
+        XCTAssertEqual(info.displayTitle, "R › a b\u{FFFD}c\u{FFFD}d\u{200D}e")
         XCTAssertFalse(info.displayTitle.contains { $0.isNewline })
         let aggregate = InspectorInfo(subject: .unreadable(count: 3), allocated: 0, logical: 0, kind: .unreadable, modified: nil)
         XCTAssertEqual(aggregate.displayTitle, aggregate.title)

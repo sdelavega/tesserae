@@ -48,7 +48,7 @@ use std::ffi::{c_char, CStr, OsStr};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
@@ -272,6 +272,8 @@ pub const TESS_SKIP_OTHER_VOLUME: u32 = 3;
 pub const TESS_SKIP_NON_LOCAL_MOUNT: u32 = 4;
 /// A cloud-only directory; its contents were not downloaded.
 pub const TESS_SKIP_DATALESS_DIRECTORY: u32 = 5;
+/// macOS indexing metadata directly under a volume root.
+pub const TESS_SKIP_SYSTEM_MANAGED_INDEX: u32 = 6;
 
 /// File ID of a node, from the side array parallel to the nodes.
 /// Returns false with *out zeroed for a null snapshot, bad index or zero ID.
@@ -746,6 +748,7 @@ pub unsafe extern "C" fn tess_snapshot_skipped_by_request(
             *reason = match *why {
                 "limited scan" => TESS_SKIP_LIMITED_SCAN,
                 "not present" => TESS_SKIP_NOT_PRESENT,
+                "system-managed (macOS index)" => TESS_SKIP_SYSTEM_MANAGED_INDEX,
                 _ => 0,
             };
             slice_ptr(bytes)
@@ -1734,6 +1737,7 @@ mod tests {
                 skipped_by_request: vec![
                     (PathBuf::from("/limited"), "limited scan"),
                     (PathBuf::from("/absent"), "not present"),
+                    (PathBuf::from("/index"), "system-managed (macOS index)"),
                 ],
                 skipped_mounts: vec![
                     (PathBuf::from("/other"), SkipReason::OtherVolume),
@@ -1752,7 +1756,7 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             );
             assert_eq!(tess_snapshot_unreadable_count(snapshot), 1);
-            assert_eq!(tess_snapshot_skipped_count(snapshot), 5);
+            assert_eq!(tess_snapshot_skipped_count(snapshot), 6);
             let mut len = 99;
             let mut reason = 99;
             let bytes = tess_snapshot_unreadable(snapshot, 0, &mut len);
@@ -1770,6 +1774,7 @@ mod tests {
             for (i, (path, why)) in [
                 ("/limited", 1),
                 ("/absent", 2),
+                ("/index", 6),
                 ("/other", 3),
                 ("/smb", 4),
                 ("/cloud", 5),
@@ -1784,7 +1789,7 @@ mod tests {
                     path.as_bytes()
                 );
                 assert_eq!(reason, *why);
-                if i < 2 {
+                if i < 3 {
                     assert_eq!(
                         bytes,
                         tess_snapshot_skipped_by_request(snapshot, i as u64, &mut len, &mut reason)
@@ -1843,4 +1848,364 @@ mod identity_tests {
             assert!(!tess_snapshot_file_id(&snapshot, 0, ptr::null_mut()));
         }
     }
+}
+
+#[cfg(test)]
+mod archive_ffi_tests {
+    use super::*;
+    #[test]
+    fn archive_ffi_rejects_invalid_arguments_and_truncates_paths() {
+        let mut report = TessArchiveReport::default();
+        unsafe {
+            assert!(!tess_measure_allocated(
+                ptr::null(),
+                0,
+                ptr::null_mut(),
+                ptr::null_mut()
+            ));
+            assert_eq!(
+                tess_archive_verify(ptr::null(), 0, 0, ptr::null(), 0, 0, &mut report),
+                TESS_ARCHIVE_IO
+            );
+            assert_eq!(tess_zstd_stream(-1, -1, 3, ptr::null_mut()), -libc::EINVAL);
+            let mut bytes = 999;
+            assert_eq!(tess_zstd_stream(-1, -1, 3, &mut bytes), -libc::EBADF);
+            assert_eq!(bytes, 0);
+        }
+        let path = vec![b'x'; 2048];
+        unsafe {
+            assert_eq!(
+                tess_archive_verify(
+                    b"unused".as_ptr(),
+                    6,
+                    0,
+                    path.as_ptr(),
+                    path.len(),
+                    0,
+                    &mut report
+                ),
+                TESS_ARCHIVE_UNREADABLE_ORIGINAL
+            );
+        }
+        assert_eq!(report.first_bad_len, 2048);
+        assert_eq!(report.first_bad_path, [b'x'; 1024]);
+    }
+    #[test]
+    fn archive_ffi_forwards_sidecar_flag() {
+        use std::ffi::CString;
+        use std::os::macos::fs::MetadataExt;
+        use std::process::Command;
+        assert_eq!(
+            TESS_ARCHIVE_SIDECARS_ARE_METADATA,
+            tesserae_core::archive_verify::SIDECARS_ARE_METADATA
+        );
+        let fixture = tesserae_testutil::Fixture::new().unwrap();
+        fixture.file("item/data", 8).unwrap();
+        let archive = fixture.path().join("archive.tar.xz");
+        assert!(Command::new("/usr/bin/tar")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .args(["--no-mac-metadata", "-cJf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["--", "item"])
+            .status()
+            .unwrap()
+            .success());
+        let mut sidecar = [0; 24];
+        sidecar[..8].copy_from_slice(&[0, 5, 22, 7, 0, 2, 0, 0]);
+        let sidecar_path = fixture.path().join("item/._data");
+        std::fs::write(&sidecar_path, sidecar).unwrap();
+        let name = CString::new(sidecar_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chflags(name.as_ptr(), libc::UF_HIDDEN) }, 0);
+        assert_ne!(
+            std::fs::metadata(&sidecar_path).unwrap().st_flags() & libc::UF_HIDDEN,
+            0
+        );
+        assert!(fixture.path().join("item/data").is_file());
+        assert_eq!(
+            std::fs::read(fixture.path().join("item/._data")).unwrap(),
+            sidecar
+        );
+        let item = fixture.path().join("item");
+        let a = archive.as_os_str().as_bytes();
+        let i = item.as_os_str().as_bytes();
+        for (flags, expected) in [
+            (0, TESS_ARCHIVE_MISSING_ENTRY),
+            (TESS_ARCHIVE_SIDECARS_ARE_METADATA, TESS_ARCHIVE_OK),
+            (2, TESS_ARCHIVE_MISSING_ENTRY),
+        ] {
+            let mut report = TessArchiveReport::default();
+            assert_eq!(
+                unsafe {
+                    tess_archive_verify(
+                        a.as_ptr(),
+                        a.len(),
+                        1,
+                        i.as_ptr(),
+                        i.len(),
+                        flags,
+                        &mut report,
+                    )
+                },
+                expected
+            );
+            if expected == TESS_ARCHIVE_OK {
+                assert_eq!((report.files, report.dirs, report.bytes), (1, 1, 8));
+            } else {
+                assert_eq!(
+                    &report.first_bad_path[..report.first_bad_len],
+                    b"item/._data"
+                );
+            }
+        }
+    }
+    #[test]
+    fn archive_ffi_round_trips_tar_zstd_and_reports_changed_path() {
+        use std::os::fd::AsRawFd;
+        use std::process::{Command, Stdio};
+        let fixture = tesserae_testutil::Fixture::new().unwrap();
+        fixture.file("item/data", 8192).unwrap();
+        let item = fixture.path().join("item");
+        let archive = fixture.path().join("archive.tar.zst");
+        let output = std::fs::File::create(&archive).unwrap();
+        let mut child = Command::new("/usr/bin/tar")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .args(["-c", "-f", "-", "-C"])
+            .arg(fixture.path())
+            .args(["--", "item"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = child.stdout.take().unwrap();
+        let mut bytes = 0;
+        unsafe {
+            assert_eq!(
+                tess_zstd_stream(input.as_raw_fd(), output.as_raw_fd(), 3, &mut bytes),
+                0
+            );
+        }
+        drop(input);
+        assert!(child.wait().unwrap().success());
+        assert_eq!(bytes, output.metadata().unwrap().len());
+        assert!(bytes > 0);
+        let a = archive.as_os_str().as_bytes();
+        let i = item.as_os_str().as_bytes();
+        let mut report = TessArchiveReport::default();
+        unsafe {
+            assert_eq!(
+                tess_archive_verify(a.as_ptr(), a.len(), 2, i.as_ptr(), i.len(), 0, &mut report),
+                TESS_ARCHIVE_OK
+            );
+        }
+        assert_eq!(
+            (report.files, report.dirs, report.links, report.bytes),
+            (1, 1, 0, 8192)
+        );
+        assert_eq!(report.first_bad_len, 0);
+        std::fs::write(item.join("data"), vec![b'x'; 8192]).unwrap();
+        unsafe {
+            assert_eq!(
+                tess_archive_verify(a.as_ptr(), a.len(), 2, i.as_ptr(), i.len(), 0, &mut report),
+                TESS_ARCHIVE_DIGEST_MISMATCH
+            );
+        }
+        assert_eq!(&report.first_bad_path[..report.first_bad_len], b"item/data");
+        assert_eq!(report.files, 0);
+    }
+    #[test]
+    fn measure_ffi_returns_scanner_sizes_and_preserves_outputs_on_error() {
+        let fx = tesserae_testutil::Fixture::new().unwrap();
+        fx.file("data", 8192).unwrap();
+        let path = fx.path().join("data");
+        let bytes = path.as_os_str().as_bytes();
+        let (mut allocated, mut logical) = (999, 888);
+        unsafe {
+            assert!(tess_measure_allocated(
+                bytes.as_ptr(),
+                bytes.len(),
+                &mut allocated,
+                &mut logical
+            ));
+            assert_eq!(
+                (allocated, logical),
+                tesserae_core::measure::measure_allocated(&path).unwrap()
+            );
+            assert!(!tess_measure_allocated(
+                b"a\0b".as_ptr(),
+                3,
+                &mut allocated,
+                &mut logical
+            ));
+            assert_eq!(logical, 8192);
+        }
+    }
+}
+
+/// Paired dot-underscore originals are metadata; set only on non-apfs/hfs volumes.
+pub const TESS_ARCHIVE_SIDECARS_ARE_METADATA: u32 = 1;
+pub const TESS_ARCHIVE_OK: i32 = 0;
+pub const TESS_ARCHIVE_MISSING_ENTRY: i32 = 1;
+pub const TESS_ARCHIVE_EXTRA_ENTRY: i32 = 2;
+pub const TESS_ARCHIVE_SIZE_MISMATCH: i32 = 3;
+pub const TESS_ARCHIVE_DIGEST_MISMATCH: i32 = 4;
+pub const TESS_ARCHIVE_TYPE_MISMATCH: i32 = 5;
+pub const TESS_ARCHIVE_LINK_MISMATCH: i32 = 6;
+pub const TESS_ARCHIVE_UNREADABLE_ORIGINAL: i32 = 7;
+pub const TESS_ARCHIVE_CORRUPT_ARCHIVE: i32 = 8;
+pub const TESS_ARCHIVE_IO: i32 = 9;
+pub const TESS_ARCHIVE_DUPLICATE_ENTRY: i32 = 10;
+
+/// Verification counts on success; first offending raw path on failure.
+#[repr(C)]
+pub struct TessArchiveReport {
+    pub files: u64,
+    pub dirs: u64,
+    pub links: u64,
+    pub bytes: u64,
+    /// At most 1024 bytes, without a terminating NUL.
+    pub first_bad_path: [u8; 1024],
+    /// Full path length, which may exceed the buffer's capacity.
+    pub first_bad_len: usize,
+}
+impl Default for TessArchiveReport {
+    fn default() -> Self {
+        Self {
+            files: 0,
+            dirs: 0,
+            links: 0,
+            bytes: 0,
+            first_bad_path: [0; 1024],
+            first_bad_len: 0,
+        }
+    }
+}
+impl TessArchiveReport {
+    fn bad_path(&mut self, path: &[u8]) {
+        self.first_bad_len = path.len();
+        let n = path.len().min(self.first_bad_path.len());
+        self.first_bad_path[..n].copy_from_slice(&path[..n]);
+    }
+}
+
+unsafe fn archive_path<'a>(path: *const u8, len: usize) -> Option<&'a Path> {
+    if path.is_null() || len == 0 || len > isize::MAX as usize {
+        return None;
+    }
+    // SAFETY: callers guarantee len readable bytes; null and excessive lengths were rejected.
+    let bytes = unsafe { std::slice::from_raw_parts(path, len) };
+    if bytes.contains(&0) {
+        return None;
+    }
+    Some(Path::new(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+/// Measure one path without following its final symlink. Outputs change only on success.
+///
+/// # Safety
+/// path must hold len readable bytes; both output pointers must be writable and disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_measure_allocated(
+    path: *const u8,
+    len: usize,
+    allocated_out: *mut u64,
+    logical_out: *mut u64,
+) -> bool {
+    guarded(false, || {
+        if allocated_out.is_null() || logical_out.is_null() {
+            return false;
+        }
+        let Some(path) = (unsafe { archive_path(path, len) }) else {
+            return false;
+        };
+        let Ok((allocated, logical)) = tesserae_core::measure::measure_allocated(path) else {
+            return false;
+        };
+        unsafe {
+            *allocated_out = allocated;
+            *logical_out = logical;
+        }
+        true
+    })
+}
+
+/// Encode a tar stream into a zstd frame, using borrowed descriptors; returns zero or negative errno.
+/// bytes_out is zero on failure. Neither descriptor is closed.
+///
+/// # Safety
+/// bytes_out must be writable. Descriptors must remain owned and stable for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_zstd_stream(
+    in_fd: i32,
+    out_fd: i32,
+    level: i32,
+    bytes_out: *mut u64,
+) -> i32 {
+    guarded(-libc::EIO, || {
+        if bytes_out.is_null() {
+            return -libc::EINVAL;
+        }
+        unsafe {
+            *bytes_out = 0;
+        }
+        match tesserae_core::archive_verify::zstd_stream(in_fd, out_fd, level) {
+            Ok(n) => {
+                unsafe {
+                    *bytes_out = n;
+                }
+                0
+            }
+            Err(e) => -e.raw_os_error().unwrap_or(libc::EIO),
+        }
+    })
+}
+
+/// Verify ZIP (0), tar.xz (1), or tar.zst (2) against the original item, without extracting.
+/// flags bit 0 (TESS_ARCHIVE_SIDECARS_ARE_METADATA) excludes ._ originals whose unprefixed sibling exists.
+/// Returns TESS_ARCHIVE_OK or a TESS_ARCHIVE_* failure code. Counts are set only on success.
+///
+/// # Safety
+/// archive/item must hold alen/ilen readable bytes; out must be writable and disjoint from inputs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tess_archive_verify(
+    archive: *const u8,
+    alen: usize,
+    format: u32,
+    item: *const u8,
+    ilen: usize,
+    flags: u32,
+    out: *mut TessArchiveReport,
+) -> i32 {
+    guarded(TESS_ARCHIVE_IO, || {
+        if out.is_null() {
+            return TESS_ARCHIVE_IO;
+        }
+        unsafe {
+            *out = TessArchiveReport::default();
+        }
+        let (Some(archive), Some(item)) = (unsafe { archive_path(archive, alen) }, unsafe {
+            archive_path(item, ilen)
+        }) else {
+            return TESS_ARCHIVE_IO;
+        };
+        match tesserae_core::archive_verify::verify_with_flags(archive, format, item, flags) {
+            Ok(report) => {
+                unsafe {
+                    (*out).files = report.files;
+                    (*out).dirs = report.dirs;
+                    (*out).links = report.links;
+                    (*out).bytes = report.bytes;
+                }
+                TESS_ARCHIVE_OK
+            }
+            Err(e) => {
+                unsafe {
+                    (*out).bad_path(&e.path);
+                }
+                e.code as i32
+            }
+        }
+    })
 }
