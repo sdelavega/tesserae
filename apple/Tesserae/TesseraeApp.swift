@@ -21,9 +21,13 @@ import TesseraeKit
 @main
 struct TesseraeApp: App {
     @StateObject private var updates: Updates
+    #if TESSERAE_TEST_HOOKS
     private let accessReport: AccessReportConfiguration?
 
+    #endif
+
     init() {
+        #if TESSERAE_TEST_HOOKS
         do {
             accessReport = try AccessReportConfiguration(environment: ProcessInfo.processInfo.environment)
         } catch {
@@ -48,6 +52,9 @@ struct TesseraeApp: App {
             FileHandle.standardError.write(Data("tesserae frame gate: \(problem)\n".utf8))
             exit(2)
         }
+        #else
+        _updates = StateObject(wrappedValue: Updates(startingUpdater: true))
+        #endif
     }
 
     var body: some Scene {
@@ -56,6 +63,7 @@ struct TesseraeApp: App {
             defaultValue: "Tesserae",
             comment: "TesseraeApp: Tesserae."
         ), id: "main") {
+            #if TESSERAE_TEST_HOOKS
             if accessReport != nil {
                 ProgressView(String(
                     localized: "tesseraeApp.writing.access.report",
@@ -65,6 +73,9 @@ struct TesseraeApp: App {
             } else {
                 ContentView()
             }
+            #else
+            ContentView()
+            #endif
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1440, height: 900)
@@ -96,11 +107,13 @@ struct TesseraeApp: App {
         #if DEBUG
         .commands {
             CommandMenu("Diagnostics") {
+                #if TESSERAE_TEST_HOOKS
                 // Needs TESSERAE_FRAME_TIMING=1 (the runner exists only then).
                 Button("Run Phase 2 Frame Gate") {
                     NotificationCenter.default.post(name: .init("TesseraeRunFrameGate"), object: nil)
                 }.disabled(!FrameTimer.shared.isEnabled)
                 Divider()
+                #endif
                 Button("Use Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Use Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
                 Button("Follow System Appearance") { NSApp.appearance = nil }

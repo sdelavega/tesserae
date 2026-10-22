@@ -641,21 +641,18 @@ and is not part of these figures.
 
 ### Running the gate on a Release build
 
-The frame gate now runs in any build configuration when
-`TESSERAE_FRAME_TIMING=1` (previously Debug always recorded and only Debug
-had the gate's menu command). The runner exists only when timing is enabled,
-and its capture no longer embeds a source path. To measure the configuration
-that ships, unlock the screen (a locked screen never draws: every transition
-then times out and the run is rejected) and run:
+The frame gate is compiled only with `TESSERAE_TEST_HOOKS`. Shipping Release
+builds ignore its environment variables. Use the separate Release diagnostics
+build and an unused output path under the process temporary directory. Unlock
+the screen before running (a locked screen never draws).
 
 ```sh
-xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath apple/build/DerivedData-gate \
-  ENABLE_HARDENED_RUNTIME=NO
+just app-build-testhooks
+capture="${TMPDIR%/}/tesserae-frame-gate-$(uuidgen).json"
 TESSERAE_FRAME_TIMING=1 TESSERAE_FRAME_GATE_AUTORUN=/System/Volumes/Data \
-TESSERAE_FRAME_GATE_OUT="$PWD/apple/build/frame-gate-release.json" \
-  apple/build/DerivedData-gate/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
-scripts/frame-gate-summary.py apple/build/frame-gate-release.json
+TESSERAE_FRAME_GATE_OUT="$capture" \
+  apple/build/DerivedData-testhooks/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
+scripts/frame-gate-summary.py "$capture"
 ```
 
 The app scans the root, sizes its window to the main screen's visible frame,
@@ -667,8 +664,8 @@ did not finish within 3 s is saved but reported as invalid (exit status 1).
 `TESSERAE_FRAME_GATE_TIMEOUT` (seconds, default 900) bounds the whole run:
 waiting for a visible window, the scan and the protocol. If it passes first,
 the app writes nothing, says which stage it was waiting for, and exits with
-status 3. A file already at the output path is not removed, so the exit status,
-not the file's presence, says whether this run succeeded.
+status 3. Outputs use exclusive creation with mode 0600; existing files and symlinks are
+refused. Use a fresh path for every frame-gate or access-report run.
 The `ENABLE_HARDENED_RUNTIME=NO` override is the same local-only signing
 decision as above; the project's settings are unchanged.
 
@@ -748,7 +745,7 @@ shares `com.sdelavega.Tesserae`, so System Settings keeps one entry;
 a grant for one build does not necessarily apply to another. The
 `CODE_SIGNING_ALLOWED=NO` build is linker-signed only (Info.plist unbound,
 no internal requirement) and cannot hold the grant. For another guided test,
-build with `just app-build`, then prepare a properly ad-hoc-signed copy with
+build with `just app-build-testhooks`, then prepare a properly ad-hoc-signed copy with
 `just fda-copy`. After replacing the copy, the user needs to toggle FDA off/on
 for the new signature if testing again.
 

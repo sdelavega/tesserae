@@ -56,7 +56,11 @@ public final class FrameTimer: @unchecked Sendable {
     /// configuration, so a Release build can be measured and a Debug session
     /// does not record or emit signposts unless asked to.
     public init(enabled: Bool? = nil) {
+        #if TESSERAE_TEST_HOOKS
         self.enabled = enabled ?? FrameGateConfiguration.timingRequested(in: ProcessInfo.processInfo.environment)
+        #else
+        self.enabled = false
+        #endif
         recording = self.enabled
     }
 
@@ -179,10 +183,10 @@ public final class FrameTimer: @unchecked Sendable {
     }
 }
 
+#if TESSERAE_TEST_HOOKS
 /// How the phase gate is set up, from the environment (read once at launch):
 ///
-/// * `TESSERAE_FRAME_TIMING=1` turns `FrameTimer.shared` on, in any build
-///   configuration; the gate needs it.
+/// * `TESSERAE_FRAME_TIMING=1` turns `FrameTimer.shared` on, in a test-hook build; the gate needs it.
 /// * `TESSERAE_FRAME_GATE_AUTORUN=<absolute path>` makes the app scan that
 ///   root on launch, fill the main screen's visible frame, run the gate, write
 ///   the capture and quit.
@@ -391,7 +395,7 @@ public final class PhaseGateRunner: ObservableObject {
             do {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
-                try encoder.encode(capture).write(to: output, options: .atomic)
+                try encoder.encode(capture).withUnsafeBytes { try TestHookOutput(output).write($0) }
                 guard settleTimeouts == 0 else {
                     let reason = "Frame gate capture saved to \(output.path), but \(settleTimeouts) of 90 transitions"
                         + " did not finish animating within 3 s (was the window visible?); it is not a valid run."
@@ -520,3 +524,5 @@ public enum FrameGateAutorun {
         }
     }
 }
+
+#endif

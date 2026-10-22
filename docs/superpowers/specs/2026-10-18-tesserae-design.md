@@ -2163,7 +2163,7 @@ identifier plus code requirement. Every build shares
 `com.sdelavega.Tesserae`, so System Settings keeps one entry; granting
 one build does not necessarily grant another. A linker-signed
 `CODE_SIGNING_ALLOWED=NO` build (Info.plist unbound, no internal requirement)
-cannot hold a grant. Test with a properly ad-hoc-signed copy: `just app-build`
+cannot hold a grant. Test with a properly ad-hoc-signed copy: `just app-build-testhooks`
 then `just fda-copy`. If testing again after replacing that copy, the user
 needs to toggle FDA off/on for its new signature.
 

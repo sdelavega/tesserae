@@ -16,7 +16,7 @@ default:
     @just --list
 
 # Every check CI runs, in CI's order.
-gate: no-home-paths strings-test lint test header ship-lib deny ffi app-test release-metadata-test release-test demo-volume-test
+gate: no-home-paths strings-test lint test header ship-lib deny ffi app-test shipped-app release-metadata-test release-test demo-volume-test
 
 # Reject the running user's home path in every tracked text file. Matching
 # $HOME exactly (not any "/Users/") lets docs discuss macOS paths such as
@@ -81,7 +81,16 @@ applesauce:
 # Unsigned universal Release build of the app, as CI builds it.
 app-build: applesauce
     rm -rf apple/build/Tesserae-build.xcresult
-    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO
+    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData -resultBundlePath apple/build/Tesserae-build.xcresult CODE_SIGNING_ALLOWED=NO 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='
+
+# Release-optimized diagnostics, isolated from the shipping DerivedData.
+app-build-testhooks: applesauce
+    rm -rf apple/build/Tesserae-testhooks-build.xcresult
+    xcodebuild build -project apple/Tesserae.xcodeproj -scheme Tesserae -configuration Release -destination 'generic/platform=macOS' -derivedDataPath apple/build/DerivedData-testhooks -clonedSourcePackagesDirPath apple/build/DerivedData/SourcePackages -resultBundlePath apple/build/Tesserae-testhooks-build.xcresult CODE_SIGNING_ALLOWED=NO 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) TESSERAE_TEST_HOOKS'
+
+shipped-app: app-build app-build-testhooks
+    scripts/check-shipped-app.sh
+    python3 -I scripts/tests/test_hooks_test.py
 
 # Release metadata, bundled licence and app chrome checks.
 release-metadata-test: app-build
@@ -95,11 +104,11 @@ release-metadata-test: app-build
     apple/build/updates-tests
 
 # FDA grants need a real code signature; if testing again, the user must toggle FDA off/on for the new signature.
-fda-copy:
-    test -d apple/build/DerivedData/Build/Products/Release/Tesserae.app || { echo "Release app missing; run just app-build first." >&2; exit 1; }
+fda-copy: app-build-testhooks
+    test -d apple/build/DerivedData-testhooks/Build/Products/Release/Tesserae.app || { echo "Test-hook app missing; run just app-build-testhooks first." >&2; exit 1; }
     mkdir -p apple/build/fda-run
     rm -rf apple/build/fda-run/Tesserae.app
-    ditto apple/build/DerivedData/Build/Products/Release/Tesserae.app apple/build/fda-run/Tesserae.app
+    ditto apple/build/DerivedData-testhooks/Build/Products/Release/Tesserae.app apple/build/fda-run/Tesserae.app
     for f in apple/build/fda-run/Tesserae.app/Contents/Frameworks/*.framework; do codesign --force --deep --sign - "$f"; done
     codesign --force --sign - --identifier com.sdelavega.Tesserae apple/build/fda-run/Tesserae.app
     codesign --verify --deep --strict apple/build/fda-run/Tesserae.app
@@ -130,6 +139,7 @@ release version *flags:
 # Release pipeline tests use fake Apple tools and never contact Apple.
 [script("/usr/bin/env", "-S", "-i PATH=${PATH} HOME=${HOME} TMPDIR=${TMPDIR} LANG=${LANG} LC_ALL=${LC_ALL} LC_COLLATE=${LC_COLLATE} LC_CTYPE=${LC_CTYPE} LC_MESSAGES=${LC_MESSAGES} LC_MONETARY=${LC_MONETARY} LC_NUMERIC=${LC_NUMERIC} LC_TIME=${LC_TIME} USER=${USER} DEVELOPER_DIR=${DEVELOPER_DIR} /bin/bash --noprofile --norc -euo pipefail")]
 release-test:
+    set -euo pipefail
     /bin/bash --noprofile --norc scripts/tests/release_test.sh
     python3 -I scripts/tests/publish_test.py
     python3 -I scripts/tests/release_workflow_test.py

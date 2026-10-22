@@ -66,9 +66,51 @@ final class AccessReportTests: XCTestCase {
         XCTAssertEqual(scan.scanRoot?.path, "/fixture/root")
     }
 
+    func test_report_runner_refuses_existing_output_without_probing_or_overwriting() async throws {
+        let output = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("report-\(UUID().uuidString).json")
+        let sentinel = Data("existing report".utf8)
+        try sentinel.write(to: output)
+        defer { try? FileManager.default.removeItem(at: output) }
+        XCTAssertEqual(try Data(contentsOf: output), sentinel, "precondition")
+        let configuration = try XCTUnwrap(AccessReportConfiguration(environment: ["TESSERAE_ACCESS_REPORT_OUT": output.path]))
+        let probe = AccessProbe(candidates: [output], open: { _ in
+            XCTFail("an existing output must be refused before probing")
+            return 0
+        })
+        do {
+            _ = try await AccessReportRunner.run(configuration, probe: probe)
+            XCTFail("existing output accepted")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: output), sentinel)
+    }
+
+    func test_hook_output_is_private_and_refuses_symlinks_and_paths_outside_temp() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("hook-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("output")
+        let data = Data("private".utf8)
+        try data.withUnsafeBytes { try TestHookOutput(output).write($0) }
+        XCTAssertEqual(try Data(contentsOf: output), data)
+        let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: output)
+        XCTAssertThrowsError(try TestHookOutput(link))
+        let directoryLink = root.appendingPathComponent("directory-link")
+        try FileManager.default.createSymbolicLink(at: directoryLink, withDestinationURL: root)
+        XCTAssertThrowsError(try TestHookOutput(directoryLink.appendingPathComponent("escaped")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("escaped").path))
+        let outside = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("refused-\(UUID().uuidString)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path), "precondition")
+        XCTAssertThrowsError(try TestHookOutput(outside))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path))
+        XCTAssertEqual(try Data(contentsOf: output), data)
+    }
+
     func test_report_runner_saves_probe_then_normal_engine_scan() async throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/report-\(UUID().uuidString)", isDirectory: true)
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("report-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data("fixture".utf8).write(to: root.appendingPathComponent("one"))
@@ -96,6 +138,7 @@ final class AccessReportTests: XCTestCase {
         XCTAssertGreaterThan(scan.wallClockSeconds, 0)
         XCTAssertNil(report.scanError)
         let onlyProbe = try XCTUnwrap(AccessReportConfiguration(environment: ["TESSERAE_ACCESS_REPORT_OUT": output.path]))
+        try FileManager.default.removeItem(at: output)
         let probeStatus = try await AccessReportRunner.run(onlyProbe, probe: probe)
         XCTAssertEqual(probeStatus, 0)
         let minimal = try JSONDecoder().decode(AccessReport.self, from: Data(contentsOf: output))

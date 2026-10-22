@@ -1541,6 +1541,18 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(capture.directories, ["d1", "d2", "d3", "d4", "d5"], "the five largest readable root directories")
         XCTAssertEqual(capture.nodes, t.snapshot.nodes.count)
         XCTAssertEqual(capture.settleTimeouts, 0, "no treemap view, so every transition settles at once")
+        let original = try Data(contentsOf: output)
+        let refusedWrite = expectation(description: "existing frame output refused")
+        var retry: PhaseGateRunner.Outcome?
+        runner.run(session: session, requiredRoot: "/gate", minimumNodes: 0, output: output, completion: {
+            retry = $0
+            refusedWrite.fulfill()
+        })
+        await fulfillment(of: [refusedWrite], timeout: 30)
+        guard case .failed(let message)? = retry else { return XCTFail("existing frame output accepted") }
+        XCTAssertTrue(message.contains("capture failed"), message)
+        XCTAssertEqual(try Data(contentsOf: output), original)
+
         #if DEBUG
         XCTAssertEqual(capture.build, "Debug")
         #else

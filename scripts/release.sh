@@ -159,7 +159,7 @@ IDENTITY
     tool "$XCODEBUILD" archive -project apple/Tesserae.xcodeproj -scheme Tesserae \
         -configuration Release -destination 'generic/platform=macOS' \
         -archivePath "$WORK/Tesserae.xcarchive" -derivedDataPath apple/build/DerivedData \
-        'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO "CURRENT_PROJECT_VERSION=$BUILD_VERSION" "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY"
+        'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO "CURRENT_PROJECT_VERSION=$BUILD_VERSION" "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='
     tool "$PYTHON" - "$WORK/ExportOptions.plist" "$DEVELOPMENT_TEAM" "$CODE_SIGN_IDENTITY" <<'EXPORT'
 import plistlib, sys
 with open(sys.argv[1], "wb") as out:
@@ -173,6 +173,7 @@ EXPORT
     tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP/Contents/Helpers/applesauce"
     tool "$CODESIGN" --force --sign "$CODE_SIGN_IDENTITY" --options runtime --timestamp "$APP"
     tool "$CODESIGN" --verify --deep --strict "$APP"
+    tool "$BASH_TOOL" "$ROOT/scripts/check-shipped-app.sh" "$APP"
     tool "$CODESIGN" -d --entitlements :- "$APP" > "$WORK/entitlements.plist"
     tool "$PYTHON" - "$WORK/entitlements.plist" <<'ENTITLEMENTS'
 import pathlib, plistlib, sys

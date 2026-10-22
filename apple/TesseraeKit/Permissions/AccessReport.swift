@@ -17,6 +17,7 @@
 import Darwin
 import Foundation
 
+#if TESSERAE_TEST_HOOKS
 public struct AccessReport: Codable, Sendable {
     public struct Scan: Codable, Sendable {
         public let root: String
@@ -74,14 +75,15 @@ public enum AccessReportRunner {
     public static func run(_ configuration: AccessReportConfiguration,
                            probe: AccessProbe = AccessProbe()) async throws -> Int32 {
         try await Task.detached(priority: .userInitiated) {
+            let output = try TestHookOutput(configuration.output)
             let result = probe.inspect()
             // Keep the probe evidence even if the subsequent scan cannot start or finish.
-            try AccessReport(probe: result).encoded().write(to: configuration.output, options: .atomic)
+            try AccessReport(probe: result).encoded().withUnsafeBytes { try output.write($0) }
             guard let root = configuration.scanRoot else { return Int32(0) }
             let started = ContinuousClock.now
             guard let handle = ScanHandle(root: root, options: .init()) else {
                 try AccessReport(probe: result, scanError: EINVAL).encoded()
-                    .write(to: configuration.output, options: .atomic)
+                    .withUnsafeBytes { try output.write($0) }
                 return Int32(1)
             }
             // Always consume the handle, including on cancellation and failure.
@@ -102,8 +104,55 @@ public enum AccessReportRunner {
             }
             let error: Int32? = status < 0 ? -status : (snapshot == nil ? EIO : nil)
             try AccessReport(probe: result, scan: metrics, scanError: error).encoded()
-                .write(to: configuration.output, options: .atomic)
+                .withUnsafeBytes { try output.write($0) }
             return error == nil ? Int32(0) : Int32(1)
         }.value
     }
 }
+
+/// Test reports may create new files only inside this process's temporary directory.
+/// Walk beneath an anchored directory descriptor so a symlink cannot escape it.
+final class TestHookOutput {
+    private let descriptor: Int32
+
+    init(_ url: URL) throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath().standardizedFileURL.path
+        // Resolve the temporary directory's system alias (/var -> /private/var),
+        // but never resolve caller-controlled components beneath it.
+        let path = url.standardizedFileURL.path
+        let aliases = [root, URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path]
+        guard let prefix = aliases.first(where: { path.hasPrefix($0 + "/") }),
+              !url.path.contains("\0") else { throw POSIXError(.EPERM) }
+        let components = path.dropFirst(prefix.count + 1).split(separator: "/").map(String.init)
+        guard let name = components.last else { throw POSIXError(.EINVAL) }
+        var parent = Darwin.open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard parent >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(parent) }
+        for component in components.dropLast() {
+            let next = component.withCString { Darwin.openat(parent, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+            guard next >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            Darwin.close(parent)
+            parent = next
+        }
+        descriptor = name.withCString {
+            Darwin.openat(parent, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        }
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+
+    deinit { Darwin.close(descriptor) }
+
+    func write(_ bytes: UnsafeRawBufferPointer) throws {
+        guard ftruncate(descriptor, 0) == 0, lseek(descriptor, 0, SEEK_SET) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var offset = 0
+        while offset < bytes.count {
+            let count = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            offset += count
+        }
+    }
+}
+#endif

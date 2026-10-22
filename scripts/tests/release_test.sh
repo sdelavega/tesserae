@@ -28,7 +28,7 @@ absent() { if grep -F -- "$2" "$1" >/dev/null; then fail "unexpected $2"; fi; }
 fixture() {
     CASE_ROOT="$TEMP/$1 space"
     mkdir -p "$CASE_ROOT/scripts" "$CASE_ROOT/apple/Tesserae.xcodeproj" "$CASE_ROOT/bin"
-    cp "$ROOT/scripts/"{release.sh,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
+    cp "$ROOT/scripts/"{release.sh,check-shipped-app.sh,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
     printf 'MARKETING_VERSION = 0.1.0;\n' > "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj"
     cat > "$CASE_ROOT/apple/Release.local.xcconfig" <<'CONFIG'
 // A shell expression here must remain inert.
@@ -115,6 +115,10 @@ XML
       mkdir -p "$dest/Tesserae.app/Contents/Frameworks/"{TesseraeKit.framework,Sparkle.framework/Versions/B/XPCServices/Downloader.xpc,Sparkle.framework/Versions/B/Updater.app}
       mkdir -p "$dest/Tesserae.app/Contents/Helpers"
       touch "$dest/Tesserae.app/Contents/Helpers/applesauce"
+      mkdir -p "$dest/Tesserae.app/Contents/MacOS"
+      printf 'shipping app' > "$dest/Tesserae.app/Contents/MacOS/Tesserae"
+      printf 'shipping framework' > "$dest/Tesserae.app/Contents/Frameworks/TesseraeKit.framework/TesseraeKit"
+      if [[ ${FAULT:-} == test-hooks ]]; then printf 'TESSERAE_FRAME_GATE' >> "$dest/Tesserae.app/Contents/MacOS/Tesserae"; fi
       [[ ${FAULT:-} != missing-framework ]] || rm -rf "$dest/Tesserae.app/Contents/Frameworks/TesseraeKit.framework"
       python3 - "$(option -exportOptionsPlist "$@")" <<'PLIST'
 import plistlib, sys
@@ -258,7 +262,7 @@ run_case gate $'just\tffi'
 run_case ffi $'xcodebuild\tarchive'
 run_case archive -exportArchive
 run_case export $'codesign\t--verify'
-for fault in verify sandbox runtime nested-runtime nested-timestamp team unsigned-xpc missing-framework; do run_case "$fault" $'hdiutil\tcreate'; done
+for fault in test-hooks verify sandbox runtime nested-runtime nested-timestamp team unsigned-xpc missing-framework; do run_case "$fault" $'hdiutil\tcreate'; done
 for fault in dmg dmg-sign; do run_case "$fault" $'xcrun\tnotarytool\tsubmit'; done
 # release_never_publishes_an_unverified_dmg.
 for fault in submit invalid rejected; do run_case "$fault" $'xcrun\tstapler\tstaple'; done

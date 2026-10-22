@@ -24,8 +24,10 @@ struct ContentView: View {
     @StateObject private var volumes = VolumeListModel()
     @StateObject private var reclaimUI = ReclaimPresentation()
     @State private var showReclaim = true
+    #if TESSERAE_TEST_HOOKS
     /// The frame-gate runner exists only when `TESSERAE_FRAME_TIMING=1`.
     @State private var phaseGate: PhaseGateRunner? = FrameTimer.shared.isEnabled ? PhaseGateRunner() : nil
+    #endif
     @State private var showScanReport = false
     @Environment(\.locale) private var locale
     @Environment(\.colorScheme) private var scheme
@@ -33,7 +35,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            #if TESSERAE_TEST_HOOKS
             if let phaseGate { PhaseGateStatus(runner: phaseGate) }
+            #endif
             if model.onboarding.showsLimitedAffordance {
                 LimitedAccessView { model.sendOnboarding(.reopen) }
             }
@@ -93,6 +97,7 @@ struct ContentView: View {
             }.interactiveDismissDisabled(reclaimUI.running)
         }
         .frame(minWidth: Self.minimumContentSize.width, minHeight: Self.minimumContentSize.height)
+        #if TESSERAE_TEST_HOOKS
         .onReceive(NotificationCenter.default.publisher(for: .init("TesseraeRunFrameGate"))) { _ in
             guard let phaseGate, let session = model.session, case .success(let gate) = FrameGateConfiguration.current
             else { return }
@@ -104,6 +109,7 @@ struct ContentView: View {
             await FrameGateAutorun.run(
                 root: root, output: gate.output, timeout: gate.timeout, model: model, runner: phaseGate)
         }
+        #endif
         .sheet(isPresented: Binding(get: { model.onboardingPresented }, set: model.setOnboardingPresented)) {
             VStack(spacing: 0) {
                 OnboardingView(state: model.onboarding, send: model.sendOnboarding)
@@ -247,6 +253,7 @@ struct ContentView: View {
     }
 }
 
+#if TESSERAE_TEST_HOOKS
 private struct PhaseGateStatus: View {
     @ObservedObject var runner: PhaseGateRunner
     var body: some View {
@@ -255,6 +262,7 @@ private struct PhaseGateStatus: View {
         }
     }
 }
+#endif
 
 struct SessionView: View {
     @ObservedObject var session: AppSession
