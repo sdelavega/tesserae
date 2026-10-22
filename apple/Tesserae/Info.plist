@@ -40,6 +40,10 @@
 	<string>JmdB15uy9xCZWWUsHHSeWzC7p7BehSvODXvK1EYi1Ig=</string>
 	<key>SUFeedURL</key>
 	<string>https://sdelavega.github.io/tesserae/appcast.xml</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

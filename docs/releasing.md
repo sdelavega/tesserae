@@ -39,7 +39,7 @@ One-time setup, performed by the maintainer on their Mac:
    Set `NOTARY_PROFILE = notarytool` in the local configuration. The
    interactive command avoids putting the password in shell history.
 3. The Sparkle key must already be in your login keychain. Local
-   `generate_appcast` uses that key directly. Use the existing key matching
+   `generate_appcast` and the final `sign_update` feed-signing pass use that same key directly. Use the existing key matching
    the committed `SUPublicEDKey`; do not generate a replacement for a release.
 4. Clone `sdelavega/homebrew-tap` to, for example, `~/src/homebrew-tap`, with
    push access, and set:
@@ -73,7 +73,13 @@ enter the feed. Deltas are disabled and all historical versions are retained.
 The result must add exactly one item for the new version and leave every
 previous item and the published document unchanged. Serializer indentation
 is normalized by inserting only the validated new item into the original
-feed bytes; altered historical content or metadata is refused. Every publish
+feed bytes; altered historical content or metadata is refused. The changing Sparkle
+signature footer is excluded from history comparisons. `SUVerifyUpdateBeforeExtraction`
+and `SURequireSignedFeed` are enabled in the app. Sparkle 2.10 `generate_appcast`
+signs feeds when an included app requires it; after the history merge, `sign_update`
+re-signs the final XML with the same EdDSA key. Verification checks both the DMG
+signature and the embedded feed signature against the committed public key.
+An unsigned feed or any edit after signing prevents verification and publishing. Every publish
 entry point fetches and checks the whole feed again before showing the diff.
 Only after verification succeeds does it write `dist/MANIFEST`: JSON fields `version`, `commit`, `dmg_sha256` and
 `verified_at` (UTC). `dist/SHA256SUMS` and the release log are retained locally.
@@ -158,7 +164,9 @@ keychain, and `NOTARY_KEYCHAIN` makes each release-script notary call read it
 explicitly. The local config is written from the variables without logging
 its values. The Sparkle secret goes to `release.sh` through stdin, is consumed
 up front into a non-exported shell variable, and reaches
-`generate_appcast --ed-key-file -` through a here-string. Other tools see EOF
+both `generate_appcast --ed-key-file -` and the final
+`sign_update --ed-key-file -` through private here-strings. It is unset after the
+last signing pass. Other tools see EOF
 on stdin; the key is never written to a key file. Child
 tools receive the same environment allowlist, with `GH_TOKEN` added only for
 authenticated `gh` commands. Certificate exports such as

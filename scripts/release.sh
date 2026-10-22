@@ -266,11 +266,18 @@ NOTARY_LOG
     if [[ $MODE == --ci-publish ]]; then
         sparkle_args+=(--ed-key-file -)
         tool "$tools/generate_appcast" "${sparkle_args[@]}" "$WORK/feed" <<< "$SPARKLE_STDIN_KEY"
-        unset SPARKLE_STDIN_KEY
     else
         tool "$tools/generate_appcast" "${sparkle_args[@]}" "$WORK/feed"
     fi
     tool "$PYTHON" -I scripts/appcast-history.py merge "$WORK/published.xml" "$WORK/feed/appcast.xml" "$BUILD_VERSION"
+    # generate_appcast signs feeds required by SURequireSignedFeed. The byte-
+    # preserving history merge changes those bytes, so sign the final feed again.
+    if [[ $MODE == --ci-publish ]]; then
+        tool "$tools/sign_update" --disable-signing-warning --ed-key-file - "$WORK/feed/appcast.xml" <<< "$SPARKLE_STDIN_KEY"
+        unset SPARKLE_STDIN_KEY
+    else
+        tool "$tools/sign_update" --disable-signing-warning "$WORK/feed/appcast.xml"
+    fi
     tool "$CP" "$WORK/feed/appcast.xml" dist/appcast.xml
     tool "$BASH_TOOL" scripts/appcast-check.sh "$VERSION" "$WORK/published.xml"
     local manifest_head

@@ -73,4 +73,5 @@ CHECK
 )
 { IFS= read -r PUBLIC_VERIFY_INPUT; IFS= read -r SIGNATURE; } <<< "$VERIFY_KEY"
 printf '%s\n' "$PUBLIC_VERIFY_INPUT" | tool "$TOOLS/sign_update" --verify "dist/Tesserae-$VERSION.dmg" "$SIGNATURE" --ed-key-file -
+printf '%s\n' "$PUBLIC_VERIFY_INPUT" | tool "$TOOLS/sign_update" --verify dist/appcast.xml --ed-key-file -
 echo 'Appcast matches the DMG, release notes and committed public key'

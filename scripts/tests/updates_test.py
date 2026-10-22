@@ -48,6 +48,8 @@ class UpdatesTests(unittest.TestCase):
             self.assertEqual(info["SUPublicEDKey"], "JmdB15uy9xCZWWUsHHSeWzC7p7BehSvODXvK1EYi1Ig=")
             self.assertEqual(urlparse(info["SUFeedURL"]).scheme, "https")
             self.assertEqual(info["SUFeedURL"], "https://sdelavega.github.io/tesserae/appcast.xml")
+            self.assertIs(info.get("SUVerifyUpdateBeforeExtraction"), True)
+            self.assertIs(info.get("SURequireSignedFeed"), True)
             self.assertIs(info["SUEnableAutomaticChecks"], True)
             self.assertEqual(info["SUScheduledCheckInterval"], 86400)
             self.assertIs(info["SUEnableSystemProfiling"], False)

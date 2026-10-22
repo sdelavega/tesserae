@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +32,14 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 URL = "https://github.com/sdelavega/tesserae/releases/download/v0.1.0/Tesserae-0.1.0.dmg"
+
+
+def signed_feed(data):
+    # An inert digest stands in for EdDSA in the fake tools; production delegates
+    # cryptographic verification to the resolved Sparkle sign_update executable.
+    data = data.split(b"<!-- sparkle-signatures:")[0]
+    signature = base64.b64encode(hashlib.sha512(data).digest())
+    return data + b"<!-- sparkle-signatures:\nedSignature: " + signature + b"\nlength: " + str(len(data)).encode() + b"\n-->\n"
 
 
 class PublishingTests(unittest.TestCase):
@@ -108,6 +117,8 @@ class PublishingTests(unittest.TestCase):
         if change:
             change(item, enclosure)
         ET.ElementTree(rss).write(self.repo / "dist/appcast.xml", encoding="utf-8", xml_declaration=True)
+        path = self.repo / "dist/appcast.xml"
+        path.write_bytes(signed_feed(path.read_bytes()))
 
     def run_script(self, script, *args, input="", success=True, standalone=False):
         command = ["bash", str(self.repo / "scripts" / script), "0.1.0", *args]
@@ -168,6 +179,23 @@ class PublishingTests(unittest.TestCase):
                         self.assertIn("spctl --assess --type open --context context:primary-signature", self.trace())
                     self.git("tag", "-f", "v0.1.0", "HEAD")
 
+    def test_unsigned_or_tampered_feed_refuses_verification_and_publishing(self):
+        path = self.repo / "dist/appcast.xml"
+        original = path.read_bytes()
+        self.assertIn(b"<rss", original, "precondition: valid feed with a valid enclosure")
+        self.assertIn(b"<!-- sparkle-signatures:", original, "precondition: initially signed")
+        tampered = original.replace(b"<rss", b"<rss tampered=\"yes\"", 1)
+        tampered = re.sub(rb"length: [0-9]+", b"length: " + str(len(tampered.split(b"<!-- sparkle-signatures:")[0])).encode(), tampered)
+        for content in (original.split(b"<!-- sparkle-signatures:")[0], tampered):
+            with self.subTest(content=content[:20]):
+                path.write_bytes(content)
+                self.calls.write_text("")
+                self.run_script("appcast-check.sh", success=False)
+                self.run_script("publish.sh", input="0.1.0\n", success=False)
+                self.assertNotIn("gh ", self.trace())
+                self.assertNotIn("git tag", self.trace())
+                self.assertNotIn("git push", self.trace())
+
     def test_appcast_entry_matches_dmg_and_public_key(self):
         self.run_script("appcast-check.sh")
         self.assertIn("sign_update --verify", self.trace())
@@ -212,7 +240,7 @@ class PublishingTests(unittest.TestCase):
         # The new item is serialized independently so historical bytes stay exact.
         new_item = ET.tostring(ET.parse(path).find("./channel/item"))
         candidate = old.replace(b'</channel>', new_item + b'</channel>')
-        path.write_bytes(candidate)
+        path.write_bytes(signed_feed(candidate))
         self.run_script("appcast-check.sh")
         for fault in ("extra", "duplicate", "delta", "rebound-delta", "alternate-delta", "namespaced-enclosure", "rebound-version", "altered", "bytes", "removed", "metadata"):
             with self.subTest(fault=fault):
@@ -238,7 +266,7 @@ class PublishingTests(unittest.TestCase):
                 elif fault == "removed": raw = raw.replace(old_item, b'')
                 else: raw = raw.replace(b'<title>Feed', b'<title>Changed')
                 self.assertNotEqual(raw, candidate)
-                path.write_bytes(raw)
+                path.write_bytes(signed_feed(raw))
                 self.calls.write_text("")
                 self.run_script("appcast-check.sh", success=False)
                 self.run_script("publish.sh", input="0.1.0\n", success=False)
@@ -254,7 +282,7 @@ class PublishingTests(unittest.TestCase):
         alternate = original.replace(b"ns0:", b"update:").replace(b"xmlns:ns0=", b"xmlns:update=")
         self.assertNotEqual(alternate, original)
         self.assertIn(b"update:edSignature", alternate)
-        path.write_bytes(alternate)
+        path.write_bytes(signed_feed(alternate))
         self.run_script("appcast-check.sh")
 
     def test_pinned_sparkle_parser_recognizes_rebound_delta(self):
@@ -291,12 +319,13 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(len(parsed), 2)
         self.assertTrue(result.startswith(old[:-len(b'</channel></rss>')]))
         self.publish_feed(old)
+        path.write_bytes(signed_feed(path.read_bytes()))
         self.run_script("appcast-check.sh")
         for fault in ("altered", "extra", "metadata"):
             raw = generated.replace(b'immutable', b'changed') if fault == "altered" else generated
             if fault == "extra": raw = raw.replace(b'</channel>', old_item + b'</channel>')
             if fault == "metadata": raw = raw.replace(b'<title>Feed', b'<title>Changed')
-            path.write_bytes(raw)
+            path.write_bytes(signed_feed(raw))
             merge(False)
 
     def test_confirmation_exact_and_preflight(self):
@@ -332,7 +361,7 @@ class PublishingTests(unittest.TestCase):
         self.assertNotEqual(self.git("rev-parse", "origin/gh-pages"), fresh)
         path = self.repo / "dist/appcast.xml"
         item = ET.tostring(ET.parse(path).find("./channel/item"))
-        path.write_bytes(old.replace(b'</channel>', item + b'</channel>'))
+        path.write_bytes(signed_feed(old.replace(b'</channel>', item + b'</channel>')))
         self.env["FAULT"] = "pages-propagation"
         out = self.run_script("publish.sh", input="0.1.0\n")
         self.assertIn("Fresh remote feed", out)
@@ -496,6 +525,13 @@ elif name == "sign_update":
     raw = base64.b64decode(sys.stdin.readline())
     assert raw == bytes(64) + bytes(range(32))
     record("PUBLIC_KEY_OK")
+    if args[1].endswith(".xml"):
+        import hashlib
+        data = pathlib.Path(args[1]).read_bytes()
+        content = data.split(b"<!-- sparkle-signatures:")[0]
+        signature = base64.b64encode(hashlib.sha512(content).digest())
+        expected = content + b"<!-- sparkle-signatures:\nedSignature: " + signature + b"\nlength: " + str(len(content)).encode() + b"\n-->\n"
+        sys.exit(0 if data == expected else 1)
     sys.exit(0 if args[2] == "fake-signature" else 1)
 elif name == "gh":
     assert os.environ.get("GH_TOKEN") == "planted-gh-auth"

@@ -17,11 +17,23 @@
 
 
 import pathlib
+import re
 import sys
 import xml.etree.ElementTree as ET
 from xml.parsers import expat
 
 NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+
+
+def content(data):
+    # Sparkle 2.10 signs the document bytes before its trailing signature block.
+    # History comparisons exclude that changing footer, but preserve all XML bytes.
+    if b"<!-- sparkle-signatures:" not in data:
+        return data
+    match = re.fullmatch(rb"(.*)<!-- sparkle-signatures:\nedSignature: ([A-Za-z0-9+/=]+)\nlength: ([0-9]+)\n-->\n", data, re.S)
+    if not match or b"<!-- sparkle-signatures:" in match[1] or int(match[3]) != len(match[1]):
+        sys.exit("Invalid appcast signing block")
+    return match[1]
 
 
 def parse(data):
@@ -71,7 +83,9 @@ def shape(element):
 
 
 def process(mode, baseline, candidate, build):
-    data = pathlib.Path(candidate).read_bytes()
+    data = content(pathlib.Path(candidate).read_bytes())
+    if mode == "merge":
+        pathlib.Path(candidate).write_bytes(data)
     tree, items, spans, _ = parse(data)
     current = [i for i, item in enumerate(items) if version(item) == build]
     if len(current) != 1:
@@ -97,7 +111,7 @@ def process(mode, baseline, candidate, build):
                 sys.exit("Appcast release control has an unexpected namespace")
     if len(enclosures) != 1 or item.find("enclosure") is None:
         sys.exit("Appcast new item must have one enclosure and no deltas")
-    old = pathlib.Path(baseline).read_bytes()
+    old = content(pathlib.Path(baseline).read_bytes())
     if not old:
         if len(items) != 1:
             sys.exit("Appcast has unexpected items")

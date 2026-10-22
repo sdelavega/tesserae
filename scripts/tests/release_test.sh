@@ -85,7 +85,41 @@ E.SubElement(item, 'enclosure', {'url':'https://github.com/sdelavega/tesserae/re
 E.ElementTree(rss).write(Path(sys.argv[1]) / 'appcast.xml')
 XML
     ;;
- sign_update) [[ ! -e dist/MANIFEST ]] || exit 105; [[ $1 == --verify && $3 == fake-signature ]] || exit 102; IFS= read -r public_input; [[ -n $public_input ]] ;;
+ sign_update)
+    [[ ! -e dist/MANIFEST ]] || exit 105
+    if [[ $1 == --verify ]]; then
+        IFS= read -r public_input; [[ -n $public_input ]]
+        if [[ $2 == *.xml ]]; then
+            python3 -I - "$2" <<'VERIFY_FEED'
+import base64, hashlib, pathlib, sys
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+content = raw.split(b'<!-- sparkle-signatures:')[0]
+sig = base64.b64encode(hashlib.sha512(content).digest())
+assert raw == content + b'<!-- sparkle-signatures:\nedSignature: ' + sig + b'\nlength: ' + str(len(content)).encode() + b'\n-->\n'
+VERIFY_FEED
+        else [[ $3 == fake-signature ]] || exit 102; fi
+    else
+        [[ $1 == --disable-signing-warning ]] || exit 102
+        if [[ ${CI:-} == true ]]; then
+            [[ $2 == --ed-key-file && $3 == - ]] || exit 106
+            IFS= read -r fake_ci_input; [[ $fake_ci_input == fake-ci-stdin ]] || exit 104
+            printf 'FEED_CI_STDIN_OK\n' >> "$CALLS"
+        fi
+        for feed in "$@"; do :; done
+        python3 -I - "$feed" "$FAULT" <<'SIGN_FEED'
+import base64, hashlib, pathlib, sys
+path = pathlib.Path(sys.argv[1]); data = path.read_bytes().split(b'<!-- sparkle-signatures:')[0]
+if sys.argv[2] != 'unsigned-feed':
+    sig = base64.b64encode(hashlib.sha512(data).digest())
+    data += b'<!-- sparkle-signatures:\nedSignature: ' + sig + b'\nlength: ' + str(len(data)).encode() + b'\n-->\n'
+if sys.argv[2] == 'tampered-feed':
+    import re
+    data = data.replace(b'<rss', b'<rss tampered="yes"', 1)
+    data = re.sub(rb'length: [0-9]+', b'length: ' + str(len(data.split(b'<!-- sparkle-signatures:')[0])).encode(), data)
+path.write_bytes(data)
+SIGN_FEED
+    fi
+    ;;
  git)
     case "$1" in
       status)
@@ -207,6 +241,9 @@ run_release() {
       bash "$CASE_ROOT/scripts/release.sh" "$@" > "$CASE_ROOT/output" 2>&1 || status=$?
     if [[ $expected == success ]]; then
         [[ $status == 0 ]] || { cat "$CASE_ROOT/output"; fail "happy path exited $status"; }
+    elif [[ $expected == feed-failure ]]; then
+        [[ $status != 0 ]] || fail "accepted feed failure ${FAULT:-}"
+        (cd "$CASE_ROOT/dist" && shasum -a 256 -c SHA256SUMS) || fail 'verified DMG checksum changed'
     else
         [[ $status != 0 ]] || fail "accepted failure ${FAULT:-}"
         [[ ! -e $CASE_ROOT/dist/SHA256SUMS && ! -e $CASE_ROOT/dist/Tesserae-0.1.0.dmg ]] || fail 'unverified artifacts escaped'
@@ -225,7 +262,11 @@ run_case() {
       missing-config) rm "$CASE_ROOT/apple/Release.local.xcconfig" ;;
       version) sed -i.bak 's/0.1.0/0.2.0/' "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj" ;;
     esac
-    run_release failure 0.1.0
+    if [[ $fault == unsigned-feed || $fault == tampered-feed ]]; then
+        run_release feed-failure 0.1.0
+    else
+        run_release failure 0.1.0
+    fi
     absent "$CALLS" "$stop"
     # Each scenario must reach its intended boundary before failing.
     case "$fault" in
@@ -240,6 +281,7 @@ run_case() {
       identity) contains "$CASE_ROOT/output" 'identity is unavailable' ;;
       profile) contains "$CALLS" $'xcrun\tnotarytool\thistory' ;;
       gate|ffi) contains "$CALLS" "$(printf 'just\t%s' "$fault")" ;;
+      unsigned-feed|tampered-feed) contains "$CALLS" $'sign_update\t--verify\tdist/appcast.xml' ;;
       archive) contains "$CALLS" $'xcodebuild\tarchive' ;;
       export|missing-framework) contains "$CALLS" -exportArchive ;;
       verify|sandbox|runtime|team|unsigned-xpc) contains "$CALLS" $'codesign\t--verify' ;;
@@ -272,6 +314,8 @@ run_case spctl $'hdiutil\tattach'
 run_case attach $'spctl\t--assess\t--type\texecute'
 run_case execute 'SHOULD_NEVER_APPEAR'
 run_case detach 'SHOULD_NEVER_APPEAR'
+run_case unsigned-feed 'SHOULD_NEVER_APPEAR'
+run_case tampered-feed 'SHOULD_NEVER_APPEAR'
 if [[ -z ${ONLY_CASE:-} || $ONLY_CASE == happy ]]; then
     fixture happy; FAULT=
     mkdir -p "$CASE_ROOT/dist"
@@ -351,6 +395,7 @@ if [[ -z ${ONLY_CASE:-} || $ONLY_CASE == publish ]]; then
     contains "$CASE_ROOT/output" 'TESSERAE_TAP_DIR'
     contains "$CALLS" EARLY_STDIN_EOF_OK
     contains "$CALLS" CI_STDIN_OK
+    contains "$CALLS" FEED_CI_STDIN_OK
     [[ -s $CALLS.env ]] || fail 'missing CI child environment records'
     absent "$CALLS.env" fake-ci-stdin
     if grep -R -F fake-ci-stdin "$CASE_ROOT/dist" >/dev/null; then fail 'CI key in dist'; fi
