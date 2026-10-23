@@ -28,7 +28,7 @@ absent() { if grep -F -- "$2" "$1" >/dev/null; then fail "unexpected $2"; fi; }
 fixture() {
     CASE_ROOT="$TEMP/$1 space"
     mkdir -p "$CASE_ROOT/scripts" "$CASE_ROOT/apple/Tesserae.xcodeproj" "$CASE_ROOT/bin"
-    cp "$ROOT/scripts/"{release.sh,check-shipped-app.sh,verify-release-input.py,sparkle-tools.sha256,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
+    cp "$ROOT/scripts/"{release.sh,build-release-input.sh,check-shipped-app.sh,verify-release-input.py,sparkle-tools.sha256,release-tools.sh,make-dmg.sh,bundle-version.sh,appcast-check.sh,appcast-history.py,publish.sh} "$CASE_ROOT/scripts/"
     printf 'MARKETING_VERSION = 0.1.0;\n' > "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj"
     cat > "$CASE_ROOT/apple/Release.local.xcconfig" <<'CONFIG'
 // A shell expression here must remain inert.
@@ -298,6 +298,21 @@ run_case() {
     esac
     echo "PASS $fault"
 }
+# Matching project versions ensure rejection comes from policy, not a mismatch.
+if [[ -z ${ONLY_CASE:-} || $ONLY_CASE == forbidden-version ]]; then
+    fixture forbidden-version; FAULT=
+    printf 'MARKETING_VERSION = 0.6.66;\n' > "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj"
+    contains "$CASE_ROOT/apple/Tesserae.xcodeproj/project.pbxproj" '0.6.66'
+    run_release failure 0.6.66
+    contains "$CASE_ROOT/output" 'Version 0.6.66 is not allowed (contains 666); next allowed: 0.6.67'
+    [[ ! -s $CALLS ]] || fail 'forbidden version reached release tools'
+    status=0
+    /usr/bin/env -i PATH="$CASE_ROOT/bin:$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" bash "$CASE_ROOT/scripts/build-release-input.sh" 0.6.66 > "$CASE_ROOT/output" 2>&1 || status=$?
+    [[ $status != 0 ]] || fail 'CI accepted forbidden version'
+    contains "$CASE_ROOT/output" 'Version 0.6.66 is not allowed (contains 666); next allowed: 0.6.67'
+    [[ ! -s $CALLS ]] || fail 'forbidden version reached CI build tools'
+    echo 'PASS forbidden version stops local and CI builds'
+fi
 # release_refuses_dirty_tree_and_version_mismatch and all ordered failure boundaries.
 for fault in dirty branch fetch stale version tag missing-config identity wrong-team profile; do run_case "$fault" $'just\tgate'; done
 run_case gate $'just\tffi'

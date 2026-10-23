@@ -17,10 +17,16 @@
 
 
 set -euo pipefail
+next_allowed=0
+if [[ ${1:-} == --next-allowed ]]; then
+    next_allowed=1
+    shift
+fi
 if [[ $# != 1 || ! $1 =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    echo 'Usage: bundle-version.sh <x.y.z> (each component 0–99)' >&2
+    echo 'Usage: bundle-version.sh [--next-allowed] <x.y.z> (each component 0–99)' >&2
     exit 1
 fi
+version=$1
 parts=()
 for part in "${BASH_REMATCH[@]:1}"; do
     # Strip leading zeroes before arithmetic, including arbitrarily long input.
@@ -31,4 +37,34 @@ for part in "${BASH_REMATCH[@]:1}"; do
     fi
     parts+=("$((10#$part))")
 done
-printf '%d\n' "$((parts[0] * 10000 + parts[1] * 100 + parts[2]))"
+build=$((parts[0] * 10000 + parts[1] * 100 + parts[2]))
+if [[ $next_allowed == 0 && $version != *666* && $build != *666* ]]; then
+    printf '%d\n' "$build"
+    exit 0
+fi
+
+# Carry at the existing 0–99 component limit so every candidate is valid.
+while :; do
+    parts[2]=$((parts[2] + 1))
+    if [[ ${parts[2]} == 100 ]]; then
+        parts[2]=0
+        parts[1]=$((parts[1] + 1))
+    fi
+    if [[ ${parts[1]} == 100 ]]; then
+        parts[1]=0
+        parts[0]=$((parts[0] + 1))
+    fi
+    if [[ ${parts[0]} == 100 ]]; then
+        echo 'No next allowed version within the 0–99 component range' >&2
+        exit 1
+    fi
+    candidate="${parts[0]}.${parts[1]}.${parts[2]}"
+    build=$((parts[0] * 10000 + parts[1] * 100 + parts[2]))
+    [[ $candidate == *666* || $build == *666* ]] || break
+done
+if [[ $next_allowed == 1 ]]; then
+    printf '%s\n' "$candidate"
+else
+    printf 'Version %s is not allowed (contains 666); next allowed: %s\n' "$version" "$candidate" >&2
+    exit 1
+fi

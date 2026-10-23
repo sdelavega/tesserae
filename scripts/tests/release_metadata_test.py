@@ -50,6 +50,42 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, repr(args))
             self.assertEqual(result.stdout, "")
 
+    def test_versions_containing_666(self):
+        for value, build, next_allowed in [
+                ("0.6.65", 665, None), ("0.6.66", 666, "0.6.67"),
+                ("0.6.67", 667, None), ("6.66.0", 66600, "6.67.0"),
+                ("66.6.0", 660600, None), ("0.66.60", 6660, "0.66.70")]:
+            with self.subTest(version=value):
+                self.assertEqual(sum(int(n) * weight for n, weight in
+                                     zip(value.split("."), (10000, 100, 1))), build)
+                result = self.version(value)
+                if next_allowed is None:
+                    self.assertNotIn("666", value)
+                    self.assertNotIn("666", str(build))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, f"{build}\n")
+                else:
+                    self.assertTrue("666" in value or "666" in str(build))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, f"Version {value} is not allowed "
+                                     f"(contains 666); next allowed: {next_allowed}\n")
+
+    def test_next_allowed_version(self):
+        for value, expected in [("0.6.65", "0.6.67"), ("0.6.66", "0.6.67"),
+                                ("0.6.67", "0.6.68"), ("6.66.0", "6.67.0"),
+                                ("0.66.60", "0.66.70"), ("0.1.99", "0.2.0"),
+                                ("0.99.99", "1.0.0"), ("00.08.09", "0.8.10")]:
+            with self.subTest(version=value):
+                result = self.version("--next-allowed", value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected + "\n")
+                self.assertEqual(self.version(expected).returncode, 0)
+        for value in ("99.99.99", "1.100.0", "1.2", "-1.2.3"):
+            result = self.version("--next-allowed", value)
+            self.assertNotEqual(result.returncode, 0, value)
+            self.assertEqual(result.stdout, "")
+
     def test_committed_versions(self):
         source = PROJECT.read_text()
         versions = re.findall(r"MARKETING_VERSION = ([^;]+);", source)

@@ -20,8 +20,8 @@ set -euo pipefail
 cd "${BASH_SOURCE[0]%/*}/.."
 version=${1:?VERSION required}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-just gate
 build_version=$(scripts/bundle-version.sh "$version")
+just gate
 input=apple/build/release-input
 rm -rf "$input" apple/build/release-input.xcarchive
 mkdir -p "$input/sparkle-tools"

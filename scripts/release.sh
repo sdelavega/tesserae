@@ -66,6 +66,8 @@ if [[ $MODE == --ci-publish ]]; then
     exec 0</dev/null
     [[ -n $SPARKLE_STDIN_KEY ]] || fail 'Missing Sparkle key on stdin'
 fi
+# Refuse disallowed versions before builds, signing or remote preflight.
+BUILD_VERSION=$(tool "$BASH_TOOL" "${BASH_SOURCE[0]%/*}/bundle-version.sh" "$VERSION")
 ROOT=$(cd "$(tool "$DIRNAME" "$0")/.." && pwd)
 cd "$ROOT"
 tool "$MKDIR" -p dist
@@ -157,7 +159,6 @@ IDENTITY
     local notary_args=(--keychain-profile "$NOTARY_PROFILE")
     if [[ -n ${NOTARY_KEYCHAIN:-} ]]; then notary_args+=(--keychain "$NOTARY_KEYCHAIN"); fi
     tool "$XCRUN" notarytool history "${notary_args[@]}" > /dev/null
-    BUILD_VERSION=$(tool "$BASH_TOOL" "$ROOT/scripts/bundle-version.sh" "$VERSION")
     if [[ -n $PREBUILT ]]; then
         tool "$PYTHON" -I scripts/verify-release-input.py "$PREBUILT" "$VERSION" "$(tool "$GIT" rev-parse HEAD)"
         tool /usr/bin/ditto "$PREBUILT/Tesserae.app" "$WORK/export/Tesserae.app"

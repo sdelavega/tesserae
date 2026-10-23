@@ -15,7 +15,17 @@ repository; the publishing checks use `curl` and, when installed, `brew`.
 The release version must equal every `MARKETING_VERSION` in the Xcode project.
 Commit release notes at `docs/releases/X.Y.Z.md` before building. The bundle
 version is derived as `major * 10000 + minor * 100 + patch`; use a new version
-for each release.
+for each release. Both the marketing string and the decimal build number must
+be free of the substring `666`. Local release preflight and the CI build script
+run `scripts/bundle-version.sh` before any build and refuse a forbidden version
+with the next allowed version. For example, `0.6.66` (build `666`) and `6.66.0`
+(build `66600`) are refused; `0.6.65`, `0.6.67` and `66.6.0` are allowed.
+
+Use `scripts/bundle-version.sh --next-allowed X.Y.Z` to find the first allowed
+version strictly after a version. It increments the patch, skipping forbidden
+versions, and carries at the existing component limit of 99 (patch to minor,
+minor to major). It fails if the 0–99 component range is exhausted.
+For example, the next allowed version after `0.6.65` is `0.6.67`.
 
 One-time setup, performed by the maintainer on their Mac:
 
