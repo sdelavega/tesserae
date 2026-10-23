@@ -31,7 +31,7 @@ with the project's EdDSA key, and Tesserae verifies that signature before
 installing anything.
 
 - **Check now:** **Tesserae → Check for Updates…**
-- **Turn automatic checks off:** **Tesserae → Settings…** (⌘,), then clear
+- **Turn automatic checks off:** **Tesserae → Settings… → Updates** (⌘,), then clear
   **Check for updates automatically**.
 
 Homebrew installs update through Sparkle too, so `brew upgrade` isn't needed.

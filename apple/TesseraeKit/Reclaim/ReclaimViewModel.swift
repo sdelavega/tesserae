@@ -721,12 +721,6 @@ public final class ReclaimViewModel: ObservableObject {
         return ArchiveFormat.allCases.map { ReclaimAction.archive($0) }
             .first { availability($0, for: item) == .available } ?? selected
     }
-    public func previewText(for item: ReclaimItem) -> [String] {
-        guard item.action == .compress else { return [] }
-        return [String(localized: "reclaim.processWarning",
-            defaultValue: "Processes belonging to other users could not all be inspected.", bundle: L10n.bundle,
-            comment: "Best effort open-file inspection limitation.")]
-    }
     public func selectedFormat(for item: ReclaimItem) -> ArchiveFormat {
         if case .archive(let format) = item.action { return format }
         let kind = volume(for: item).fsType
@@ -818,7 +812,7 @@ public final class ReclaimViewModel: ObservableObject {
         for item in items where item.action != .trash { startWork(for: item) }
     }
     private func startWork(for item: ReclaimItem) {
-        guard availability(item.action, for: item) == .available else { return }
+        guard item.action != .trash, availability(item.action, for: item) == .available else { return }
         let id = item.id
         generation &+= 1
         let token = generation

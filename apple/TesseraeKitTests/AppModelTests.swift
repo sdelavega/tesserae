@@ -206,8 +206,15 @@ final class AppModelTests: XCTestCase {
         XCTAssertGreaterThan(session.overlay.revision, revision, "precondition: overlay triggered re-preparation")
         XCTAssertEqual(session.reclaim.items.first?.outcomeReason, reason)
         XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, reason)
-        session.reclaim.viewModel.setAction(.trash, for: item.id)
-        XCTAssertEqual(session.reclaim.viewModel.items.first?.outcomeReason, reason)
+        let vm = session.reclaim.viewModel
+        vm.replace(session.reclaim.items, volumes: [item.id: VolumeCapabilities(isLocal: true, isWritable: true, fsType: "apfs")])
+        XCTAssertEqual(vm.availability(.compress, for: try XCTUnwrap(vm.items.first)), .available)
+        vm.setAction(.compress, for: item.id)
+        XCTAssertEqual(vm.items.first?.action, .compress, "precondition: choice differs from Trash")
+        XCTAssertEqual(vm.items.first?.outcomeReason, reason)
+        vm.setAction(.trash, for: item.id)
+        XCTAssertEqual(vm.items.first?.action, .trash, "precondition: the choice actually changed")
+        XCTAssertEqual(vm.items.first?.outcomeReason, reason)
         let prepared = Reclaim.prepare([item.id], in: tree.snapshot, context: try XCTUnwrap(session.guardContext),
             stat: stat, overlay: session.overlay, existing: session.reclaim.items, sessionID: session.id)
         session.reclaim.publish(prepared)

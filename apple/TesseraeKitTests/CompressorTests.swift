@@ -33,6 +33,7 @@ final class CompressorTests: XCTestCase {
         var free: UInt64 = 20 * 1024 * 1024 * 1024
         var unchanged = false, growing = false, logSucceeds = true
         var unsafeParent = false
+        var inspectedAllProcesses = true
         var sweepCount = 0
         var beforeRun: (@Sendable () async -> Void)?
         var afterRun: (@Sendable () -> Void)?
@@ -50,7 +51,7 @@ final class CompressorTests: XCTestCase {
                 linkCount: UInt16(f.facts.nlink)), fileID: f.recorded.fileID, isSymlink: !f.facts.isRegular && !f.recorded.isDirectory)
         }
         func volumeUUID(_ path: Data) -> String? { "volume-A" }
-        func openForWriting() -> (keys: Set<FileKey>, inspectedAll: Bool) { sweepCount += 1; return ([], true) }
+        func openForWriting() -> (keys: Set<FileKey>, inspectedAll: Bool) { sweepCount += 1; return ([], inspectedAllProcesses) }
         func append(_ e: LogEntry) -> Bool { if logSucceeds { logs.append(e) }; return logSucceeds }
         func compressEntry(run: CompressRunID) -> LogEntry? { logs.last { $0.action == "compress" && $0.compression?.runID == run } }
         func trash(_ url: URL) throws -> URL {
@@ -100,6 +101,22 @@ final class CompressorTests: XCTestCase {
         w.manifestDirectory = directory
         return Compressor(helper: URL(fileURLWithPath: "/fixture/Contents/Helpers/applesauce"), runner: w,
             files: w, openFiles: w, log: w, manifests: CompressManifest(directory: directory), context: context, argvLimit: limit)
+    }
+
+    func test_process_inspection_warning_matches_execution_probe_result() async throws {
+        let warning = "Processes belonging to other users could not all be inspected."
+        for inspectedAll in [true, false] {
+            let world = World(), staged = item(world)
+            world.inspectedAllProcesses = inspectedAll
+            let result = await (try compressor(world)).compress(staged)
+            XCTAssertEqual(world.sweepCount, 1, "precondition: execution actually inspected processes")
+            XCTAssertEqual(result.compressed, 1, "precondition: compression executed")
+            XCTAssertEqual(result.inspectedAllProcesses, inspectedAll)
+            for detail in [DetailLevel.simple, .detailed] {
+                XCTAssertEqual(result.displayResult(detailLevel: detail, locale: Locale(identifier: "en_US"))
+                    .contains(warning), !inspectedAll)
+            }
+        }
     }
 
     func test_compress_refuses_fresh_unsafe_ancestry_before_starting_helper() async throws {

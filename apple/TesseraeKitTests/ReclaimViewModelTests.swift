@@ -146,6 +146,49 @@ final class ReclaimViewModelTests: XCTestCase {
         XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
     }
 
+    func test_compress_review_does_not_claim_unperformed_process_inspection() {
+        let vm = ReclaimViewModel(items: [item(1, .ok, 512)], volumes: [1: appleVolume],
+            defaults: nil, compressionEstimate: { _ in 0 })
+        XCTAssertEqual(vm.items[0].action, .compress, "precondition: reviewing Compress")
+        let ui = ReclaimPresentation(historyLoader: { [] })
+        ui.prepare(vm.items, viewModel: vm)
+        XCTAssertTrue(ui.showingConfirmation)
+        XCTAssertFalse((ui.confirmation.notes[1] ?? []).isEmpty, "precondition: confirmation notes were built")
+        XCTAssertFalse((ui.confirmation.notes[1] ?? []).contains(
+            "Processes belonging to other users could not all be inspected."))
+        vm.replace([], volumes: [:])
+    }
+
+    func test_trash_starts_no_estimate_and_compress_estimate_is_cancelled_when_choice_changes() async {
+        let probe = CountingEstimator()
+        let staged = ReclaimItem(nodeIndex: 1, path: Data("/Fixture/image.png".utf8),
+            recorded: Recorded(fileID: 2, device: 1, isDirectory: false), recordedSize: 512, verdict: .ok)
+        let vm = ReclaimViewModel(items: [staged], volumes: [1: appleVolume], defaults: nil,
+            compressionEstimate: { _ in probe.estimate() })
+        XCTAssertEqual(vm.items[0].action, .trash, "precondition: won't-shrink file defaults to Trash")
+        vm.setAction(.trash, for: 1)
+        await vm.waitForEstimate()
+        XCTAssertEqual(probe.calls, 0)
+        XCTAssertTrue(vm.estimating.isEmpty)
+        XCTAssertNil(vm.inspectionTask(for: 1))
+        XCTAssertEqual(vm.availability(.compress, for: vm.items[0]), .available)
+        vm.setAction(.compress, for: 1)
+        XCTAssertEqual(vm.items[0].action, .compress)
+        await assertStarted(probe.started)
+        XCTAssertEqual(probe.calls, 1)
+        let pending = vm.inspectionTask(for: 1)
+        XCTAssertNotNil(pending, "precondition: estimate is running")
+        vm.setAction(.trash, for: 1)
+        XCTAssertEqual(vm.items[0].action, .trash)
+        XCTAssertTrue(vm.estimating.isEmpty)
+        XCTAssertNil(vm.inspectionTask(for: 1))
+        await pending?.value
+        await vm.waitForEstimate()
+        XCTAssertEqual(probe.cancelled, 1, "switching away cancels the running estimator")
+        XCTAssertEqual(probe.calls, 1, "explicit Trash must not start another estimate")
+        vm.replace([], volumes: [:])
+    }
+
     func test_archive_inspection_cancels_background_walk() throws {
         let path = Data(URL(fileURLWithPath: #filePath).path.utf8)
         let ordinary = try ProductionArchiveFileSystem().inspect(path)
@@ -891,5 +934,21 @@ private final class VolumeProbe: @unchecked Sendable {
     func load(_ path: Data) -> VolumeCapabilities {
         lock.withLock { count += 1 }
         return result
+    }
+}
+
+private final class CountingEstimator: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var count = 0, cancellations = 0
+    var calls: Int { lock.withLock { count } }
+    var cancelled: Int { lock.withLock { cancellations } }
+    func estimate() -> UInt64 {
+        lock.withLock { count += 1 }
+        started.signal()
+        let deadline = Date().addingTimeInterval(3)
+        while !Task.isCancelled && Date() < deadline { Thread.sleep(forTimeInterval: 0.001) }
+        if Task.isCancelled { lock.withLock { cancellations += 1 } }
+        return 256
     }
 }

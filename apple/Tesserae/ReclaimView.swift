@@ -95,7 +95,6 @@ struct ReclaimView: View {
                         Label(String(localized: "reclaimView.will.be.skipped", defaultValue: "Will be skipped",
                             comment: "ReclaimView: Will be skipped."), systemImage: "hand.raised")
                     }
-                    ForEach(Array((viewModel?.previewText(for: item) ?? []).enumerated()), id: \.offset) { _, text in Text(text) }
                     ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(reasonText(reason, detailLevel: detail.current)) }
                 }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
             }
@@ -229,7 +228,7 @@ final class ReclaimPresentation: ObservableObject {
         confirmation = TrashConfirmation(items: items)
         if let vm = viewModel ?? model?.session?.reclaim.viewModel {
             confirmation.notes = Dictionary(uniqueKeysWithValues: items.map {
-                ($0.id, [vm.estimateText(for: $0)] + vm.previewText(for: $0))
+                ($0.id, [vm.estimateText(for: $0)])
             })
         }
         choiceObservation?.cancel()

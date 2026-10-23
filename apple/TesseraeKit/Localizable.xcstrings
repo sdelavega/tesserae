@@ -453,7 +453,7 @@
       }
     },
     "fileTableView.allocated": {
-      "comment": "FileTableView: Allocated.",
+      "comment": "Bytes occupied on disk, including folder subtree totals.",
       "localizations": {
         "en": {
           "stringUnit": {

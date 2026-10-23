@@ -203,11 +203,6 @@ public struct CompressOutcome: Equatable, Sendable {
         for (node, delta) in allocatedDeltas { overlay.applyDelta(node: node, allocated: delta, logical: 0, in: snapshot) }
     }
 }
-public struct CompressionReview: Sendable {
-    public let files: [(Data, UInt64)]
-    public let skipped: [SkipReason: Int]
-    public let inspectedAll: Bool
-}
 public typealias DecompressOutcome = CompressOutcome
 
 // The session holds ReclaimCoordinator's permit through execution AND publication.
@@ -238,60 +233,6 @@ public actor Compressor {
         let directory = (log as? ReclaimLog)?.directory ?? ReclaimLog.defaultDirectory
         return Compressor(helper: helper, log: log,
             manifests: CompressManifest(directory: directory.appendingPathComponent("manifests")), context: context)
-    }
-    public nonisolated static func reviewFiles(_ item: ReclaimItem) -> [(Data, UInt64)] { reviewReport(item).files }
-    public nonisolated static func reviewReport(_ item: ReclaimItem, openFiles: (keys: Set<FileKey>, inspectedAll: Bool)? = nil) -> CompressionReview {
-        let files = ProductionCompressionFileSystem()
-        let sweep = openFiles ?? LibprocOpenFilesProbe().openForWriting()
-        let open = sweep.keys
-        var skipped: [SkipReason: Int] = [:]
-        var pending = [item.path], result: [(Data, UInt64)] = []
-        while let path = pending.popLast() {
-            if Task.isCancelled { return CompressionReview(files: [], skipped: skipped, inspectedAll: sweep.inspectedAll) }
-            guard let file = files.inspect(path), file.recorded.device == item.recorded.device else { continue }
-            if file.recorded.isDirectory {
-                pending.append(contentsOf: (try? files.children(path)) ?? [])
-            } else {
-                var evidence: Set<Data> = []
-                var probes = [path + Data("-wal".utf8), path + Data("-shm".utf8)]
-                let parts = path.split(separator: 47)
-                for i in parts.indices where foldedComponents(Data(parts[i])).last?.suffix(4) == Data(".app".utf8) {
-                    probes.append(Data([47]) + parts[...i].joined(separator: Data([47])) + Data("/Contents/_MASReceipt/receipt".utf8))
-                }
-                for probe in probes {
-                    switch files.lstat(probe) {
-                    case .error(let code) where code == ENOENT || code == ENOTDIR: break
-                    default: evidence.insert(probe)
-                    }
-                }
-                if let reason = compressEligibility(path: path, stat: file.facts,
-                    context: EligibilityContext(openForWriting: open, existingPaths: evidence)) {
-                    skipped[reason, default: 0] += 1
-                } else { result.append((path, file.facts.size)) }
-            }
-        }
-        return CompressionReview(files: result, skipped: skipped, inspectedAll: sweep.inspectedAll)
-    }
-    public nonisolated static func reviewFacts(_ item: ReclaimItem, context: GuardContext, files supplied: [(Data, UInt64)]? = nil) -> ArchiveItemFacts {
-        let files = supplied ?? reviewFiles(item)
-        var facts = ArchiveItemFacts(largestFileSize: files.map { $0.1 }.max() ?? 0,
-            eligibleBytes: files.reduce(0) { sum, file in
-                let (total, overflow) = sum.addingReportingOverflow(file.1); return overflow ? UInt64.max : total
-            })
-        let stat = ProductionFileStat()
-        for (path, _) in files {
-            if foldedComponents(path).contains(where: { $0.suffix(4) == Data(".app".utf8) }) { facts.containsAppBundle = true }
-            var parent = path
-            while let slash = parent.lastIndex(of: 47), slash > parent.startIndex {
-                parent = Data(parent[..<slash])
-                if !pathIsWithin(parent, root: context.volumeRoot) { break }
-                switch stat.lstat(parent + Data("/.git".utf8)) {
-                case .error(let code) where code == ENOENT || code == ENOTDIR: break
-                default: facts.containsGitWorkingTree = true
-                }
-            }
-        }
-        return facts
     }
     public func reviewDecompression(run: CompressRunID) -> DecompressConfirmation? {
         guard let rows = try? manifests.read(run), !rows.isEmpty else { return nil }
