@@ -95,7 +95,7 @@ struct ReclaimView: View {
                         Label(String(localized: "reclaimView.will.be.skipped", defaultValue: "Will be skipped",
                             comment: "ReclaimView: Will be skipped."), systemImage: "hand.raised")
                     }
-                    ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(reasonText(reason, detailLevel: detail.current)) }
+                    ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(warningText(reason, for: item, detailLevel: detail.current)) }
                 }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
             }
             Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy)

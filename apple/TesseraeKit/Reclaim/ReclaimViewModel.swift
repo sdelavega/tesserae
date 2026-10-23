@@ -197,6 +197,15 @@ public func reasonText(_ r: Reason, detailLevel: DetailLevel = .detailed) -> Str
     }
 }
 
+public func warningText(_ reason: Reason, for item: ReclaimItem, detailLevel: DetailLevel = .detailed) -> String {
+    if reason == .largeFile && item.recorded.isDirectory {
+        return String(localized: "reclaimAction.largeFileInFolder",
+            defaultValue: "Each file is compressed whole; cancelling stops between files.", bundle: L10n.bundle,
+            comment: "Compression warning for a folder containing files larger than 4 GiB; cancellation stops between whole files.")
+    }
+    return reasonText(reason, detailLevel: detailLevel)
+}
+
 public func itemWarnings(_ item: ReclaimItem) -> [Reason] {
     var reasons = item.warnings
     if case .warn(let reason) = item.verdict, !reasons.contains(reason) { reasons.insert(reason, at: 0) }
@@ -219,12 +228,12 @@ public struct TrashConfirmation {
     public var warningItems: [ReclaimItem] { items.filter { if case .denied = $0.verdict { return false }; return $0.actionAvailability == .available && !itemWarnings($0).isEmpty } }
     public var groupedForConfirmation: [(ReclaimAction, [ReclaimItem])] { confirmationGroups(items) }
     public var warningRows: [WarningRow] {
-        warningItems.map { WarningRow(id: $0.id, path: $0.displayPath,
-                                      texts: itemWarnings($0).map { reasonText($0) }) }
+        warningItems.map { item in WarningRow(id: item.id, path: item.displayPath,
+                                      texts: itemWarnings(item).map { warningText($0, for: item) }) }
     }
     public func warningRows(for detailLevel: DetailLevel) -> [WarningRow] {
         warningItems.map { item in WarningRow(id: item.id, path: item.displayPath,
-            texts: itemWarnings(item).map { reasonText($0, detailLevel: detailLevel) }) }
+            texts: itemWarnings(item).map { warningText($0, for: item, detailLevel: detailLevel) }) }
     }
     public var checkingItems: [ReclaimItem] { items.filter(\.isCheckingArchive) }
     public var deniedItems: [ReclaimItem] { items.filter { if $0.isCheckingArchive { return false }; if case .denied = $0.verdict { return true }; return $0.actionAvailability != .available } }
@@ -648,12 +657,53 @@ public func confirmationGroups(_ items: [ReclaimItem]) -> [(ReclaimAction, [Recl
     }
 }
 
+// Suspended callers consume no worker threads. Cancellation removes queued work.
+private actor EstimateSlots {
+    private var active = 0
+    private var waiting: [(UUID, CheckedContinuation<Bool, Never>)] = []
+    func acquire() async -> Bool {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return false }
+            if active < 3 { active += 1; return true }
+            return await withCheckedContinuation { waiting.append((id, $0)) }
+        } onCancel: { Task { await self.cancel(id) } }
+    }
+    private func cancel(_ id: UUID) {
+        guard let index = waiting.firstIndex(where: { $0.0 == id }) else { return }
+        waiting.remove(at: index).1.resume(returning: false)
+    }
+    func release() {
+        if waiting.isEmpty { active -= 1 }
+        else { waiting.removeFirst().1.resume(returning: true) }
+    }
+}
+
+private struct EstimateKey: Hashable {
+    let node: UInt32
+    let path: Data
+    let inode: UInt64
+    let device: Int32
+    let directory: Bool
+    let session: UUID?
+    let revision: UInt64
+    let size: UInt64?
+    let action: ReclaimAction
+    init(_ item: ReclaimItem) {
+        node = item.id; path = item.path; inode = item.recorded.fileID; device = item.recorded.device
+        directory = item.recorded.isDirectory; session = item.sessionID; revision = item.overlayRevision
+        size = item.recordedSize; action = item.action
+    }
+}
+
 @MainActor
 public final class ReclaimViewModel: ObservableObject {
     @Published public private(set) var items: [ReclaimItem]
     @Published public private(set) var estimating: Set<UInt32> = []
     @Published public private(set) var checking: Set<UInt32> = []
     @Published private var estimates: [UInt32: UInt64] = [:]
+    private var estimateCache: [EstimateKey: UInt64] = [:]
+    private let estimateSlots = EstimateSlots()
     private var originals: [ReclaimItem]
     private var volumes: [UInt32: VolumeCapabilities]
     private var volumeCache: [Int32: VolumeCapabilities] = [:]
@@ -791,18 +841,34 @@ public final class ReclaimViewModel: ObservableObject {
         }
     }
     public func replace(_ items: [ReclaimItem], volumes: [UInt32: VolumeCapabilities]) {
-        generation &+= 1
-        for task in tasks.values { task.cancel() }
-        tasks = [:]; tokens = [:]; checking = []; estimating = []; inspected = [:]
         let previous = Dictionary(uniqueKeysWithValues: originals.map { ($0.id, $0) })
+        let oldKeys = Dictionary(uniqueKeysWithValues: self.items.map { ($0.id, EstimateKey($0)) })
+        let oldVolumes = self.volumes
         let incoming = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         choices = choices.filter { id, _ in
             guard let old = previous[id], let new = incoming[id] else { return false }
             return old.path == new.path && old.recorded == new.recorded && old.sessionID == new.sessionID
         }
-        self.volumes = volumes
-        originals = items; estimates = [:]
-        resolveVolumes(); rebuild(); startSelectedWork()
+        self.volumes = volumes; originals = items
+        resolveVolumes(); rebuild()
+        let retained = Set(self.items.compactMap { item -> UInt32? in
+            let old = oldVolumes[item.id], new = self.volumes[item.id]
+            return oldKeys[item.id] == EstimateKey(item) && old?.fsType == new?.fsType
+                && old?.isWritable == new?.isWritable && old?.isLocal == new?.isLocal ? item.id : nil
+        })
+        for (id, task) in tasks where !retained.contains(id) { task.cancel() }
+        tasks = tasks.filter { retained.contains($0.key) }; tokens = tokens.filter { retained.contains($0.key) }
+        checking.formIntersection(retained); estimating.formIntersection(retained)
+        // Completed Archive checks are live evidence: refresh them on the next preparation.
+        inspected = inspected.filter { retained.contains($0.key) && tasks[$0.key] != nil }
+        estimates = estimates.filter { retained.contains($0.key) }
+        // Keep unstaged items reusable, but never carry samples into another scan or overlay revision.
+        if !items.isEmpty {
+            estimateCache = estimateCache.filter { key, _ in
+                items.contains { $0.sessionID == key.session && $0.overlayRevision == key.revision }
+            }
+        }
+        rebuild(); startSelectedWork()
     }
     public func prepare(_ items: [ReclaimItem], context: GuardContext?) {
         self.context = context
@@ -812,7 +878,16 @@ public final class ReclaimViewModel: ObservableObject {
         for item in items where item.action != .trash { startWork(for: item) }
     }
     private func startWork(for item: ReclaimItem) {
-        guard item.action != .trash, availability(item.action, for: item) == .available else { return }
+        guard item.action != .trash, tasks[item.id] == nil,
+              availability(item.action, for: item) == .available else { return }
+        let key = EstimateKey(item)
+        if item.action == .compress {
+            guard estimates[item.id] == nil else { return }
+            if let cached = estimateCache[key] {
+                estimates[item.id] = cached
+                return
+            }
+        }
         let id = item.id
         generation &+= 1
         let token = generation
@@ -821,48 +896,60 @@ public final class ReclaimViewModel: ObservableObject {
         let compressionEstimate = compressionEstimate
         if case .archive = item.action { checking.insert(id); inspected[id] = nil; rebuild() }
         else { estimating.insert(id) }
+        let slots = estimateSlots
         tasks[id] = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-            if case .archive(let format) = item.action {
-                let work = Task.detached(priority: .utility) { () -> (ReclaimItem, [(Data, UInt64)]) in
-                    var checked = item
-                    var files: [(Data, UInt64)] = []
-                    var warnings = item.warnings
-                    if let inspection = try? archiveFiles.inspect(item.path) {
-                        checked.archiveFacts = inspection.facts
-                        files = inspection.files
-                        if inspection.stamps.contains(where: { $0.key != item.path && $0.value.mode & S_IFMT == S_IFREG && $0.value.links > 1 }),
-                           !warnings.contains(.containsHardLinks) { warnings.append(.containsHardLinks) }
-                    } else { checked.archiveFacts.containsUnknownContent = true }
-                    checked.archiveFacts.mutationAncestrySafe = archiveSafety(item.path, root)
-                    if let parent = try? archiveParts(item.path).parent {
-                        checked.archiveFacts.parentWritable = archiveCString(parent) { access($0, W_OK) == 0 }
+            guard await slots.acquire() else { return }
+            let selectedWork = Task { [weak self] in
+                guard !Task.isCancelled else { return }
+                if case .archive(let format) = item.action {
+                    let work = Task.detached(priority: .utility) { () -> (ReclaimItem, [(Data, UInt64)]) in
+                        var checked = item
+                        var files: [(Data, UInt64)] = []
+                        var warnings = item.warnings
+                        if let inspection = try? archiveFiles.inspect(item.path) {
+                            checked.archiveFacts = inspection.facts
+                            files = inspection.files
+                            if inspection.stamps.contains(where: { $0.key != item.path && $0.value.mode & S_IFMT == S_IFREG && $0.value.links > 1 }),
+                               !warnings.contains(.containsHardLinks) { warnings.append(.containsHardLinks) }
+                        } else { checked.archiveFacts.containsUnknownContent = true }
+                        checked.archiveFacts.mutationAncestrySafe = archiveSafety(item.path, root)
+                        if let parent = try? archiveParts(item.path).parent {
+                            checked.archiveFacts.parentWritable = archiveCString(parent) { access($0, W_OK) == 0 }
+                        }
+                        let reviewed = ReclaimItem(nodeIndex: item.id, path: item.path, recorded: item.recorded,
+                            recordedSize: item.recordedSize, verdict: item.verdict, warnings: warnings,
+                            hasUnknownContent: item.hasUnknownContent, descendants: item.descendants,
+                            overlayRevision: item.overlayRevision, sessionID: item.sessionID, action: .archive(format),
+                            archiveFacts: checked.archiveFacts, compressionSkipReason: item.compressionSkipReason)
+                        return (reviewed, files)
                     }
-                    let reviewed = ReclaimItem(nodeIndex: item.id, path: item.path, recorded: item.recorded,
-                        recordedSize: item.recordedSize, verdict: item.verdict, warnings: warnings,
-                        hasUnknownContent: item.hasUnknownContent, descendants: item.descendants,
-                        overlayRevision: item.overlayRevision, sessionID: item.sessionID, action: .archive(format),
-                        archiveFacts: checked.archiveFacts, compressionSkipReason: item.compressionSkipReason)
-                    return (reviewed, files)
+                    let (checked, files) = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+                    guard !Task.isCancelled, let self, self.tokens[id] == token else { return }
+                    self.inspected[id] = checked; self.checking.remove(id); self.rebuild()
+                    // The same inspection supplies the sample inputs; no second archive walk.
+                    let bytes: UInt64
+                    if let cached = self.estimateCache[key] { bytes = cached }
+                    else {
+                        let sample = Task.detached(priority: .utility) {
+                            let saving = SampleEstimate.archive(format, files: files)
+                            let archiveBytes = checked.archiveFacts.eligibleBytes - min(checked.archiveFacts.eligibleBytes, saving)
+                            return (item.recordedSize ?? 0) - min(item.recordedSize ?? 0, archiveBytes)
+                        }
+                        bytes = await withTaskCancellationHandler { await sample.value } onCancel: { sample.cancel() }
+                    }
+                    guard !Task.isCancelled, self.tokens[id] == token else { return }
+                    self.estimateCache[key] = bytes
+                    self.estimates[id] = bytes; self.tasks[id] = nil
+                } else {
+                    let work = Task.detached(priority: .utility) { compressionEstimate(item) }
+                    let bytes = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+                    guard !Task.isCancelled, let self, self.tokens[id] == token else { return }
+                    self.estimateCache[key] = bytes
+                    self.estimates[id] = bytes; self.estimating.remove(id); self.tasks[id] = nil
                 }
-                let (checked, files) = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-                guard !Task.isCancelled, let self, self.tokens[id] == token else { return }
-                self.inspected[id] = checked; self.checking.remove(id); self.rebuild()
-                // The same inspection supplies the sample inputs; no second archive walk.
-                let sample = Task.detached(priority: .utility) {
-                    let saving = SampleEstimate.archive(format, files: files)
-                    let archiveBytes = checked.archiveFacts.eligibleBytes - min(checked.archiveFacts.eligibleBytes, saving)
-                    return (item.recordedSize ?? 0) - min(item.recordedSize ?? 0, archiveBytes)
-                }
-                let bytes = await withTaskCancellationHandler { await sample.value } onCancel: { sample.cancel() }
-                guard !Task.isCancelled, self.tokens[id] == token else { return }
-                self.estimates[id] = bytes; self.tasks[id] = nil
-            } else {
-                let work = Task.detached(priority: .utility) { compressionEstimate(item) }
-                let bytes = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-                guard !Task.isCancelled, let self, self.tokens[id] == token else { return }
-                self.estimates[id] = bytes; self.estimating.remove(id); self.tasks[id] = nil
             }
+            await withTaskCancellationHandler { await selectedWork.value } onCancel: { selectedWork.cancel() }
+            await slots.release()
         }
     }
     func waitForEstimate() async {

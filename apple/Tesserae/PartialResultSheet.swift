@@ -35,6 +35,7 @@ struct PartialResultSheet: View {
     let report: ScanReport
     let showReport: () -> Void
     let done: () -> Void
+    @State private var contentHeight: CGFloat = 340
     @Environment(\.locale) private var locale
 
     var body: some View {
@@ -48,7 +49,12 @@ struct PartialResultSheet: View {
                         Text(line.text).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.textSelection(.enabled)
-            }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: PartialContentHeight.self, value: geometry.size.height)
+                    })
+            }.frame(height: min(contentHeight, 340))
+                .onPreferenceChange(PartialContentHeight.self) { if $0 > 0 { contentHeight = $0 } }
             HStack {
                 Button(String(localized: "partial.showReport", defaultValue: "Show Scan Report",
                     comment: "Open the full scan report pane from the explanation sheet."), action: showReport)
@@ -57,6 +63,11 @@ struct PartialResultSheet: View {
                     comment: "Close the partial scan explanation sheet."), action: done)
                     .keyboardShortcut(.defaultAction)
             }
-        }.padding(24).frame(width: 600, height: 480)
+        }.padding(24).frame(width: 600)
     }
+}
+
+private struct PartialContentHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

@@ -100,6 +100,17 @@
         }
       }
     },
+    "reclaimAction.largeFileInFolder": {
+      "comment": "Compression warning for a folder containing files larger than 4 GiB; cancellation stops between whole files.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Each file is compressed whole; cancelling stops between files."
+          }
+        }
+      }
+    },
     "reclaimAction.largeFile": {
       "comment": "Compression warning for a file larger than 4 GiB.",
       "localizations": {

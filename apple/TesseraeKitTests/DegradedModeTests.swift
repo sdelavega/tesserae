@@ -151,28 +151,42 @@ final class DegradedModeTests: XCTestCase {
         }
     }
 
-    private func nativeSnapshot<V: View>(_ label: String, _ view: V) async throws {
+    private func nativeSnapshot<V: View>(_ label: String, _ view: V, size: CGSize = CGSize(width: 960, height: 520),
+                                         compareReference: Bool = true, verifyScroll: Bool = false) async throws {
         for dark in [false, true] {
             let name = "degraded-" + label + (dark ? "-dark" : "-light")
-            let content = view.frame(width: 960, height: 520, alignment: .topLeading)
+            let content = view.frame(width: size.width, height: size.height, alignment: .topLeading)
                 .background(dark ? Color(red: 0.10, green: 0.10, blue: 0.11) : Color.white)
                 .environment(\.colorScheme, dark ? .dark : .light)
                 .environment(\.locale, locale).environment(\.timeZone, zone).tint(.blue)
             let host = NSHostingView(rootView: content)
-            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 960, height: 520),
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
                 styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             window.contentView = host
-            host.frame = CGRect(x: 0, y: 0, width: 960, height: 520)
+            host.frame = CGRect(origin: .zero, size: size)
             for _ in 0..<3 {
                 host.layoutSubtreeIfNeeded()
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 960, pixelsHigh: 520,
+            if verifyScroll {
+                func scrollViews(_ view: NSView) -> [NSScrollView] {
+                    (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+                }
+                let scroll = try XCTUnwrap(scrollViews(host).first, "precondition: native scrolling is present")
+                let document = try XCTUnwrap(scroll.documentView)
+                XCTAssertGreaterThan(document.bounds.height, scroll.documentVisibleRect.height,
+                    "precondition: ten detailed locations overflow the viewport")
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                XCTAssertGreaterThan(scroll.documentVisibleRect.minY, 0, "the last locations can be reached")
+                host.layoutSubtreeIfNeeded()
+            }
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 960 * 4, bitsPerPixel: 32))
+                colorSpaceName: .deviceRGB, bytesPerRow: Int(size.width) * 4, bitsPerPixel: 32))
             bitmap.size = host.bounds.size
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let actual = try XCTUnwrap(bitmap.cgImage)
@@ -180,6 +194,7 @@ final class DegradedModeTests: XCTestCase {
             let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("build/task-2-review/" + name + ".actual.png")
             try png(actual, output)
+            if !compareReference { continue }
             let recordNames = ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOT_NAMES"]?.split(separator: ",").map(String.init)
             if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1",
                recordNames == nil || recordNames!.contains(name) { try png(actual, reference) }
@@ -201,17 +216,42 @@ final class DegradedModeTests: XCTestCase {
         XCTAssertEqual(session.scanReport.unreadable.count, 2)
         let presentation = PartialResultPresentation()
         presentation.explain()
-        let sheet = PartialResultSheet(stats: stats, report: session.scanReport, showReport: {}, done: presentation.done)
         for level in [DetailLevel.simple, .detailed] {
             DetailSettings.shared.current = level
             let warning = try XCTUnwrap(session.warnings(for: level, locale: locale).first)
             XCTAssertTrue(warning.explainsPartial)
             try await nativeSnapshot("task2-banner-" + level.rawValue,
                 ScanWarningView(text: warning.text, explain: {}, dismiss: {}))
-            try await nativeSnapshot("task2-sheet-" + level.rawValue,
-                sheet)
             XCTAssertTrue(presentation.showingExplanation)
             XCTAssertEqual(session.snapshot.stats.incomplete, UInt32(TESS_INCOMPLETE_STALLED))
+        }
+    }
+
+    func test_partial_sheet_fits_two_locations_and_caps_ten_with_scrolling() async throws {
+        var stats = TessScanStats(); stats.incomplete = UInt32(TESS_INCOMPLETE_CANCELLED)
+        for level in [DetailLevel.simple, .detailed] {
+            DetailSettings.shared.current = level
+            var heights: [CGFloat] = []
+            for count in [2, 10] {
+                let paths = (0..<count).map { Data(("/Fixture/" + String(repeating: "long-folder-name/", count: 4) + "location-\($0)").utf8) }
+                let tree = TestSnapshot(.dir("/Fixture", []), stats: stats, unreadable: paths)
+                let session = AppSession(snapshot: tree.snapshot)
+                XCTAssertEqual(session.scanReport.unreadable.count, count, "precondition: requested locations")
+                let sheet = PartialResultSheet(stats: stats, report: session.scanReport, showReport: {}, done: {})
+                let host = NSHostingView(rootView: sheet.environment(\.locale, locale))
+                host.frame.size = CGSize(width: 600, height: 600)
+                for _ in 0..<5 { host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(20)) }
+                let size = host.fittingSize
+                XCTAssertEqual(size.width, 600, accuracy: 1)
+                XCTAssertGreaterThan(size.height, 150)
+                XCTAssertLessThanOrEqual(size.height, 480, "long explanations stay bounded")
+                if count == 2 { XCTAssertLessThan(size.height, 380, "short sheets must fit their content") }
+                heights.append(size.height)
+                let label = count == 2 ? "task2-sheet-" : "bugs3-sheet-ten-"
+                try await nativeSnapshot(label + level.rawValue, sheet, size: size, compareReference: count == 2,
+                    verifyScroll: count == 10 && level == .detailed)
+            }
+            XCTAssertGreaterThan(heights[1], heights[0], "more locations grow the sheet before scrolling")
         }
     }
 
@@ -232,6 +272,8 @@ final class DegradedModeTests: XCTestCase {
         session.reclaim.viewModel.replace(session.reclaim.items,
             volumes: Dictionary(uniqueKeysWithValues: session.reclaim.items.map { ($0.id, volume) }))
         XCTAssertEqual(session.reclaim.items.count, 2, "precondition: populated Reclaim pane")
+        await session.reclaim.viewModel.waitForEstimate()
+        XCTAssertTrue(session.reclaim.viewModel.estimating.isEmpty, "precondition: finished estimates before rendering")
         let app = AppModel(coordinator: ScanCoordinator(factory: { _, _ in nil }), accessLoader: { .granted })
         await app.waitForAccess()
         let ui = ReclaimPresentation(log: ReclaimLog(directory: URL(fileURLWithPath: #filePath)

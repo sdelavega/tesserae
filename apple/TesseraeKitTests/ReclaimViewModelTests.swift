@@ -146,6 +146,100 @@ final class ReclaimViewModelTests: XCTestCase {
         XCTAssertEqual(TrashConfirmation(items: vm.items).movingCount, 1)
     }
 
+    func test_finished_estimate_survives_staging_other_items_and_restaging() async throws {
+        let probe = EstimateProbe()
+        let a = item(1, .ok, 1_000_000_000), b = item(2, .ok, 512)
+        let vm = ReclaimViewModel(items: [a], volumes: [1: appleVolume], defaults: nil,
+            compressionEstimate: { probe.estimate($0) })
+        await vm.waitForEstimate()
+        let text = vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(text, "Saves about 500 MB (estimated)", "precondition: A finished")
+        XCTAssertEqual(probe.calls(1), 1)
+        vm.replace([a, b], volumes: [1: appleVolume, 2: appleVolume])
+        XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US")), text)
+        XCTAssertFalse(vm.estimating.contains(1))
+        await vm.waitForEstimate()
+        vm.replace([a], volumes: [1: appleVolume])
+        XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US")), text)
+        await vm.waitForEstimate()
+        vm.replace([], volumes: [:])
+        vm.replace([a], volumes: [1: appleVolume])
+        XCTAssertEqual(vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US")), text)
+        await vm.waitForEstimate()
+        XCTAssertEqual(probe.calls(1), 1, "A is sampled once across unrelated changes and restaging")
+        XCTAssertEqual(probe.calls(2), 1)
+    }
+
+    func test_estimate_cache_invalidates_identity_session_and_revision() async {
+        let probe = EstimateProbe()
+        let vm = ReclaimViewModel(defaults: nil, compressionEstimate: { probe.estimate($0) })
+        let session = UUID(), nextSession = UUID()
+        let cases: [(String, UInt64, Int32, Bool, UUID, UInt64)] = [
+            ("a", 1, 1, false, session, 0), ("b", 1, 1, false, session, 0),
+            ("b", 2, 1, false, session, 0), ("b", 2, 2, false, session, 0),
+            ("b", 2, 2, true, session, 0), ("b", 2, 2, true, nextSession, 0),
+            ("b", 2, 2, true, nextSession, 1)]
+        for (index, value) in cases.enumerated() {
+            let staged = ReclaimItem(nodeIndex: 1, path: Data(("/Fixture/" + value.0).utf8),
+                recorded: Recorded(fileID: value.1, device: value.2, isDirectory: value.3),
+                recordedSize: 1_000_000_000, verdict: .ok, overlayRevision: value.5, sessionID: value.4)
+            vm.replace([staged], volumes: [1: appleVolume])
+            XCTAssertEqual(vm.items[0].action, .compress, "precondition: eligible item")
+            XCTAssertTrue(vm.estimating.contains(1), "changed evidence needs a new sample")
+            await vm.waitForEstimate()
+            XCTAssertEqual(probe.calls(1), index + 1)
+            vm.replace([staged], volumes: [1: appleVolume])
+            XCTAssertFalse(vm.estimating.contains(1), "unchanged evidence reuses the completed sample")
+            await vm.waitForEstimate()
+            XCTAssertEqual(probe.calls(1), index + 1)
+        }
+    }
+
+    func test_estimates_are_bounded_concurrent_and_survive_unrelated_staging() async throws {
+        let probe = EstimateProbe(blocks: true)
+        defer { for _ in 0..<12 { probe.release.signal() } }
+        let staged = (1...8).map { item(UInt32($0), .ok, 1_000_000_000) }
+        let volumes = Dictionary(uniqueKeysWithValues: staged.map { ($0.id, appleVolume) })
+        let vm = ReclaimViewModel(items: [staged[0]], volumes: [1: appleVolume], defaults: nil,
+            compressionEstimate: { probe.estimate($0) })
+        await assertStarted(probe.started)
+        XCTAssertEqual(probe.calls(1), 1, "precondition: A is running before other items are staged")
+        vm.replace(staged, volumes: volumes)
+        await assertStarted(probe.started)
+        XCTAssertGreaterThanOrEqual(probe.peak, 2, "estimates run concurrently")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertLessThanOrEqual(probe.peak, 3, "at most three samples run")
+        let pending = vm.inspectionTask(for: 1)
+        XCTAssertNotNil(pending, "precondition: A has pending work")
+        vm.replace(staged + [item(9, .ok, 512)], volumes: volumes.merging([9: appleVolume]) { a, _ in a })
+        XCTAssertEqual(probe.calls(1), 1, "restaging must preserve in-flight work too")
+        let allPending = (1...9).compactMap { vm.inspectionTask(for: UInt32($0)) }
+        XCTAssertEqual(allPending.count, 9)
+        vm.replace([], volumes: [:])
+        for task in allPending { await task.value }
+        await pending?.value
+        XCTAssertGreaterThanOrEqual(probe.cancelled, 2, "running samples observe cancellation")
+        XCTAssertLessThanOrEqual(probe.peak, 3)
+        XCTAssertLessThanOrEqual(probe.total, 3, "cancelled queued samples never start")
+    }
+
+    func test_large_file_warning_uses_item_kind_in_rows_and_confirmation() {
+        for directory in [false, true] {
+            let staged = ReclaimItem(nodeIndex: 1, path: Data("/Fixture/large".utf8),
+                recorded: Recorded(fileID: 1, device: 1, isDirectory: directory),
+                recordedSize: 8_000_000_000, verdict: .warn(.largeFile), action: .compress)
+            let expected = directory
+                ? "Each file is compressed whole; cancelling stops between files."
+                : "This file can't be interrupted mid-file."
+            XCTAssertEqual(itemWarnings(staged), [.largeFile], "precondition: the warning is present")
+            for level in [DetailLevel.simple, .detailed] {
+                XCTAssertEqual(warningText(.largeFile, for: staged, detailLevel: level), expected)
+                XCTAssertEqual(TrashConfirmation(items: [staged]).warningRows(for: level).first?.texts, [expected])
+            }
+            XCTAssertEqual(TrashConfirmation(items: [staged]).warningRows.first?.texts, [expected])
+        }
+    }
+
     func test_compress_review_does_not_claim_unperformed_process_inspection() {
         let vm = ReclaimViewModel(items: [item(1, .ok, 512)], volumes: [1: appleVolume],
             defaults: nil, compressionEstimate: { _ in 0 })
@@ -950,5 +1044,29 @@ private final class CountingEstimator: @unchecked Sendable {
         while !Task.isCancelled && Date() < deadline { Thread.sleep(forTimeInterval: 0.001) }
         if Task.isCancelled { lock.withLock { cancellations += 1 } }
         return 256
+    }
+}
+
+private final class EstimateProbe: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let blocks: Bool
+    private var counts: [UInt32: Int] = [:]
+    private var active = 0, maximum = 0, cancellations = 0
+    init(blocks: Bool = false) { self.blocks = blocks }
+    var peak: Int { lock.withLock { maximum } }
+    var cancelled: Int { lock.withLock { cancellations } }
+    var total: Int { lock.withLock { counts.values.reduce(0, +) } }
+    func calls(_ id: UInt32) -> Int { lock.withLock { counts[id, default: 0] } }
+    func estimate(_ item: ReclaimItem) -> UInt64 {
+        lock.withLock { counts[item.id, default: 0] += 1; active += 1; maximum = max(maximum, active) }
+        started.signal()
+        if blocks {
+            while !Task.isCancelled {
+                if release.wait(timeout: .now() + 0.005) == .success { break }
+            }
+        }
+        lock.withLock { active -= 1; if Task.isCancelled { cancellations += 1 } }
+        return 500_000_000
     }
 }
