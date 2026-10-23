@@ -35,7 +35,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                               capture_output=True, text=True)
 
     def test_version_derivation(self):
-        for value, expected in [("0.1.0", "100"), ("0.1.1", "101"), ("0.1.2", "102"), ("1.2.3", "10203"),
+        for value, expected in [("0.1.0", "100"), ("0.1.1", "101"), ("0.1.2", "102"), ("0.2.0", "200"), ("1.2.3", "10203"),
                                 ("99.99.99", "999999"), ("00.08.09", "809"),
                                 ("0.0.0", "0")]:
             result = self.version(value)
@@ -90,7 +90,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         source = PROJECT.read_text()
         versions = re.findall(r"MARKETING_VERSION = ([^;]+);", source)
         self.assertTrue(versions)
-        self.assertEqual(set(versions), {"0.1.2"})
+        self.assertEqual(set(versions), {"0.2.0"})
         expected = self.version(versions[0]).stdout.strip()
         self.assertTrue(expected)
         app_versions = re.findall(r"CURRENT_PROJECT_VERSION = ([^;]+);", source)

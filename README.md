@@ -66,26 +66,38 @@ with depth shading inside it. **Age** (⌘2) colours by modification date;
 Large folders have name-and-size strips. **View → Show Folder Names** turns
 these on or off. Rest your pointer on a tile for half a second to see its
 path from the scan root and its size. The **Inspector** shows the same path
-and file details; **Copy Path** copies the absolute path.
+and file details. Startup-disk paths read `/Users/…` instead of
+`/System/Volumes/Data/Users/…`; **Copy Path** keeps the original absolute path.
 
 The **Folders** tree beside the map shows folders and files, largest first.
 Expand a folder to see its children, sort by a column, or double-click a
 folder to enter it. Selection follows between the tree and map. Switch to
 **Largest Files** for the top 1,000 files under the current view; column sorts
-reorder that list.
+reorder that list. Both lists have **Reported Size** and **Allocated** columns:
+Reported Size is the file content size; Allocated is the space it uses on disk,
+so already-compressed files are easier to spot.
 
 ![The pointer resting on a video tile: a pop-up and the Inspector both show its path from the scanned drive, USB321FD › Movies › Coast road trip.mov, with its size and date](docs/images/inspect.png)
 
 ### Check the scan
 
+In **Settings → General → Detail**, choose **Simple** (the default) for plain
+summaries, or **Detailed** for the full figures, warnings and results. Switching
+updates the current view without rescanning; **Copy Diagnostics** always keeps
+the full detail.
+
 For a whole-volume scan, the **space breakdown** compares what the scan found
-with what the volume reports: the system volume, free space and local
-snapshots. A positive gap is space the scan couldn't see; a negative gap
-means shared blocks were counted twice.
+with what the volume reports. Simple shows Used, Free and Other; Other includes
+the system volume, local snapshots and the gap between the two measurements.
+Detailed separates those figures. A positive gap is space the scan couldn't
+see; a negative gap means shared blocks were counted twice.
 
 **Scan report** lists unreadable and skipped locations, cloud-only files and
 anything that made the scan partial. **Copy Diagnostics** copies it to your
-clipboard for a bug report.
+clipboard for a bug report. On a partial scan, **What wasn't scanned?** explains
+what was missed and links to the full report. Dismiss a warning banner with
+**✕** for the current session; a new scan or a different warning shows it again.
+Dismissing a banner leaves the report and its counts available.
 
 ![The scan report beside the space breakdown, listing what the scan skipped and why](docs/images/report.png)
 
@@ -93,8 +105,11 @@ clipboard for a bug report.
 
 Select items and choose **Add to Reclaim Space** (⌘⌫). Staging leaves your
 files where they are; Tesserae never permanently deletes them. Open
-**Reclaim Space**, choose an action for each item,
-then review and confirm. Protected locations are refused with a reason;
+**Reclaim Space**, review each item's action, then confirm. Eligible items on
+Apple-formatted (APFS/HFS+) disks default to **Compress**; other items default
+to **Move to Trash**. Your own action choices are kept. Adding items is instant:
+Compress shows **Estimating…** while sampling, and Archive shows **Checking…**
+until that item's inspection finishes. Protected locations are refused with a reason;
 warnings need your acknowledgement one by one. Unavailable actions stay
 visible but disabled, with an explanation.
 
@@ -111,6 +126,10 @@ visible but disabled, with an explanation.
   the original to the Trash. You reclaim space after emptying the Trash.
   Rescan to see the archive in the map. If the disk has no usable Trash,
   both the archive and the original are kept, and the result tells you so.
+
+After a batch, items that were trashed, compressed or archived leave Reclaim
+Space automatically. Items left untouched stay with the reason; the results
+still include every item and its available Put Back or Decompress controls.
 
 ### Choose an archive format
 
