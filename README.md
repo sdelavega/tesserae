@@ -4,7 +4,7 @@ Tesserae is a GPL-3 disk-space visualizer for macOS 13 Ventura and later,
 with a Rust scan engine and a SwiftUI/Metal treemap. Explore what uses space,
 inspect files, and reclaim space with reviewed Trash, Compress and Archive actions.
 
-![Tesserae showing a 21 GB drive as a treemap, each top-level folder in its own colour with name strips, the folder tree below and the space breakdown beside it](docs/images/overview.png)
+![Tesserae showing a home folder as a treemap, each top-level folder in its own colour with name strips, the folder tree below with Reported Size and Allocated columns, and a partial-scan warning with a "What wasn't scanned?" link and a dismiss button](docs/images/overview.png)
 
 ## Install
 
@@ -99,7 +99,9 @@ what was missed and links to the full report. Dismiss a warning banner with
 **✕** for the current session; a new scan or a different warning shows it again.
 Dismissing a banner leaves the report and its counts available.
 
-![The scan report beside the space breakdown, listing what the scan skipped and why](docs/images/report.png)
+![The "What wasn't scanned?" sheet listing the locations a partial scan couldn't include, with Show Scan Report and Done buttons](docs/images/partial.png)
+
+![The scan report in Simple detail beside Reclaim Space: one folder couldn't be read, items only in iCloud and a skipped location, with Copy Diagnostics and Show details](docs/images/report.png)
 
 ### Reclaim space
 
@@ -131,6 +133,8 @@ After a batch, items that were trashed, compressed or archived leave Reclaim
 Space automatically. Items left untouched stay with the reason; the results
 still include every item and its available Put Back or Decompress controls.
 
+![Two folders staged in Reclaim Space, both defaulting to Compress with an estimated saving and their warnings to review; the folder tree shows Reported Size beside Allocated](docs/images/staging.png)
+
 ### Choose an archive format
 
 The format picker remembers your choice. **Advanced** reveals the extra
@@ -157,8 +161,6 @@ Orphan `._` files and other `._` content need Apple Archive; ZIP and tar are
 disabled when they can't keep them. On APFS/HFS+, every real `._` file is
 content and likewise needs Apple Archive. If you select a recognised sidecar
 itself, archive its sibling instead.
-
-![Two items staged in Reclaim Space on an exFAT drive: a video set to Move to Trash, and a backup set to Archive with ZIP chosen and the Advanced formats expanded](docs/images/staging.png)
 
 ### Decompress
 
