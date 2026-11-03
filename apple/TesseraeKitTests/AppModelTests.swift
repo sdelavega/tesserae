@@ -1701,6 +1701,26 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(metLate)
     }
 
+    func test_phase_gate_checks_raw_data_volume_identity_instead_of_display_alias() throws {
+        let tree = TestSnapshot(.dir("/System/Volumes/Data", [.file("one", 1)]))
+        XCTAssertEqual(tree.snapshot.displayPath(tree.snapshot.root), "/", "precondition: UI alias differs from scan identity")
+        let app = AppModel()
+        app.replaceSnapshot(tree.snapshot)
+        let session = try XCTUnwrap(app.session)
+        let runner = PhaseGateRunner(timer: FrameTimer(enabled: true))
+        let output = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        var result: PhaseGateRunner.Outcome?
+        runner.run(session: session, requiredRoot: "/System/Volumes/Data", minimumNodes: 0,
+            output: output, completion: { result = $0 })
+        XCTAssertEqual(result, .failed("The snapshot has fewer than five sized readable root directories."),
+            "the physical Data-volume identity must pass before checking its contents")
+        runner.run(session: session, requiredRoot: "/", minimumNodes: 0,
+            output: output, completion: { result = $0 })
+        guard case .failed(let reason)? = result else { return XCTFail("a different raw root must be rejected") }
+        XCTAssertTrue(reason.contains("Load a scan of / with"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+    }
+
     func test_phase_gate_cancel_stops_the_run_without_writing_a_capture() async throws {
         let t = TestSnapshot(.dir("/gate", (1...5).map { .dir("d\($0)", [.file("f\($0)", UInt64(10 * $0))]) }))
         let app = AppModel()

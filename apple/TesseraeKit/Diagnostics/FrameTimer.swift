@@ -284,7 +284,7 @@ public final class PhaseGateRunner: ObservableObject {
         let snapshot = session.snapshot
         guard snapshot.root != Tile.noNode else { return fail("The snapshot is empty.") }
         let required = URL(fileURLWithPath: requiredRoot).standardizedFileURL.path
-        let scanned = URL(fileURLWithPath: snapshot.displayPath(snapshot.root)).standardizedFileURL.path
+        let scanned = URL(fileURLWithPath: String(decoding: snapshot.rawPath(snapshot.root), as: UTF8.self)).standardizedFileURL.path
         guard scanned == required, snapshot.nodes.count >= minimumNodes else {
             return fail(
                 "Load a scan of \(required) with at least \(minimumNodes.formatted()) nodes before running the phase gate"

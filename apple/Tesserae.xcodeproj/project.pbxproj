@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A7B000000000000000000001 /* AetherTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B000000000000000000003; };
+        A7B000000000000000000002 /* AetherTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B000000000000000000003; };
         A20220000000000000000003 /* PartialResultSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000005; };
         A20220000000000000000004 /* PartialResultSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000005; };
         A20220000000000000000001 /* ScanBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20220000000000000000002; };
@@ -220,6 +222,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        A7B000000000000000000003 /* AetherTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AetherTheme.swift; sourceTree = "<group>"; };
         A20220000000000000000005 /* PartialResultSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialResultSheet.swift; sourceTree = "<group>"; };
         A20220000000000000000002 /* ScanBannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanBannerTests.swift; sourceTree = "<group>"; };
 		F60700000000000000000005 /* FolderOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderOutlineView.swift; sourceTree = "<group>"; };
@@ -542,6 +545,7 @@
 				B9642A9CE095BEB5C5D01E19 /* Tesserae.entitlements */,
 				25C795E77AC247CB2BB2A411 /* TesseraeApp.swift */,
 				E10100000000000000000002 /* AppChrome.swift */,
+                A7B000000000000000000003 /* AetherTheme.swift */,
 				E10B00000000000000000002 /* Updates.swift */,
 				E10100000000000000000004 /* Licenses */,
 				E10C00000000000000000002 /* Assets.xcassets */,
@@ -938,6 +942,7 @@
 				E03900000000000000000003 /* ScanReportView.swift in Sources */,
 				B41FDD4DF9CD58338B9470A8 /* TesseraeApp.swift in Sources */,
 				E10100000000000000000001 /* AppChrome.swift in Sources */,
+                A7B000000000000000000001 /* AetherTheme.swift in Sources */,
 				E10B00000000000000000001 /* Updates.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -958,6 +963,7 @@
                 A20220000000000000000001 /* ScanBannerTests.swift in Sources */,
 				E12000000000000000000001 /* ContentView.swift in Sources */,
 				E12000000000000000000002 /* AppChrome.swift in Sources */,
+                A7B000000000000000000002 /* AetherTheme.swift in Sources */,
 				E04000000000000000000005 /* OnboardingView.swift in Sources */,
 				E60400000000000000000006 /* StartView.swift in Sources */,
 				E04000000000000000000006 /* ScanReportView.swift in Sources */,
@@ -1086,7 +1092,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 201;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1107,7 +1113,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1157,7 +1163,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 201;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1172,7 +1178,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = NO;
@@ -1268,7 +1274,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 201;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;

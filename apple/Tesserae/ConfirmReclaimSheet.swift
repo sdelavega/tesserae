@@ -105,7 +105,7 @@ struct ConfirmReclaimSheet: View {
             ForEach(Array(item.texts.enumerated()), id: \.offset) { _, text in
                 Text(text).fixedSize(horizontal: false, vertical: true).padding(.leading, 22)
             }
-        }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
+        }.padding(12).aetherSurface()
     }
 
 }

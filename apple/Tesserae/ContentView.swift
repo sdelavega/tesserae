@@ -19,7 +19,7 @@ import SwiftUI
 import TesseraeKit
 
 struct ContentView: View {
-    static let minimumContentSize = CGSize(width: 1440, height: 720)
+    static let minimumContentSize = CGSize(width: 1200, height: 720)
     @StateObject private var model = AppModel()
     @StateObject private var volumes = VolumeListModel()
     @StateObject private var reclaimUI = ReclaimPresentation()
@@ -67,6 +67,7 @@ struct ContentView: View {
                 }
             }
         }
+        .aetherTheme()
         .onChange(of: model.isScanning) { scanning in
             if scanning { limitedDismissed = false }
         }
@@ -285,6 +286,7 @@ struct SessionView: View {
     var showScanReport = false
     var useMetal = true
     var reportLayout: ScanReportLayout? = nil
+    var layout: SessionLayout? = nil
     let appModel: AppModel
     var openScanReport: () -> Void = {}
     @StateObject private var partial = PartialResultPresentation()
@@ -320,7 +322,13 @@ struct SessionView: View {
                 }
                 Spacer()
                 Text(displaySize(session.root == Tile.noNode ? 0 : session.source.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(.secondary)
-            }.padding(12)
+            }.padding(12).background { AetherChrome() }
+            if let model = session.reconciliation {
+                ReconciliationView(model: model, grantAccess: grantAccess, compact: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12).background(Aether.card)
+                    .background { if let layout { SessionBounds(layout: layout, summary: true) } }
+            }
             Divider()
             HSplitView {
                 VStack(spacing: 0) {
@@ -371,19 +379,15 @@ struct SessionView: View {
                     Divider()
                     TablePane(session: session, rows: session.table, selection: session.selection, stage: stage, stagingDisabled: stagingDisabled)
                         .frame(minHeight: 150, idealHeight: 220)
-                }.frame(minWidth: 620, idealWidth: 700)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if let model = session.reconciliation {
-                            ReconciliationView(model: model, grantAccess: grantAccess).padding(16)
-                            Divider()
-                        }
+                }.frame(minWidth: 450, idealWidth: 700).background(Aether.card)
+                VStack(alignment: .leading, spacing: 0) {
                         InspectorPane(model: session.inspectorModel, stage: stage, stagingDisabled: stagingDisabled, unavailable: appModel.stagingUnavailable,
-                            unavailableMessage: session.changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.unavailable)
+                            unavailableMessage: session.changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.unavailable, layout: layout)
                         if appModel.stagingUnavailable { Text(session.changedSinceScan ? ReclaimCopy.changedSinceScan : ReclaimCopy.unavailable).padding(16) }
-                    }
-                }.frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
+                }.frame(minWidth: 200, idealWidth: 240, maxWidth: 280, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Aether.card)
                 if showReclaim {
+                    VStack(spacing: 0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             ReclaimPane(reclaim: session.reclaim, unavailable: appModel.stagingUnavailable,
@@ -402,11 +406,17 @@ struct SessionView: View {
                             RecentlyTrashedView(entries: reclaimUI.history, messages: reclaimUI.messages, restoring: reclaimUI.restoring, canRestore: appModel.canPutBack,
                                 restore: { entry in Task { await reclaimUI.restore(entry, model: appModel) } })
                         }
-                    }.frame(minWidth: 260, idealWidth: 280, maxWidth: 350)
+                    }
+                        ReclaimReviewControl(reclaim: session.reclaim, layout: layout, unavailable: appModel.stagingUnavailable,
+                            busy: reclaimUI.showingConfirmation || appModel.isScanning || appModel.reclaimBusy || session.isPreparingReclaim,
+                            confirm: { reclaimUI.prepare(session.reclaim.viewModel.items, model: appModel) })
+                    }
+                    .frame(minWidth: 230, idealWidth: 280, maxWidth: 350).background(Aether.card)
                 }
-                if showScanReport { ScanReportView(report: session.scanReport, layout: reportLayout) }
+                if showScanReport { ScanReportView(report: session.scanReport, layout: reportLayout).background(Aether.card) }
             }
         }
+        .aetherTheme()
         .sheet(isPresented: $partial.showingExplanation) {
             PartialResultSheet(stats: session.snapshot.stats, report: session.scanReport,
                 showReport: { partial.showReport(openScanReport) }, done: partial.done)
@@ -443,6 +453,7 @@ private struct InspectorPane: View {
     var stagingDisabled: Bool
     var unavailable: Bool
     var unavailableMessage = ReclaimCopy.unavailable
+    var layout: SessionLayout? = nil
     @Environment(\.locale) private var locale
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -456,6 +467,7 @@ private struct InspectorPane: View {
                 defaultValue: "Add to Reclaim Space",
                 comment: "ContentView: Add to Reclaim Space."
             ), action: stage).disabled(stagingDisabled)
+                .background { if let layout { SessionBounds(layout: layout) } }
                 .help(unavailable ? unavailableMessage : String(
                     localized: "contentView.stage.the.selected.items",
                     defaultValue: "Stage the selected items (⌘⌫)",
@@ -569,7 +581,24 @@ private struct ReclaimPreparedPane: View {
     var remove: (UInt32) -> Void
     var confirm: () -> Void
     var body: some View {
-        ReclaimView(items: model.items, viewModel: model, unavailable: unavailable, unavailableMessage: unavailableMessage, busy: busy,
+        ReclaimView(items: model.items, viewModel: model, unavailable: unavailable, unavailableMessage: unavailableMessage, busy: busy, showsReview: false,
             remove: remove, confirm: confirm)
+    }
+}
+
+private struct ReclaimReviewControl: View {
+    @ObservedObject var reclaim: Reclaim
+    var layout: SessionLayout? = nil
+    var unavailable: Bool
+    var busy: Bool
+    var confirm: () -> Void
+    var body: some View {
+        Button(ReclaimCopy.review, action: confirm)
+            .buttonStyle(AetherPrimaryButtonStyle())
+            .background { if let layout { SessionBounds(layout: layout, review: true) } }
+            .disabled(reclaim.items.isEmpty || unavailable || busy)
+            .padding(12).frame(maxWidth: .infinity)
+            .background(Aether.card)
+            .overlay(alignment: .top) { Rectangle().fill(Aether.border).frame(height: 1) }
     }
 }

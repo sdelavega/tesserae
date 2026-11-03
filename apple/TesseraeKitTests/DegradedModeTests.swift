@@ -279,12 +279,17 @@ final class DegradedModeTests: XCTestCase {
         let ui = ReclaimPresentation(log: ReclaimLog(directory: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().appendingPathComponent("unused-window-log")))
         let reportLayout = ScanReportLayout()
+        let sessionLayout = SessionLayout()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "TesseraeKitTests.FileList." + UUID().uuidString))
-        let content = SessionView(session: session, mode: .folder, dark: false, grantAccess: {}, stage: {},
-            stagingDisabled: true, reclaimUI: ui, showReclaim: true, showScanReport: true, useMetal: false, reportLayout: reportLayout, appModel: app)
-            .environment(\.locale, locale).environment(\.timeZone, zone)
-            .environment(\.colorScheme, .light).background(Color.white)
-            .defaultAppStorage(defaults)
+        func makeContent(dark: Bool = false, showReclaim: Bool = true) -> some View {
+            SessionView(session: session, mode: .folder, dark: dark, grantAccess: {}, stage: {},
+                stagingDisabled: true, reclaimUI: ui, showReclaim: showReclaim, showScanReport: true,
+                useMetal: false, reportLayout: reportLayout, layout: sessionLayout, appModel: app)
+                .environment(\.locale, locale).environment(\.timeZone, zone)
+                .environment(\.colorScheme, dark ? .dark : .light)
+                .defaultAppStorage(defaults)
+        }
+        let content = makeContent()
         let host = NSHostingView(rootView: AnyView(content))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -332,7 +337,7 @@ final class DegradedModeTests: XCTestCase {
         let expected = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(actual.width, expected.width); XCTAssertEqual(actual.height, expected.height)
         XCTAssertEqual(try pixels(actual), try pixels(expected), "main-window snapshot changed")
-        XCTAssertEqual(ContentView.minimumContentSize, CGSize(width: 1440, height: 720))
+        XCTAssertEqual(ContentView.minimumContentSize, CGSize(width: 1200, height: 720))
         window.setContentSize(CGSize(width: 1440, height: 720))
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(50))
@@ -349,6 +354,48 @@ final class DegradedModeTests: XCTestCase {
                 XCTAssertTrue(host.bounds.insetBy(dx: -1, dy: -1).contains(rect), "every pane visible: \(rect)")
             }
         }
+        // Regression: all four panes, the pinned summary and action controls must
+        // remain in bounds at the supported minimum, in both appearances.
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            host.rootView = AnyView(makeContent(dark: appearance == .darkAqua))
+            window.setContentSize(ContentView.minimumContentSize)
+            for _ in 0..<5 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertGreaterThan(sessionLayout.summary.height, 30)
+            XCTAssertTrue(host.bounds.contains(sessionLayout.summary), "summary stays visible")
+            XCTAssertFalse(sessionLayout.summaryScrolls, "summary never needs scrolling")
+            XCTAssertGreaterThan(sessionLayout.stage.width, 100)
+            XCTAssertTrue(host.bounds.contains(sessionLayout.stage), "stage action stays visible")
+            XCTAssertGreaterThan(sessionLayout.review.width, 100)
+            XCTAssertTrue(host.bounds.contains(sessionLayout.review), "review action stays visible: \(sessionLayout.review) in \(host.bounds)")
+            host.displayIfNeeded()
+            let minimumBitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: minimumBitmap)
+            try png(try XCTUnwrap(minimumBitmap.cgImage), output.deletingLastPathComponent()
+                .appendingPathComponent("minimum-" + appearance.rawValue + ".png"))
+            XCTAssertEqual(host.bounds.size, ContentView.minimumContentSize)
+            XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame), "report control: \(reportLayout.copyDiagnosticsFrame) in \(host.bounds)")
+            for split in descendants(host).compactMap({ $0 as? NSSplitView }) {
+                for pane in split.arrangedSubviews {
+                    XCTAssertTrue(host.bounds.insetBy(dx: -1, dy: -1).contains(host.convert(pane.bounds, from: pane)))
+                }
+            }
+        }
+        session.hover(tile: session.tiles.firstIndex { $0.node == tree["photo.raw"] })
+        XCTAssertNotNil(session.inspector, "precondition: inspector contains file details")
+        host.rootView = AnyView(makeContent(dark: true, showReclaim: false))
+        for _ in 0..<5 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(host.bounds.size, ContentView.minimumContentSize)
+        XCTAssertTrue(host.bounds.contains(sessionLayout.summary))
+        XCTAssertTrue(host.bounds.contains(sessionLayout.stage))
+        XCTAssertFalse(sessionLayout.summaryScrolls)
+        XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame))
         for identifier in ["en_US", "en_GB"] {
             for mode in ["folders", "largestFiles"] {
                 defaults.set(mode, forKey: "fileListMode")
@@ -382,7 +429,7 @@ final class DegradedModeTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(viewport.contentView.bounds.maxX, modified.maxX - 1, "Modified fully revealed")
                 XCTAssertLessThanOrEqual(viewport.contentView.bounds.minX, modified.minX)
                 XCTAssertGreaterThanOrEqual(current.tableColumns[0].width, 180)
-                XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame))
+                XCTAssertTrue(host.bounds.contains(reportLayout.copyDiagnosticsFrame), "report control: \(reportLayout.copyDiagnosticsFrame) in \(host.bounds)")
             }
         }
         withExtendedLifetime(tree) {}

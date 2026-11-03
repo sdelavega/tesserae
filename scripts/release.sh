@@ -238,11 +238,10 @@ if not re.search(r"^Timestamp=.+$", text, re.M):
     sys.exit("Export signature lacks a secure timestamp")
 SIGNATURE
     done < "$WORK/bundles"
-    DMG="$WORK/Tesserae-$VERSION.dmg"
-    tool "$BASH_TOOL" "$ROOT/scripts/make-dmg.sh" "$VERSION" "$APP" "$DMG" "$CODE_SIGN_IDENTITY"
+    notarize() {
     # A nonzero submit can still carry an Invalid response and log request ID.
     SUBMIT_STATUS=0
-    tool "$XCRUN" notarytool submit "$DMG" "${notary_args[@]}" --wait \
+    tool "$XCRUN" notarytool submit "$1" "${notary_args[@]}" --wait \
         --output-format json > "$WORK/notary.json" || SUBMIT_STATUS=$?
     tool "$PYTHON" - "$WORK/notary.json" > "$WORK/notary-status" <<'NOTARY'
 import json, pathlib, sys
@@ -269,6 +268,17 @@ NOTARY_LOG
         fail "Notarization $NOTARY_STATUS; see the log URL above"
     fi
     [[ $SUBMIT_STATUS == 0 && $NOTARY_STATUS == Accepted ]] || fail 'Notarization was not Accepted'
+    }
+    # Staple the app itself before packaging so an installed copy retains its ticket.
+    tool /usr/bin/ditto -c -k --keepParent "$APP" "$WORK/Tesserae-notary.zip"
+    notarize "$WORK/Tesserae-notary.zip"
+    tool "$XCRUN" stapler staple "$APP"
+    tool "$XCRUN" stapler validate "$APP"
+    tool "$CODESIGN" --verify --deep --strict "$APP"
+    tool "$SPCTL" --assess --type execute "$APP"
+    DMG="$WORK/Tesserae-$VERSION.dmg"
+    tool "$BASH_TOOL" "$ROOT/scripts/make-dmg.sh" "$VERSION" "$APP" "$DMG" "$CODE_SIGN_IDENTITY"
+    notarize "$DMG"
     tool "$XCRUN" stapler staple "$DMG"
     tool "$XCRUN" stapler validate "$DMG"
     tool "$SPCTL" --assess --type open --context context:primary-signature "$DMG"

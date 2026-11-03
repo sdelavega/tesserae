@@ -216,8 +216,9 @@ PLIST
       *) exit 99 ;;
     esac ;;
  spctl)
-    [[ ${FAULT:-} != spctl ]] || exit 1
-    [[ ${FAULT:-} != execute || $args != *' --type execute '* ]] || exit 1 ;;
+    [[ ${FAULT:-} != spctl || $args != *' --type open '* ]] || exit 1
+    [[ ${FAULT:-} != execute || $args != *'/mount/Tesserae.app '* ]] || exit 1
+    [[ ${FAULT:-} != app-execute || $args != *'/export/Tesserae.app '* ]] || exit 1 ;;
  *) exit 100 ;;
 esac
 FAKE
@@ -285,6 +286,7 @@ run_case() {
       archive) contains "$CALLS" $'xcodebuild\tarchive' ;;
       export|missing-framework) contains "$CALLS" -exportArchive ;;
       verify|sandbox|runtime|team|unsigned-xpc) contains "$CALLS" $'codesign\t--verify' ;;
+      app-execute) contains "$CALLS" $'spctl\t--assess\t--type\texecute' ;;
       dmg) contains "$CALLS" $'hdiutil\tcreate' ;;
       dmg-sign) contains "$CALLS" $'codesign\t--timestamp' ;;
       submit|invalid|rejected) contains "$CALLS" $'xcrun\tnotarytool\tsubmit' ;;
@@ -320,13 +322,14 @@ run_case ffi $'xcodebuild\tarchive'
 run_case archive -exportArchive
 run_case export $'codesign\t--verify'
 for fault in test-hooks verify sandbox runtime nested-runtime nested-timestamp team unsigned-xpc missing-framework; do run_case "$fault" $'hdiutil\tcreate'; done
-for fault in dmg dmg-sign; do run_case "$fault" $'xcrun\tnotarytool\tsubmit'; done
+run_case app-execute $'hdiutil\tcreate'
+for fault in dmg dmg-sign; do run_case "$fault" $'Tesserae-0.1.0.dmg\t--keychain-profile'; done
 # release_never_publishes_an_unverified_dmg.
 for fault in submit invalid rejected; do run_case "$fault" $'xcrun\tstapler\tstaple'; done
 run_case staple $'xcrun\tstapler\tvalidate'
 run_case validate $'spctl\t--assess'
 run_case spctl $'hdiutil\tattach'
-run_case attach $'spctl\t--assess\t--type\texecute'
+run_case attach '/mount/Tesserae.app'
 run_case execute 'SHOULD_NEVER_APPEAR'
 run_case detach 'SHOULD_NEVER_APPEAR'
 run_case unsigned-feed 'SHOULD_NEVER_APPEAR'
@@ -360,6 +363,18 @@ for _, c in helpers + apps:
     assert "--timestamp" in c and c[c.index("--options") + 1] == "runtime", c
     assert c[c.index("--sign") + 1] == "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", c
 HELPER_SIGNING
+    python3 - "$CALLS" <<'APP_TICKET'
+import pathlib, sys
+calls = [line.split("\t") for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+submits = [(i, c) for i, c in enumerate(calls) if c[:3] == ["xcrun", "notarytool", "submit"]]
+assert len(submits) == 2
+assert submits[0][1][3].endswith(".zip") and submits[1][1][3].endswith(".dmg")
+staples = [(i, c) for i, c in enumerate(calls) if c[:3] == ["xcrun", "stapler", "staple"]]
+assert len(staples) == 2
+assert staples[0][1][3].endswith("Tesserae.app")
+pack = next(i for i, c in enumerate(calls) if c[:2] == ["hdiutil", "create"])
+assert submits[0][0] < staples[0][0] < pack < submits[1][0] < staples[1][0]
+APP_TICKET
     # The successful trace also proves all required steps execute in order.
     markers=($'git\tstatus' $'git\tfetch' $'security\tfind-identity' $'xcrun\tnotarytool\thistory' $'just\tgate' $'just\tffi' $'xcodebuild\tarchive' $'xcodebuild\t-exportArchive' $'codesign\t--verify' $'hdiutil\tcreate' $'codesign\t--timestamp' $'xcrun\tnotarytool\tsubmit' $'xcrun\tstapler\tstaple' $'xcrun\tstapler\tvalidate' $'spctl\t--assess\t--type\topen' $'hdiutil\tattach' $'spctl\t--assess\t--type\texecute' $'hdiutil\tdetach')
     next=0

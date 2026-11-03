@@ -73,7 +73,7 @@ struct StartView: View {
     private func row(_ volume: VolumeInfo) -> some View {
         HStack(spacing: 14) {
             Image(systemName: volume.group == .network ? "server.rack" : (volume.isStartup ? "internaldrive" : "externaldrive"))
-                .font(.title).frame(width: 40).accessibilityHidden(true)
+                .font(.title).foregroundStyle(Aether.accent).frame(width: 40).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(volume.name).font(.headline)
                 Text(volume.filesystem).foregroundStyle(.secondary)
@@ -81,7 +81,7 @@ struct StartView: View {
             }
             Spacer()
             Button(String(localized: "start.scan", defaultValue: "Scan", comment: "Scan this mounted volume.")) { scan(volume) }
-        }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(16).aetherSurface()
             .contentShape(Rectangle()).onTapGesture(count: 2) { scan(volume) }
     }
 

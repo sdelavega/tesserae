@@ -15,7 +15,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import CoreGraphics
+import AppKit
 import Metal
+import MetalKit
 import XCTest
 
 @testable import TesseraeKit
@@ -23,6 +25,38 @@ import XCTest
 /// The descend animation (spec §8 "Zoom and navigation"): its curves, and the
 /// renderer's layer cross-fade.
 final class ZoomAnimationTests: XCTestCase {
+    @MainActor
+    func test_reduced_motion_stops_active_zoom_and_keeps_static_metal_rendering() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let view = MTKView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), device: device)
+        let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.orderFront(nil)
+        defer { window.close() }
+        let draws = RedrawDelegate()
+        view.delegate = draws
+        let coordinator = TreemapView.Coordinator()
+        coordinator.startZoom(from: CGRect(x: 0, y: 0, width: 100, height: 100), in: view, beforeUpdate: true)
+        XCTAssertTrue(coordinator.player.isRunning)
+        coordinator.applyMotionPreference(false, to: view)
+        XCTAssertTrue(coordinator.player.isRunning, "normal motion preserves the zoom")
+        draws.count = 0
+        coordinator.applyMotionPreference(true, to: view)
+        XCTAssertFalse(coordinator.player.isRunning)
+        XCTAssertTrue(view.isPaused, "reduced motion stops the continuous display loop")
+        XCTAssertTrue(view.enableSetNeedsDisplay, "static Metal redraws remain enabled")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertGreaterThan(draws.count, 0, "the static Metal view must actually deliver a final redraw")
+    }
+
+    @MainActor
+    private final class RedrawDelegate: NSObject, MTKViewDelegate {
+        var count = 0
+        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+        func draw(in view: MTKView) { count += 1 }
+    }
+
     private static func close(_ a: CGRect, _ b: CGRect, _ eps: CGFloat = 1e-9) -> Bool {
         abs(a.minX - b.minX) <= eps && abs(a.minY - b.minY) <= eps && abs(a.width - b.width) <= eps
             && abs(a.height - b.height) <= eps

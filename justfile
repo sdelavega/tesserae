@@ -33,7 +33,7 @@ strings-test:
 # the suite and gets a process and a thread to itself here, as in CI.
 #
 # All tests, then the serialized descriptor-limit test.
-test:
+test: applesauce
     cargo test --workspace --locked
     cargo test --manifest-path tools/applesauce/Cargo.toml --locked
     cargo test -p tesserae-core --lib --locked -- --ignored --exact --test-threads=1 pool::tests::raises_nofile_limit_and_falls_back_to_fewer_workers
@@ -98,7 +98,7 @@ release-metadata-test: app-build
     python3 scripts/tests/applesauce_bundle_test.py
     python3 scripts/tests/release_metadata_test.py
     python3 scripts/tests/updates_test.py
-    xcrun swiftc -parse-as-library apple/Tesserae/AppChrome.swift scripts/tests/AppChromeTests.swift -o apple/build/app-chrome-tests
+    xcrun swiftc -parse-as-library apple/Tesserae/AppChrome.swift apple/Tesserae/AetherTheme.swift scripts/tests/AppChromeTests.swift -o apple/build/app-chrome-tests
     apple/build/app-chrome-tests apple/build/DerivedData/Build/Products/Release/Tesserae.app
     xcrun swiftc -parse-as-library -F apple/build/DerivedData/Build/Products/Release -framework Sparkle -Xlinker -rpath -Xlinker '@executable_path/DerivedData/Build/Products/Release' apple/Tesserae/Updates.swift apple/Tesserae/AppChrome.swift scripts/tests/UpdatesTests.swift -o apple/build/updates-tests
     apple/build/updates-tests

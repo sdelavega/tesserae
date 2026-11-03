@@ -20,15 +20,49 @@ import SwiftUI
 public struct ReconciliationView: View {
     public let model: ReconciliationViewModel
     public var grantAccess: (() -> Void)?
+    public var compact = false
     @ObservedObject private var detail = DetailSettings.shared
     @Environment(\.colorScheme) private var scheme
 
-    public init(model: ReconciliationViewModel, grantAccess: (() -> Void)? = nil) {
+    public init(model: ReconciliationViewModel, grantAccess: (() -> Void)? = nil, compact: Bool = false) {
         self.model = model
         self.grantAccess = grantAccess
+        self.compact = compact
     }
 
     public var body: some View {
+        if compact { compactSummary } else { fullSummary }
+    }
+
+    private var compactSummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let message = model.scopeMessage {
+                Text(message).font(.callout)
+            } else {
+                Text(model.title).font(.headline)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 8) {
+                    ForEach(Array(model.rows(for: detail.current).enumerated()), id: \.offset) { _, row in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(row.title).font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(row.value).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                        }
+                        .help([row.help, row.detail, row.annotation].compactMap { $0 }.joined(separator: "\n"))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityHint([row.detail, row.annotation].compactMap { $0 }.joined(separator: ". "))
+                    }
+                }
+                if let warning = model.warning { Label(warning, systemImage: "exclamationmark.triangle").font(.system(size: 12)) }
+                if model.showGrantAccess {
+                    Button(model.grantAccessTitle) {
+                        if let grantAccess { grantAccess() }
+                        else { NSWorkspace.shared.open(FullDiskAccessSettings.url) }
+                    }
+                }
+            }
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var fullSummary: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let message = model.scopeMessage {
                 Text(message).font(.caption).opacity(0.65)

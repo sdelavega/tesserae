@@ -42,6 +42,7 @@ import SwiftUI
 /// CoreGraphics renderer's image instead (spec §11 "Rendering"), with no zoom
 /// animation (ruling P2): there every navigation redraws at once.
 public struct TreemapView: NSViewRepresentable {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Disable Metal to render deterministic CoreGraphics screenshots.
     public var useMetal: Bool
     public var tiles: [Tile]
@@ -134,13 +135,14 @@ public struct TreemapView: NSViewRepresentable {
         coordinator.interaction.onDismissCallout = onDismissCallout
         let pending = coordinator.interaction.setTiles(tiles)
         let inferred = sameNavigator ? Self.navigationZoomRect(old: previousTiles, new: tiles, viewport: nsView.bounds) : nil
-        let zoomFrom = pending ?? inferred
+        let zoomFrom = reduceMotion ? nil : (pending ?? inferred)
         guard let renderer = coordinator.renderer, let view = nsView as? MTKView else {
             // No animation without Metal: the new layout at once.
             (nsView as? FallbackView)?.set(tiles: tiles, palette: palette, colourOf: colourOf, dark: dark, snapshot: snapshot, mode: mode)
             if previousTiles != tiles { coordinator.reportZoom(false, force: true) }
             return
         }
+        coordinator.applyMotionPreference(reduceMotion, to: view)
         if let zoomFrom {
             // The old layout is what the renderer holds now; keep it before
             // the update replaces it.
@@ -398,6 +400,10 @@ public struct TreemapView: NSViewRepresentable {
             reportZoom(true)
             view.enableSetNeedsDisplay = false
             view.isPaused = false
+        }
+
+        func applyMotionPreference(_ reduceMotion: Bool, to view: MTKView) {
+            if reduceMotion, player.isRunning || renderer?.isZooming == true { stopZoom(view) }
         }
 
         private func stopZoom(_ view: MTKView) {

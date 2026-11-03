@@ -16,6 +16,7 @@
 
 
 import AppKit
+import SwiftUI
 
 @main
 struct AppChromeTests {
@@ -54,6 +55,23 @@ struct AppChromeTests {
                                  bundle: bundle, locale: L10n.pluralLocale(Locale(identifier: "ru_RU")),
                                  comment: "Independent progress counts")
         precondition(groupedText == "1\u{00a0}234 folders · 1\u{00a0}234 files", "Keep the user's region for grouping")
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = try require(NSAppearance(named: name), "Appearance missing")
+            appearance.performAsCurrentDrawingAppearance {
+                func luminance(_ color: NSColor) -> Double {
+                    let c = color.usingColorSpace(.sRGB)!
+                    func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+                    return 0.2126 * linear(c.redComponent) + 0.7152 * linear(c.greenComponent) + 0.0722 * linear(c.blueComponent)
+                }
+                for ink in [Aether.text, Aether.muted, Aether.accent] {
+                    for surface in [Aether.canvas, Aether.card] {
+                        let a = luminance(NSColor(ink)), b = luminance(NSColor(surface))
+                        precondition((max(a, b) + 0.05) / (min(a, b) + 0.05) >= 4.5,
+                                     "Aether text must meet WCAG AA on content surfaces")
+                    }
+                }
+            }
+        }
         let expectedDisclosure = "Tesserae checks for updates once a day; the request includes the app and macOS version. You can turn this off."
         precondition(AppChrome.updateDisclosure == expectedDisclosure)
         let credits = AppChrome.credits(bundle: bundle)

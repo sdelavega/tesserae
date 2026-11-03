@@ -58,7 +58,7 @@ struct ReclaimSummaryView: View {
                         if let message = messages[url.absoluteString] { Text(message).foregroundStyle(.secondary) }
                     }
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04)).cornerRadius(8)
+                    .aetherSurface()
             }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
     }

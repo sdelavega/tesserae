@@ -63,7 +63,7 @@ struct ScanReportView: View {
             }
         }
         .onChange(of: detail.current) { _ in showDetails = false }
-        .padding(16).frame(minWidth: 300, idealWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16).frame(minWidth: 280, idealWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var reportText: some View {
@@ -84,23 +84,18 @@ private struct GeneralDiagnosticsPasteboard: DiagnosticsPasteboard {
 /// The report control's laid-out bounds, in the window content's coordinate space.
 /// Used to check fit alongside the native file table's viewport bounds.
 final class ScanReportLayout {
-    var copyDiagnosticsFrame = CGRect.zero
+    weak var copyDiagnosticsView: NSView?
+    var copyDiagnosticsFrame: CGRect {
+        guard let view = copyDiagnosticsView, let content = view.window?.contentView else { return .zero }
+        return content.convert(view.bounds, from: view)
+    }
 }
 private struct CopyDiagnosticsBounds: NSViewRepresentable {
     let layout: ScanReportLayout
     func makeNSView(context: Context) -> BoundsView { BoundsView() }
     func updateNSView(_ view: BoundsView, context: Context) {
-        view.reportLayout = layout
-        view.needsLayout = true
+        layout.copyDiagnosticsView = view
     }
 
-    final class BoundsView: NSView {
-        var reportLayout: ScanReportLayout?
-        override func layout() {
-            super.layout()
-            if let content = window?.contentView {
-                reportLayout?.copyDiagnosticsFrame = content.convert(bounds, from: self)
-            }
-        }
-    }
+    final class BoundsView: NSView {}
 }

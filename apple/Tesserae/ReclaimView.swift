@@ -26,6 +26,7 @@ struct ReclaimView: View {
     var unavailable = false
     var unavailableMessage = ReclaimCopy.unavailable
     var busy = false
+    var showsReview = true
     var remove: (UInt32) -> Void
     var confirm: () -> Void
     @Environment(\.locale) private var locale
@@ -96,9 +97,9 @@ struct ReclaimView: View {
                             comment: "ReclaimView: Will be skipped."), systemImage: "hand.raised")
                     }
                     ForEach(Array(itemWarnings(item).enumerated()), id: \.offset) { _, reason in Text(warningText(reason, for: item, detailLevel: detail.current)) }
-                }.padding(12).background(Color.primary.opacity(0.04)).cornerRadius(8)
+                }.padding(12).aetherSurface()
             }
-            Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy)
+            if showsReview { Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy) }
 
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
     }
