@@ -86,7 +86,7 @@ final class ReclaimSnapshotTests: XCTestCase {
             }
             let actual = try XCTUnwrap(context.makeImage(), name)
             XCTAssertEqual(actual.width, 960); XCTAssertEqual(actual.height, 1200)
-            let url = Self.references.appendingPathComponent(name + ".png")
+            let url = nativeSnapshotReference(Self.references.appendingPathComponent(name + ".png"))
             let recordNames = ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOT_NAMES"]?.split(separator: ",").map(String.init)
             if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1",
                recordNames == nil || recordNames!.contains(name) {

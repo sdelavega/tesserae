@@ -87,7 +87,7 @@ final class DegradedModeTests: XCTestCase {
             }
             let actual = try XCTUnwrap(context.makeImage(), name)
             XCTAssertEqual(actual.width, 960); XCTAssertEqual(actual.height, 1200)
-            let url = Self.references.appendingPathComponent(name + ".png")
+            let url = nativeSnapshotReference(Self.references.appendingPathComponent(name + ".png"))
             let recordNames = ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOT_NAMES"]?.split(separator: ",").map(String.init)
             if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1",
                recordNames == nil || recordNames!.contains(name) {
@@ -190,7 +190,7 @@ final class DegradedModeTests: XCTestCase {
             bitmap.size = host.bounds.size
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let actual = try XCTUnwrap(bitmap.cgImage)
-            let reference = Self.references.appendingPathComponent(name + ".png")
+            let reference = nativeSnapshotReference(Self.references.appendingPathComponent(name + ".png"))
             let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("build/task-2-review/" + name + ".actual.png")
             try png(actual, output)
@@ -330,7 +330,7 @@ final class DegradedModeTests: XCTestCase {
         let output = Self.references.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("build/ui-fixes/main-window-all-panes.actual.png")
         try png(actual, output)
-        let reference = Self.references.appendingPathComponent("main-window-all-panes-1440x900.png")
+        let reference = nativeSnapshotReference(Self.references.appendingPathComponent("main-window-all-panes-1440x900.png"))
         if ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1" { try png(actual, reference) }
         guard let source = CGImageSourceCreateWithURL(reference as CFURL, nil) else {
             XCTFail("Missing main-window reference; inspect " + output.path); return

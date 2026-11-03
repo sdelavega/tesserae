@@ -179,6 +179,24 @@ jobs:
       - name: TesseraeKit tests
         run: just app-test
 
+      - name: Estimator regression under strict cooperative pool
+        env:
+          LIBDISPATCH_COOPERATIVE_POOL_STRICT: "1"
+          DYLD_FRAMEWORK_PATH: ${{ github.workspace }}/apple/build/DerivedData/Build/Products/Debug
+        run: |
+          python3 - <<'PYTHON'
+          import subprocess
+          result = subprocess.run([
+              "xcrun", "xctest", "-XCTest",
+              "TesseraeKitTests.ReclaimViewModelTests/test_estimates_are_bounded_concurrent_and_survive_unrelated_staging",
+              "apple/build/DerivedData/Build/Products/Debug/TesseraeKitTests.xctest",
+          ], timeout=30, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+          print(result.stdout)
+          result.check_returncode()
+          if "Executed 1 test," not in result.stdout:
+              raise SystemExit("Strict-pool regression did not execute its selected case")
+          PYTHON
+
       - name: Unsigned universal Release build
         run: |
           just app-build

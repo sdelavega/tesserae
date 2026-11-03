@@ -77,6 +77,7 @@ final class RenderSnapshotTests: XCTestCase {
     private static var recording: Bool { ProcessInfo.processInfo.environment["TESSERAE_RECORD_SNAPSHOTS"] == "1" }
 
     private func writePNG(_ image: CGImage, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
         else { throw CocoaError(.fileWriteUnknown) }
         CGImageDestinationAddImage(dest, image, nil)
@@ -91,7 +92,7 @@ final class RenderSnapshotTests: XCTestCase {
     private func assertMatchesReference(
         _ image: CGImage, named name: String, file: StaticString = #filePath, line: UInt = #line
     ) throws {
-        let url = Self.directory.appendingPathComponent("\(name).png")
+        let url = nativeSnapshotReference(Self.directory.appendingPathComponent("\(name).png"))
         let actual = Raster(image)
         if Self.recording {
             try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)

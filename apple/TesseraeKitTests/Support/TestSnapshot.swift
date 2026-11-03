@@ -159,3 +159,12 @@ extension Reclaim {
             overlay: overlay, existing: items, sessionID: sessionID))
     }
 }
+
+// Native AppKit/SwiftUI rasterization changes with macOS. Keep independent,
+// reviewed exact references for the pinned macOS 26 CI image and macOS 27 host.
+// This selects a reference only; dimensions and every RGBA byte still compare.
+func nativeSnapshotReference(_ base: URL) -> URL {
+    guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26 else { return base }
+    return base.deletingLastPathComponent().appendingPathComponent("macos-26")
+        .appendingPathComponent(base.lastPathComponent)
+}
