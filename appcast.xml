@@ -159,8 +159,22 @@ If you already use Tesserae, choose **Tesserae → Check for Updates…** to ins
 Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bugs, confusing numbers or ideas. For scan problems, **Scan report → Copy Diagnostics** gives the details; check it for file names you'd rather not share first.
 </description>
             <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.0/Tesserae-0.2.0.dmg" length="10590061" type="application/octet-stream" ns0:edSignature="Keai+ya4ITGyiRCkOjninoyFEnrq4YU7q5qGMIVTlQ25sOH6AUxPxQCuT8MmPJQVoFVw8EW1RkGEkAd1CVSXBw==" />
+        </item><item xmlns:ns0="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <title>0.2.1</title>
+            <pubDate>Tue, 03 Nov 2026 18:14:14 -0500</pubDate>
+            <ns0:version>201</ns0:version>
+            <ns0:shortVersionString>0.2.1</ns0:shortVersionString>
+            <ns0:minimumSystemVersion>13.0</ns0:minimumSystemVersion>
+            <description ns0:format="markdown"># Tesserae 0.2.1
+
+- Adaptive Carolina blue and navy styling with native typography, opaque content panels and restrained navigation glass.
+- A pinned space summary and inspector controls that fit without summary scrolling, including a 1200 × 720 minimum window.
+- Zoom respects the macOS Reduce Motion setting.
+- Staple the application as well as the disk image for distribution.
+</description>
+            <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.1/Tesserae-0.2.1.dmg" length="10670247" type="application/octet-stream" ns0:edSignature="583kNLoCHJf1u9/gcNn3VNvuN4rHnhoPu2HG/J9ocPQNn+/M2CUjzjvgVIdU/xIGH1AOrM18xf4t0E1sh7zhBw==" />
         </item></channel>
 </rss><!-- sparkle-signatures:
-edSignature: 6MMh8EAc1NpcBvpSfpfmwPADlN86nVP/a7bs6SEvAWpVAF35XLLzc6740cw9UgXbpdmiEbyMFFfCIxpcFIBeAQ==
-length: 12247
+edSignature: E1pPHvNpG/hpQxBKTxtjSbF0rg5lMByuPdJO610mw5Gqew8N0kgw+9QUDg+0jNxi6pvGdpyyMgc+xdQ35E0gAA==
+length: 13323
 -->
