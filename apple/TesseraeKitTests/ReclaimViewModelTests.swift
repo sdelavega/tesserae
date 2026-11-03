@@ -316,7 +316,7 @@ final class ReclaimViewModelTests: XCTestCase {
         semaphore.wait(timeout: .now() + 3)
     }
     private func assertStarted(_ semaphore: DispatchSemaphore, file: StaticString = #filePath, line: UInt = #line) async {
-        let result = await Task.detached { Self.blockingStartWait(semaphore) }.value
+        let result = await Task.detached { ReclaimViewModelTests.blockingStartWait(semaphore) }.value
         XCTAssertEqual(result, .success, "precondition: background work actually started", file: file, line: line)
     }
 

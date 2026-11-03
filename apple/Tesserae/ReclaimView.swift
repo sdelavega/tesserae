@@ -286,7 +286,8 @@ final class ReclaimPresentation: ObservableObject {
     private func performExecution(_ model: AppModel, trasher: any Trasher, stat: any FileStat, compressor: Compressor?) async {
         let completed = await model.executeReclaim(confirmedWarnings: confirmation.confirmedWarnings, trasher: trasher, stat: stat, log: log,
             progress: { [weak self] count, _ in
-                Task { @MainActor in if self?.running == true { self?.done = count } }
+                guard let self else { return }
+                Task { @MainActor in if self.running { self.done = count } }
             }, reviewedVerdicts: Dictionary(uniqueKeysWithValues: confirmation.items.map {
                 ($0.id, choicesChanged ? Verdict.denied(.changedSinceReview) : $0.verdict)
             }),
