@@ -130,7 +130,13 @@ final class ReclaimViewModelTests: XCTestCase {
         let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         defer { release.signal() }
         let vm = ReclaimViewModel(items: [item(1, .ok, 1_000_000_000)], volumes: [1: appleVolume],
-            defaults: nil, compressionEstimate: { _ in started.signal(); release.wait(); return 500_000_000 })
+            defaults: nil, compressionEstimate: { _ in
+                started.signal()
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().async { release.wait(); continuation.resume() }
+                }
+                return 500_000_000
+            })
         XCTAssertEqual(vm.items[0].action, .compress)
         XCTAssertTrue(vm.estimating.contains(1))
         XCTAssertEqual(vm.estimateText(for: vm.items[0]), "Estimating…")
@@ -150,7 +156,7 @@ final class ReclaimViewModelTests: XCTestCase {
         let probe = EstimateProbe()
         let a = item(1, .ok, 1_000_000_000), b = item(2, .ok, 512)
         let vm = ReclaimViewModel(items: [a], volumes: [1: appleVolume], defaults: nil,
-            compressionEstimate: { probe.estimate($0) })
+            compressionEstimate: { await probe.estimate($0) })
         await vm.waitForEstimate()
         let text = vm.estimateText(for: vm.items[0], locale: Locale(identifier: "en_US"))
         XCTAssertEqual(text, "Saves about 500 MB (estimated)", "precondition: A finished")
@@ -172,7 +178,7 @@ final class ReclaimViewModelTests: XCTestCase {
 
     func test_estimate_cache_invalidates_identity_session_and_revision() async {
         let probe = EstimateProbe()
-        let vm = ReclaimViewModel(defaults: nil, compressionEstimate: { probe.estimate($0) })
+        let vm = ReclaimViewModel(defaults: nil, compressionEstimate: { await probe.estimate($0) })
         let session = UUID(), nextSession = UUID()
         let cases: [(String, UInt64, Int32, Bool, UUID, UInt64)] = [
             ("a", 1, 1, false, session, 0), ("b", 1, 1, false, session, 0),
@@ -201,7 +207,7 @@ final class ReclaimViewModelTests: XCTestCase {
         let staged = (1...8).map { item(UInt32($0), .ok, 1_000_000_000) }
         let volumes = Dictionary(uniqueKeysWithValues: staged.map { ($0.id, appleVolume) })
         let vm = ReclaimViewModel(items: [staged[0]], volumes: [1: appleVolume], defaults: nil,
-            compressionEstimate: { probe.estimate($0) })
+            compressionEstimate: { await probe.estimate($0) })
         await assertStarted(probe.started)
         XCTAssertEqual(probe.calls(1), 1, "precondition: A is running before other items are staged")
         vm.replace(staged, volumes: volumes)
@@ -1064,12 +1070,14 @@ private final class EstimateProbe: @unchecked Sendable {
     var cancelled: Int { lock.withLock { cancellations } }
     var total: Int { lock.withLock { counts.values.reduce(0, +) } }
     func calls(_ id: UInt32) -> Int { lock.withLock { counts[id, default: 0] } }
-    func estimate(_ item: ReclaimItem) -> UInt64 {
+    private func takeRelease() -> Bool { release.wait(timeout: .now()) == .success }
+    func estimate(_ item: ReclaimItem) async -> UInt64 {
         lock.withLock { counts[item.id, default: 0] += 1; active += 1; maximum = max(maximum, active) }
         started.signal()
         if blocks {
             while !Task.isCancelled {
-                if release.wait(timeout: .now() + 0.005) == .success { break }
+                if takeRelease() { break }
+                try? await Task.sleep(for: .milliseconds(5))
             }
         }
         lock.withLock { active -= 1; if Task.isCancelled { cancellations += 1 } }

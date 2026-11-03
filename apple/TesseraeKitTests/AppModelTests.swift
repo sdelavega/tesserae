@@ -832,6 +832,9 @@ final class AppModelTests: XCTestCase {
         let app = AppModel(coordinator: ScanCoordinator(), stagingStat: MillionStat(), contextLoader: { _ in ctx })
         app.replaceSnapshot(s)
         let session = try XCTUnwrap(app.session)
+        // Measure staging after the independent initial table/label requests.
+        await session.waitForTable()
+        await session.waitForLabels()
         session.selection.nodes = [0]
         var ticks = 0, maximum = 0.0, last = Date()
         let heartbeat = Task { @MainActor in

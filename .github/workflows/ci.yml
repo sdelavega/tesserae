@@ -186,10 +186,10 @@ jobs:
           lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/Frameworks/TesseraeKit.framework/TesseraeKit
 
       - name: Collect exact snapshot diagnostics
-        if: failure()
+        if: failure() || cancelled()
         run: |
           mkdir -p apple/build/snapshot-diagnostics
-          find apple/build -name '*.actual.png' -exec cp {} apple/build/snapshot-diagnostics/ \;
+          find apple/build -path apple/build/snapshot-diagnostics -prune -o -name '*.actual.png' -exec cp {} apple/build/snapshot-diagnostics/ \;
           if [ -d "${TMPDIR%/}/tesserae-snapshots" ]; then
             find "${TMPDIR%/}/tesserae-snapshots" -name '*.actual.png' -exec cp {} apple/build/snapshot-diagnostics/ \;
           fi
@@ -197,7 +197,7 @@ jobs:
       # The .xcresult bundles (passed with -resultBundlePath by the just
       # recipes) hold the full build and test logs; open them in Xcode.
       - name: Upload Xcode results
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: xcode-results

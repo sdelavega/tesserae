@@ -712,7 +712,7 @@ public final class ReclaimViewModel: ObservableObject {
     private let archiveFiles: any ArchiveFileSystem
     private let volumeLoader: @Sendable (Data) -> VolumeCapabilities
     private let archiveSafety: @Sendable (Data, Data?) -> Bool
-    private let compressionEstimate: @Sendable (ReclaimItem) -> UInt64
+    private let compressionEstimate: @Sendable (ReclaimItem) async -> UInt64
     private var context: GuardContext?
     private var generation: UInt64 = 0
     private var tokens: [UInt32: UInt64] = [:]
@@ -721,12 +721,12 @@ public final class ReclaimViewModel: ObservableObject {
                 defaults: UserDefaults? = .standard, archiveFiles: any ArchiveFileSystem = ProductionArchiveFileSystem(isCancelled: { Task.isCancelled }),
                 volumeLoader: (@Sendable (Data) -> VolumeCapabilities)? = nil,
                 archiveSafety: (@Sendable (Data, Data?) -> Bool)? = nil,
-                compressionEstimate: (@Sendable (ReclaimItem) -> UInt64)? = nil) {
+                compressionEstimate: (@Sendable (ReclaimItem) async -> UInt64)? = nil) {
         self.items = items; self.originals = items; self.volumes = volumes; self.defaults = defaults
         self.archiveFiles = archiveFiles
         self.volumeLoader = volumeLoader ?? Self.readVolume
         self.archiveSafety = archiveSafety ?? { mutationAncestryIsSafe($0, volumeRoot: $1) }
-        self.compressionEstimate = compressionEstimate ?? Self.estimateCompression
+        self.compressionEstimate = compressionEstimate ?? { Self.estimateCompression($0) }
         resolveVolumes()
         rebuild()
         startSelectedWork()
@@ -941,7 +941,7 @@ public final class ReclaimViewModel: ObservableObject {
                     self.estimateCache[key] = bytes
                     self.estimates[id] = bytes; self.tasks[id] = nil
                 } else {
-                    let work = Task.detached(priority: .utility) { compressionEstimate(item) }
+                    let work = Task.detached(priority: .utility) { await compressionEstimate(item) }
                     let bytes = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
                     guard !Task.isCancelled, let self, self.tokens[id] == token else { return }
                     self.estimateCache[key] = bytes

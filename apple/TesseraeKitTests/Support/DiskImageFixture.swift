@@ -24,6 +24,7 @@ final class DiskImageFixture: @unchecked Sendable {
     private var directory: URL!
     private var image: URL!
     private var attached = false
+    private var device: String?
 
     @discardableResult
     static func command(_ args: [String]) throws -> Data {
@@ -65,7 +66,15 @@ final class DiskImageFixture: @unchecked Sendable {
             }
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
             attachAttempted = true
-            try Self.command(["attach", "-nobrowse", "-noverify", "-owners", "on", "-mountpoint", root.path, image.path])
+            let attachment = try Self.command(["attach", "-plist", "-nobrowse", "-noverify", "-owners", "on", "-mountpoint", root.path, image.path])
+            let plist = try PropertyListSerialization.propertyList(from: attachment, format: nil) as? [String: Any]
+            let entities = plist?["system-entities"] as? [[String: Any]] ?? []
+            // Retain the owned whole-image device: a failed eject can remove the
+            // mountpoint before its device disappears, making a path retry fail.
+            device = entities.compactMap { $0["dev-entry"] as? String }.first {
+                $0.range(of: #"^/dev/disk[0-9]+$"#, options: .regularExpression) != nil
+            }
+            guard device != nil else { throw NSError(domain: "DiskImageFixture", code: 4) }
             let expected = Data(root.resolvingSymlinksInPath().path.utf8)
             guard try volumeRoot(of: expected) == expected else {
                 throw NSError(domain: "DiskImageFixture", code: 3,
@@ -84,7 +93,7 @@ final class DiskImageFixture: @unchecked Sendable {
 
     func detach(force: Bool = false) throws {
         guard attached else { return }
-        try Self.command(["detach"] + (force ? ["-force"] : []) + [root.path])
+        try Self.command(["detach"] + (force ? ["-force"] : []) + [device ?? root.path])
         attached = false
     }
 
