@@ -119,7 +119,7 @@ struct ContentView: View {
                 root: root, output: gate.output, timeout: gate.timeout, model: model, runner: phaseGate)
         }
         #endif
-        .sheet(isPresented: Binding(get: { model.onboardingPresented }, set: model.setOnboardingPresented)) {
+        .sheet(isPresented: Binding(get: { model.onboardingPresented }, set: { model.setOnboardingPresented($0) })) {
             VStack(spacing: 0) {
                 OnboardingView(state: model.onboarding, send: model.sendOnboarding)
                 Text(AppChrome.updateDisclosure)
