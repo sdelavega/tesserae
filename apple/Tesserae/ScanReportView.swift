@@ -44,7 +44,7 @@ struct ScanReportView: View {
                 )) { copyFailed = !report.copyDiagnostics(to: GeneralDiagnosticsPasteboard()) }
                     .background { if let layout { CopyDiagnosticsBounds(layout: layout) } }
             }
-            Text(ScanReport.sharingNote).font(.caption).foregroundStyle(.secondary)
+            Text(ScanReport.sharingNote).font(.caption).foregroundStyle(Aether.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if copyFailed { Text(String(
                 localized: "scanReportView.the.clipboard.could.not.be.written.try.copy",

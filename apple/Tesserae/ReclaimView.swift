@@ -42,14 +42,14 @@ struct ReclaimView: View {
                 localized: "reclaimView.staged.until.confirmation",
                 defaultValue: "Staged items stay where they are until you confirm their actions.",
                 comment: "ReclaimView: Staged items stay where they are until you confirm their actions."
-            )).foregroundStyle(.secondary)
+            )).foregroundStyle(Aether.muted)
             if unavailable { Text(unavailableMessage).font(.callout) }
             Text(TrashConfirmation(items: items).total(locale: locale)).font(.headline)
             if items.isEmpty { Text(String(
                 localized: "reclaimView.no.items.staged",
                 defaultValue: "No items staged.",
                 comment: "ReclaimView: No items staged."
-            )).foregroundStyle(.secondary) }
+            )).foregroundStyle(Aether.muted) }
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 6) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -67,9 +67,9 @@ struct ReclaimView: View {
                     if let viewModel {
                         ReclaimActionPicker(model: viewModel, item: item, advancedExpanded: advancedExpanded)
                             .disabled(busy)
-                        Text(viewModel.estimateText(for: item, locale: locale)).foregroundStyle(.secondary)
+                        Text(viewModel.estimateText(for: item, locale: locale)).foregroundStyle(Aether.muted)
                     } else {
-                        Text(ReclaimCopy.size(item.recordedSize, upperBound: item.recorded.isDirectory, unknownContent: item.hasUnknownContent, locale: locale)).foregroundStyle(.secondary)
+                        Text(ReclaimCopy.size(item.recordedSize, upperBound: item.recorded.isDirectory, unknownContent: item.hasUnknownContent, locale: locale)).foregroundStyle(Aether.muted)
                     }
                     if case .unavailable(let reason) = item.actionAvailability, !item.isCheckingArchive { Text(reason).font(.callout) }
                     if item.actionAvailability == .available {
@@ -122,12 +122,12 @@ struct RecentlyTrashedView: View {
                 localized: "reclaimView.no.items.available.to.put.back",
                 defaultValue: "No items available to put back.",
                 comment: "ReclaimView: No items available to put back."
-            )).foregroundStyle(.secondary) }
+            )).foregroundStyle(Aether.muted) }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(entry.displayPath).textSelection(.enabled)
                     HStack {
-                        Text(entry.ts, style: .date).foregroundStyle(.secondary)
+                        Text(entry.ts, style: .date).foregroundStyle(Aether.muted)
                         Spacer()
                         Button(String(
                             localized: "reclaimView.put.back",
@@ -424,7 +424,7 @@ struct ReclaimActionPicker: View {
                 let availability = model.availability(.archive(format), for: item)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(format.title)
-                    Text(format.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(format.note).font(.caption).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
                 }.tag(format).disabled(availability != .available)
                     .help({ if case .unavailable(let reason) = availability { return reason }; return format.note }())
             }
@@ -439,7 +439,7 @@ struct RecentlyCompressedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(ReclaimCopy.recentlyCompressed).font(.title2.bold())
-            if entries.isEmpty { Text(ReclaimCopy.noCompressedItems).foregroundStyle(.secondary) }
+            if entries.isEmpty { Text(ReclaimCopy.noCompressedItems).foregroundStyle(Aether.muted) }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                 Text(entry.displayPath).textSelection(.enabled)
                 if let count = entry.compression?.filesChanged { Text(ReclaimCopy.items(count)) }

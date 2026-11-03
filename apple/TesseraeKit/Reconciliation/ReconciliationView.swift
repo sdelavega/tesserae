@@ -21,13 +21,15 @@ public struct ReconciliationView: View {
     public let model: ReconciliationViewModel
     public var grantAccess: (() -> Void)?
     public var compact = false
+    public var compactLabelColour: Color = .secondary
     @ObservedObject private var detail = DetailSettings.shared
     @Environment(\.colorScheme) private var scheme
 
-    public init(model: ReconciliationViewModel, grantAccess: (() -> Void)? = nil, compact: Bool = false) {
+    public init(model: ReconciliationViewModel, grantAccess: (() -> Void)? = nil, compact: Bool = false, compactLabelColour: Color = .secondary) {
         self.model = model
         self.grantAccess = grantAccess
         self.compact = compact
+        self.compactLabelColour = compactLabelColour
     }
 
     public var body: some View {
@@ -43,7 +45,7 @@ public struct ReconciliationView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(Array(model.rows(for: detail.current).enumerated()), id: \.offset) { _, row in
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(row.title).font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(row.title).font(.system(size: 12)).foregroundStyle(compactLabelColour)
                             Text(row.value).font(.system(size: 13, weight: .semibold)).monospacedDigit()
                         }
                         .help([row.help, row.detail, row.annotation].compactMap { $0 }.joined(separator: "\n"))

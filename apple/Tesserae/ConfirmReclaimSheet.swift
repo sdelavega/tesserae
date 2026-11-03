@@ -40,7 +40,7 @@ struct ConfirmReclaimSheet: View {
             )).fixedSize(horizontal: false, vertical: true)
             if scrolls { ScrollView { warningRows } } else { warningRows; Spacer(minLength: 0) }
             HStack {
-                Text(ReclaimCopy.proceeding(confirmation.movingCount, locale: locale)).foregroundStyle(.secondary)
+                Text(ReclaimCopy.proceeding(confirmation.movingCount, locale: locale)).foregroundStyle(Aether.muted)
                 Spacer()
                 Button(String(
                     localized: "confirmTrashSheet.cancel",
@@ -75,7 +75,7 @@ struct ConfirmReclaimSheet: View {
                 Text(first.action.title).font(.headline)
                 ForEach(confirmation.checkingItems) { item in
                     Text(item.displayPath).bold()
-                    Text(ReclaimCopy.checking).foregroundStyle(.secondary)
+                    Text(ReclaimCopy.checking).foregroundStyle(Aether.muted)
                 }
             }
             if !confirmation.deniedItems.isEmpty {
@@ -141,7 +141,7 @@ struct TrashProgressView: View {
                 localized: "confirmTrashSheet.please.wait.for.this.batch.to.finish",
                 defaultValue: "Please wait for this batch to finish.",
                 comment: "ConfirmReclaimSheet: Please wait for this batch to finish."
-            )).foregroundStyle(.secondary)
+            )).foregroundStyle(Aether.muted)
             Button(String(localized: "reclaim.stopAfterBatch", defaultValue: "Stop after this batch",
                 comment: "Request cancellation after the current compression or decompression batch finishes."),
                 action: cancel).disabled(cancellationRequested)

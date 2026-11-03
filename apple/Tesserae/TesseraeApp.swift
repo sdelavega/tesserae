@@ -140,7 +140,7 @@ private struct GeneralSettingsView: View {
                 Text(String(localized: "detail.detailed", defaultValue: "Detailed", comment: "Full technical presentation option.")).tag(DetailLevel.detailed)
             }.pickerStyle(.segmented)
             Text(String(localized: "detail.explanation", defaultValue: "Simple uses plain summaries; Detailed shows all technical information.",
-                comment: "One-line explanation of the presentation setting.")).font(.footnote).foregroundStyle(.secondary)
+                comment: "One-line explanation of the presentation setting.")).font(.footnote).foregroundStyle(Aether.muted)
         }.padding(24)
     }
 }

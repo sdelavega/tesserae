@@ -55,7 +55,7 @@ struct StartView: View {
                     }
                     if group == .network {
                         Text(String(localized: "start.network.note", defaultValue: "Network volumes scan more slowly.",
-                                    comment: "Explanation below the Network group.")).font(.callout).foregroundStyle(.secondary)
+                                    comment: "Explanation below the Network group.")).font(.callout).foregroundStyle(Aether.muted)
                     }
                 }
             }
@@ -76,8 +76,8 @@ struct StartView: View {
                 .font(.title).foregroundStyle(Aether.accent).frame(width: 40).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(volume.name).font(.headline)
-                Text(volume.filesystem).foregroundStyle(.secondary)
-                Text(sizeText(volume)).font(.callout).foregroundStyle(.secondary)
+                Text(volume.filesystem).foregroundStyle(Aether.muted)
+                Text(sizeText(volume)).font(.callout).foregroundStyle(Aether.muted)
             }
             Spacer()
             Button(String(localized: "start.scan", defaultValue: "Scan", comment: "Scan this mounted volume.")) { scan(volume) }

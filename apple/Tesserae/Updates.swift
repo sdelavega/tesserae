@@ -79,7 +79,7 @@ struct UpdateSettingsView: View {
                 defaultValue: "Check for updates automatically",
                 comment: "Updates: Check for updates automatically."
             ), isOn: $updates.automaticallyChecksForUpdates)
-            Text(AppChrome.updateDisclosure).font(.footnote).foregroundStyle(.secondary)
+            Text(AppChrome.updateDisclosure).font(.footnote).foregroundStyle(Aether.muted)
         }.padding(24).frame(width: 440)
     }
 }

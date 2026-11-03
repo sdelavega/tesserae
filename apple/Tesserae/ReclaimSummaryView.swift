@@ -55,7 +55,7 @@ struct ReclaimSummaryView: View {
                                     comment: "ReclaimSummaryView: Restore this item."
                                 ) : ReclaimCopy.putBackWhileScanning)
                         }
-                        if let message = messages[url.absoluteString] { Text(message).foregroundStyle(.secondary) }
+                        if let message = messages[url.absoluteString] { Text(message).foregroundStyle(Aether.muted) }
                     }
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .aetherSurface()

@@ -100,7 +100,7 @@ release-metadata-test: app-build
     python3 scripts/tests/updates_test.py
     xcrun swiftc -parse-as-library apple/Tesserae/AppChrome.swift apple/Tesserae/AetherTheme.swift scripts/tests/AppChromeTests.swift -o apple/build/app-chrome-tests
     apple/build/app-chrome-tests apple/build/DerivedData/Build/Products/Release/Tesserae.app
-    xcrun swiftc -parse-as-library -F apple/build/DerivedData/Build/Products/Release -framework Sparkle -Xlinker -rpath -Xlinker '@executable_path/DerivedData/Build/Products/Release' apple/Tesserae/Updates.swift apple/Tesserae/AppChrome.swift scripts/tests/UpdatesTests.swift -o apple/build/updates-tests
+    xcrun swiftc -parse-as-library -F apple/build/DerivedData/Build/Products/Release -framework Sparkle -Xlinker -rpath -Xlinker '@executable_path/DerivedData/Build/Products/Release' apple/Tesserae/Updates.swift apple/Tesserae/AppChrome.swift apple/Tesserae/AetherTheme.swift scripts/tests/UpdatesTests.swift -o apple/build/updates-tests
     apple/build/updates-tests
 
 # FDA grants need a real code signature; if testing again, the user must toggle FDA off/on for the new signature.

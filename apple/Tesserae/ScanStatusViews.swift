@@ -110,7 +110,7 @@ struct ScanFailureView: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle").font(.largeTitle)
             Text(model.title).font(.title2)
-            Text(model.reason).foregroundStyle(.secondary)
+            Text(model.reason).foregroundStyle(Aether.muted)
             Button(model.copyTitle) {
                 NSPasteboard.general.clearContents()
                 copyFailed = !NSPasteboard.general.setString(model.diagnostics, forType: .string)

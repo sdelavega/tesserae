@@ -123,7 +123,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 OnboardingView(state: model.onboarding, send: model.sendOnboarding)
                 Text(AppChrome.updateDisclosure)
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(Aether.muted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding([.horizontal, .bottom], 24)
             }.frame(width: 560)
@@ -197,7 +197,7 @@ struct ContentView: View {
                     defaultValue: "\(progress.errors) errors",
                     locale: L10n.pluralLocale(locale),
                     comment: "ContentView: {progress.errors} errors."
-                )).foregroundStyle(.secondary) }
+                )).foregroundStyle(Aether.muted) }
             } else if case .failed(let errno) = model.scanState {
                 ScanFailureView(errno: errno, chooseFolder: chooseFolder)
             } else {
@@ -219,7 +219,7 @@ struct ContentView: View {
                     localized: "contentView.focus.on.up.to.three.types",
                     defaultValue: "Focus on up to three types",
                     comment: "ContentView: Focus on up to three types."
-                )).font(.caption).foregroundStyle(.secondary)
+                )).font(.caption).foregroundStyle(Aether.muted)
                 ForEach(FileKind.allCases, id: \.self) { kind in
                     Toggle(kind.displayName, isOn: Binding(
                         get: { model.focusKinds.contains(kind) },
@@ -316,15 +316,15 @@ struct SessionView: View {
                         ForEach(session.navigator.breadcrumbItems, id: \.node) { item in
                             Button(item.title) { session.go(to: item.node) }
                                 .buttonStyle(.plain).lineLimit(1)
-                            if item.node != session.root { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary) }
+                            if item.node != session.root { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Aether.muted) }
                         }
                     }
                 }
                 Spacer()
-                Text(displaySize(session.root == Tile.noNode ? 0 : session.source.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(.secondary)
+                Text(displaySize(session.root == Tile.noNode ? 0 : session.source.allocated(session.root), locale: locale)).monospacedDigit().foregroundStyle(Aether.muted)
             }.padding(12).background { AetherChrome() }
             if let model = session.reconciliation {
-                ReconciliationView(model: model, grantAccess: grantAccess, compact: true)
+                ReconciliationView(model: model, grantAccess: grantAccess, compact: true, compactLabelColour: Aether.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12).background(Aether.card)
                     .background { if let layout { SessionBounds(layout: layout, summary: true) } }
@@ -341,7 +341,7 @@ struct SessionView: View {
                                         localized: "contentView.no.allocated.file.data.in.this.folder",
                                         defaultValue: "No allocated file data in this folder",
                                         comment: "ContentView: No allocated file data in this folder."
-                                    )).foregroundStyle(.secondary)
+                                    )).foregroundStyle(Aether.muted)
                                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else {
                                 TreemapView(
@@ -507,7 +507,7 @@ private struct InspectorPane: View {
                     defaultValue: "Point to a tile to see its path, size and modification date.",
                     comment: "ContentView: Point to a tile to see its path, size and modification date."
                 ))
-                    .foregroundStyle(.secondary).font(.callout)
+                    .foregroundStyle(Aether.muted).font(.callout)
             }
             Spacer()
         }.padding(16).frame(maxHeight: .infinity, alignment: .topLeading)
@@ -515,7 +515,7 @@ private struct InspectorPane: View {
 
     private func detail(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(Aether.muted)
             Text(value).font(.callout).textSelection(.enabled)
         }
     }
@@ -545,7 +545,7 @@ private struct TablePane: View {
                     defaultValue: "Largest 1,000 files in this folder · column sorts apply to this list",
                     comment: "ContentView: Largest 1,000 files in this folder · column sorts apply to this list."
                 ))
-                    .font(.caption).foregroundStyle(.secondary).padding(8)
+                    .font(.caption).foregroundStyle(Aether.muted).padding(8)
                 if let content = rows.content {
                     FileTableView(snapshot: content.snapshot, rows: content.rows, selection: selection, overlay: session.overlay, locale: locale, onStage: stagingDisabled ? nil : stage) { key, ascending in
                         Task { await rows.sort(by: key, ascending: ascending) }

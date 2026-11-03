@@ -91,7 +91,7 @@ struct OnboardingView: View {
             Label(OnboardingViewModel.title, systemImage: "lock.shield").font(.title2)
             Text(OnboardingViewModel.purpose)
             Text(OnboardingViewModel.privacy)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Aether.muted)
             Text(OnboardingViewModel.consent)
             Text(OnboardingViewModel.restart).font(.headline)
             Text(OnboardingViewModel.instructions)
