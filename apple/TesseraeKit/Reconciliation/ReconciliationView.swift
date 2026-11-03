@@ -53,6 +53,9 @@ public struct ReconciliationView: View {
                         .accessibilityHint([row.detail, row.annotation].compactMap { $0 }.joined(separator: ". "))
                     }
                 }
+                if detail.current == .detailed, let text = model.purgeable {
+                    Text(text).font(.system(size: 12)).foregroundStyle(compactLabelColour)
+                }
                 if let warning = model.warning { Label(warning, systemImage: "exclamationmark.triangle").font(.system(size: 12)) }
                 if model.showGrantAccess {
                     Button(model.grantAccessTitle) {

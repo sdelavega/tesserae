@@ -319,6 +319,7 @@ final class DegradedModeTests: XCTestCase {
         XCTAssertGreaterThan(frame.minX, 1000, "precondition: button is in rightmost report pane")
         XCTAssertTrue(host.bounds.contains(frame), "Copy Diagnostics must be fully inside window: \(frame), \(host.bounds)")
         XCTAssertNotNil(session.reconciliation, "precondition: space breakdown visible")
+        XCTAssertNotNil(session.reconciliation?.purgeable, "precondition: retain the detailed purgeable estimate in the pinned summary")
         host.displayIfNeeded()
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1440, pixelsHigh: 900,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
