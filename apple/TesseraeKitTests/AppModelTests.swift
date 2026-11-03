@@ -1287,6 +1287,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(session.overlay.deleted.contains(nodes[0]))
         XCTAssertEqual(ui.history.count, 2)
         XCTAssertEqual(log.entries().last?.action, "putBack")
+        // Snapshot/space probes still access the mounted volume after scanning.
+        // Join them before fixture teardown and the next timing regression.
+        await model.waitForFacts()
     }
 
     func test_age_reference_follows_each_snapshot_scan_start() throws {

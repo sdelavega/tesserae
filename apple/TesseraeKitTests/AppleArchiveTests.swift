@@ -358,7 +358,13 @@ final class AppleArchiveTests: XCTestCase, @unchecked Sendable {
         let f = DiskImageFixture(); try f.setUp(); defer { XCTAssertNoThrow(try f.tearDown()) }
         let item = f.root.appendingPathComponent("item"), data = Data("content".utf8)
         try FileManager.default.createDirectory(at: item, withIntermediateDirectories: false)
-        try data.write(to: item.appendingPathComponent("data"))
+        let leaf = item.appendingPathComponent("data")
+        try data.write(to: leaf)
+        // Require metadata in the archive on every supported system tar version.
+        let metadata = Data("fixture metadata".utf8)
+        XCTAssertEqual(metadata.withUnsafeBytes {
+            setxattr(leaf.path, "com.tesserae.test", $0.baseAddress, $0.count, 0, 0)
+        }, 0)
         let raw = Data(item.path.utf8)
         XCTAssertEqual(try archiveVerificationFlags(raw), 0, "disposable APFS volume")
         for native in ["apfs", "hfs", "unknown-fs", "", "APFS", "fusefs_unmeasured"] { XCTAssertEqual(archiveVerificationFlags(volumeFSType: native), 0) }

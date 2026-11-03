@@ -316,7 +316,13 @@ final class ReclaimViewModelTests: XCTestCase {
         semaphore.wait(timeout: .now() + 3)
     }
     private func assertStarted(_ semaphore: DispatchSemaphore, file: StaticString = #filePath, line: UInt = #line) async {
-        let result = await Task.detached { ReclaimViewModelTests.blockingStartWait(semaphore) }.value
+        // The estimator deliberately occupies every cooperative worker on a
+        // three-core runner. Its test signal must wait on a separate GCD worker.
+        let result = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: ReclaimViewModelTests.blockingStartWait(semaphore))
+            }
+        }
         XCTAssertEqual(result, .success, "precondition: background work actually started", file: file, line: line)
     }
 

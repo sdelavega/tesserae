@@ -185,6 +185,15 @@ jobs:
           lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/MacOS/Tesserae
           lipo -info apple/build/DerivedData/Build/Products/Release/Tesserae.app/Contents/Frameworks/TesseraeKit.framework/TesseraeKit
 
+      - name: Collect exact snapshot diagnostics
+        if: failure()
+        run: |
+          mkdir -p apple/build/snapshot-diagnostics
+          find apple/build -name '*.actual.png' -exec cp {} apple/build/snapshot-diagnostics/ \;
+          if [ -d "${TMPDIR%/}/tesserae-snapshots" ]; then
+            find "${TMPDIR%/}/tesserae-snapshots" -name '*.actual.png' -exec cp {} apple/build/snapshot-diagnostics/ \;
+          fi
+
       # The .xcresult bundles (passed with -resultBundlePath by the just
       # recipes) hold the full build and test logs; open them in Xcode.
       - name: Upload Xcode results
@@ -195,6 +204,7 @@ jobs:
           path: |
             apple/build/*.xcresult
             apple/build/DerivedData/Logs
+            apple/build/snapshot-diagnostics
           if-no-files-found: ignore
 
   # Short fuzz of the getattrlistbulk buffer parser. Separate from `rust` so
