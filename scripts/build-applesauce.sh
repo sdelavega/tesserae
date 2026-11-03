@@ -19,7 +19,7 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 cd "$(dirname "$0")/.."
-export RUSTUP_TOOLCHAIN=stable
+# Use the workspace-pinned compiler and targets, or an explicit caller override.
 export MACOSX_DEPLOYMENT_TARGET=13.0
 
 inputs=()

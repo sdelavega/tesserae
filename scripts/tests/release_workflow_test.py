@@ -24,6 +24,7 @@ import shutil
 import shlex
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -31,6 +32,48 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_helper_build_preserves_selected_compiler_and_universal_targets(self):
+        with tempfile.TemporaryDirectory(prefix="tesserae-helper-toolchain-") as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            binary = root / "bin"
+            binary.mkdir()
+            for name in ("build-applesauce.sh", "lib.sh"):
+                shutil.copy(ROOT / "scripts" / name, root / "scripts" / name)
+            calls = root / "calls.jsonl"
+            fake = "#!" + sys.executable + "\n" + """
+import json, os, pathlib, sys
+root = pathlib.Path(__file__).resolve().parents[1]
+name = pathlib.Path(sys.argv[0]).name
+if name == "cargo":
+    target = sys.argv[sys.argv.index("--target") + 1]
+    output = root / "tools/applesauce/target" / target / "release/applesauce"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"fixture helper")
+    with (root / "calls.jsonl").open("a") as log:
+        log.write(json.dumps(dict(target=target, compiler=os.environ.get("RUSTUP_TOOLCHAIN"))) + "\\n")
+elif name == "lipo":
+    pathlib.Path(sys.argv[sys.argv.index("-output") + 1]).write_bytes(b"fixture universal helper")
+"""
+            for name in ("cargo", "lipo", "codesign"):
+                tool = binary / name
+                tool.write_text(fake)
+                tool.chmod(0o755)
+            result = subprocess.run(["/bin/bash", str(root / "scripts/build-applesauce.sh")],
+                env={"PATH": str(binary) + ":/usr/bin:/bin", "HOME": str(root),
+                     "RUSTUP_TOOLCHAIN": "fixture-selected-compiler"}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            records = [json.loads(line) for line in calls.read_text().splitlines()]
+            self.assertEqual([r["target"] for r in records], ["aarch64-apple-darwin", "x86_64-apple-darwin"])
+            self.assertEqual({r["compiler"] for r in records}, {"fixture-selected-compiler"})
+            self.assertTrue((root / "apple/build/applesauce").is_file())
+        ci = json.loads(subprocess.check_output(["ruby", "-ryaml", "-rjson", "-e",
+            "puts JSON.generate(YAML.load_file(ARGV[0]))", str(ROOT / ".github/workflows/ci.yml")], text=True))
+        steps = ci["jobs"]["rust"]["steps"]
+        helper = next(i for i, step in enumerate(steps) if step.get("run") == "scripts/build-applesauce.sh")
+        tests = next(i for i, step in enumerate(steps) if step.get("run") == "cargo test --workspace --locked")
+        self.assertLess(helper, tests, "fresh CI must build the helper before tests invoke it")
+
     def setUp(self):
         self.workflow = json.loads(subprocess.check_output([
             "ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))",

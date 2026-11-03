@@ -60,6 +60,9 @@ jobs:
       - name: Clippy (fuzz)
         run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
 
+      - name: Build compression helper required by scan tests
+        run: scripts/build-applesauce.sh
+
       - name: Test
         run: cargo test --workspace --locked
 
