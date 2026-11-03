@@ -157,16 +157,29 @@ extension Aether {
                                                           blue: 32.0 / 255, alpha: 1))
 }
 
-extension View {
-    func aetherSurface() -> some View { modifier(AetherSurface()) }
-
-    func aetherTheme() -> some View {
-        tint(Aether.accent)
+private struct AetherCanvasPresentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+private extension EnvironmentValues {
+    var aetherCanvasPresent: Bool {
+        get { self[AetherCanvasPresentKey.self] }
+        set { self[AetherCanvasPresentKey.self] = newValue }
+    }
+}
+private struct AetherTheme: ViewModifier {
+    @Environment(\.aetherCanvasPresent) private var canvasPresent
+    func body(content: Content) -> some View {
+        content.tint(Aether.accent)
             .buttonStyle(AetherSecondaryButtonStyle())
             .foregroundStyle(Aether.text, Aether.muted)
             .font(.system(size: 13))
-            .background { AetherCanvas() }
+            .background { if !canvasPresent { AetherCanvas() } }
+            .environment(\.aetherCanvasPresent, true)
     }
+}
+extension View {
+    func aetherSurface() -> some View { modifier(AetherSurface()) }
+    func aetherTheme() -> some View { modifier(AetherTheme()) }
 }
 
 /// Native layout evidence used by the minimum-window regression. Read live
