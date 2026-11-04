@@ -89,6 +89,11 @@ public enum DuplicateFinder {
     public struct Progress: Equatable, Sendable {
         public var filesRead: Int
         public var filesToRead: Int
+
+        public init(filesRead: Int, filesToRead: Int) {
+            self.filesRead = filesRead
+            self.filesToRead = filesToRead
+        }
     }
 
     /// Flags that rule a file out: not a regular local file whose content
