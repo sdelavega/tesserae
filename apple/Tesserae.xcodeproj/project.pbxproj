@@ -168,6 +168,13 @@
 		1923A40347E8440CB017B5B8 /* LiveArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DD69098C5246E7A14959DD; };
 		F75000000000000000000002 /* DetailLevelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75000000000000000000001; };
 		F75000000000000000000004 /* DetailLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75000000000000000000003; };
+		C1EA00000000000000000002 /* ScanHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000001 /* ScanHistory.swift */; };
+		C1EA00000000000000000004 /* Duplicates.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000003 /* Duplicates.swift */; };
+		C1EA00000000000000000006 /* Regenerable.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000005 /* Regenerable.swift */; };
+		C1EA00000000000000000008 /* Locations.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000007 /* Locations.swift */; };
+		C1EA0000000000000000000A /* CleanupViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000009 /* CleanupViews.swift */; };
+		C1EA0000000000000000000B /* CleanupViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA00000000000000000009 /* CleanupViews.swift */; };
+		C1EA0000000000000000000D /* CleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EA0000000000000000000C /* CleanupTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -374,6 +381,12 @@
 		72DD69098C5246E7A14959DD /* LiveArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveArchiveTests.swift; sourceTree = "<group>"; };
 		F75000000000000000000001 /* DetailLevelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailLevelTests.swift; sourceTree = "<group>"; };
 		F75000000000000000000003 /* DetailLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/DetailLevel.swift; sourceTree = "<group>"; };
+		C1EA00000000000000000001 /* ScanHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cleanup/ScanHistory.swift; sourceTree = "<group>"; };
+		C1EA00000000000000000003 /* Duplicates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cleanup/Duplicates.swift; sourceTree = "<group>"; };
+		C1EA00000000000000000005 /* Regenerable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cleanup/Regenerable.swift; sourceTree = "<group>"; };
+		C1EA00000000000000000007 /* Locations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/Locations.swift; sourceTree = "<group>"; };
+		C1EA00000000000000000009 /* CleanupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupViews.swift; sourceTree = "<group>"; };
+		C1EA0000000000000000000C /* CleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -459,6 +472,7 @@
 		0866F50D291F796035D5ED3B /* TesseraeKitTests */ = {
 			isa = PBXGroup;
 			children = (
+				C1EA0000000000000000000C /* CleanupTests.swift */,
 				E60300000000000000000002 /* ToolbarHelpTests.swift */,
 				E60400000000000000000002 /* VolumeListTests.swift */,
 				E04000000000000000000002 /* DegradedModeTests.swift */,
@@ -531,6 +545,7 @@
 		675361416C3060D7EE6539E3 /* Tesserae */ = {
 			isa = PBXGroup;
 			children = (
+				C1EA00000000000000000009 /* CleanupViews.swift */,
 				E60300000000000000000006 /* Localizable.xcstrings */,
 				E03600000000000000000004 /* OnboardingView.swift */,
 				E60400000000000000000105 /* StartView.swift */,
@@ -557,6 +572,10 @@
 		B44C549377661B3C8A9D0A6E /* TesseraeKit */ = {
 			isa = PBXGroup;
 			children = (
+				C1EA00000000000000000007 /* Locations.swift */,
+				C1EA00000000000000000005 /* Regenerable.swift */,
+				C1EA00000000000000000003 /* Duplicates.swift */,
+				C1EA00000000000000000001 /* ScanHistory.swift */,
 				E60300000000000000000008 /* Localizable.xcstrings */,
 				E60300000000000000000004 /* L10n.swift */,
 				E60300000000000000000011 /* ToolbarHelp.swift */,
@@ -857,6 +876,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C1EA00000000000000000008 /* Locations.swift in Sources */,
+				C1EA00000000000000000006 /* Regenerable.swift in Sources */,
+				C1EA00000000000000000004 /* Duplicates.swift in Sources */,
+				C1EA00000000000000000002 /* ScanHistory.swift in Sources */,
 				E60300000000000000000003 /* L10n.swift in Sources */,
 				E60300000000000000000010 /* ToolbarHelp.swift in Sources */,
 				E60400000000000000000004 /* VolumeSource.swift in Sources */,
@@ -931,6 +954,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C1EA0000000000000000000A /* CleanupViews.swift in Sources */,
 				E08100000000000000000005 /* ReclaimSummaryView.swift in Sources */,
 				E08100000000000000000004 /* ConfirmReclaimSheet.swift in Sources */,
 				E08100000000000000000003 /* ReclaimView.swift in Sources */,
@@ -951,6 +975,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C1EA0000000000000000000D /* CleanupTests.swift in Sources */,
+				C1EA0000000000000000000B /* CleanupViews.swift in Sources */,
 				E60300000000000000000001 /* ToolbarHelpTests.swift in Sources */,
 				E60400000000000000000001 /* VolumeListTests.swift in Sources */,
 				E08100000000000000000006 /* ReclaimSnapshotTests.swift in Sources */,

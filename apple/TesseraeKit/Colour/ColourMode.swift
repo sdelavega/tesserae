@@ -28,4 +28,7 @@ public enum ColourMode: Equatable {
     /// (they are neutral): a treemap is an all-pairs form, so three is the
     /// validated limit.
     case typeFocus([FileKind])
+    /// Growth and shrinkage since the previous complete scan of the same
+    /// location; everything is neutral when there is no earlier scan (nil).
+    case change(ChangeIndex?)
 }

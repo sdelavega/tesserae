@@ -1474,6 +1474,380 @@
           }
         }
       }
+    },
+    "changes.loading": {
+      "comment": "Change colour mode while the comparison is computed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparing with the previous scan…"
+          }
+        }
+      }
+    },
+    "changes.none": {
+      "comment": "Change colour mode when there is no earlier scan of the location.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No earlier complete scan of this location to compare with. Scan it again later to see what changed."
+          }
+        }
+      }
+    },
+    "changes.since": {
+      "comment": "Change colour mode caption; the placeholder is the earlier scan's date and time.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes since the scan of %@"
+          }
+        }
+      }
+    },
+    "changes.grewMost": {
+      "comment": "Label before the folders that grew most since the previous scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grew most:"
+          }
+        }
+      }
+    },
+    "changes.growth.item": {
+      "comment": "A folder that grew and by how much; opens it in the map.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ +%@"
+          }
+        }
+      }
+    },
+    "duplicates.title": {
+      "comment": "Title of the duplicate files sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duplicate Files"
+          }
+        }
+      }
+    },
+    "duplicates.explanation": {
+      "comment": "Explains how duplicate files are found and what is preselected.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files of 1 MB or more with identical content in the current view. Cloud-only files are not downloaded or compared. The oldest copy of each file is left unselected. Copies that are APFS clones already share space, so removing them frees less."
+          }
+        }
+      }
+    },
+    "duplicates.selected.size": {
+      "comment": "Space used by the duplicate copies selected for Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected copies use %@"
+          }
+        }
+      }
+    },
+    "cleanup.cancel": {
+      "comment": "Close a cleanup sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "cleanup.addToReclaim": {
+      "comment": "Stage the selected items in Reclaim Space for review.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Selected to Reclaim Space"
+          }
+        }
+      }
+    },
+    "duplicates.progress": {
+      "comment": "Progress while reading candidate files to find duplicates.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparing files: %@ of %@"
+          }
+        }
+      }
+    },
+    "duplicates.none": {
+      "comment": "The duplicate search finished without finding any.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No duplicate files were found here."
+          }
+        }
+      }
+    },
+    "duplicates.group.header": {
+      "comment": "Header of a group of identical files: how many copies and the size of each.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copies: %@ · %@ each"
+          }
+        }
+      }
+    },
+    "duplicates.keepOne": {
+      "comment": "Why the last unselected copy of a duplicate cannot be selected.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One copy is always kept."
+          }
+        }
+      }
+    },
+    "rebuildable.title": {
+      "comment": "Title of the rebuildable folders sheet.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rebuildable Folders"
+          }
+        }
+      }
+    },
+    "rebuildable.explanation": {
+      "comment": "Explains what rebuildable folders are and the cost of removing them.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folders in the current view that developer tools recreate when needed, such as build output, installed packages and download caches. Removing them frees space now; rebuilding them later takes time and may need a network connection."
+          }
+        }
+      }
+    },
+    "rebuildable.selected.size": {
+      "comment": "Space used by the rebuildable folders selected for Reclaim Space.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected folders use %@"
+          }
+        }
+      }
+    },
+    "rebuildable.none": {
+      "comment": "The rebuildable folder search finished without finding any.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No rebuildable folders of 1 MB or more were found here."
+          }
+        }
+      }
+    },
+    "rebuildable.kind.header": {
+      "comment": "Header of a group of rebuildable folders: the kind and its total size.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@"
+          }
+        }
+      }
+    },
+    "cleanup.menu": {
+      "comment": "Menu with tools that find space to reclaim.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean Up"
+          }
+        }
+      }
+    },
+    "cleanup.findDuplicates": {
+      "comment": "Search the current view for files with identical content.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find Duplicate Files…"
+          }
+        }
+      }
+    },
+    "cleanup.findRebuildable": {
+      "comment": "Search the current view for build output and caches that tools recreate.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find Rebuildable Folders…"
+          }
+        }
+      }
+    },
+    "locations.saved.header": {
+      "comment": "Settings section listing folders the user scans often.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved locations"
+          }
+        }
+      }
+    },
+    "locations.saved.footer": {
+      "comment": "Where saved locations appear.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan these from File → Saved Locations."
+          }
+        }
+      }
+    },
+    "locations.excluded.header": {
+      "comment": "Settings section listing folders every scan skips.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Never scan"
+          }
+        }
+      }
+    },
+    "locations.excluded.footer": {
+      "comment": "What excluding a folder does.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scans skip these folders, and the scan report lists them as excluded in Settings. Their space counts as unscanned."
+          }
+        }
+      }
+    },
+    "locations.remove": {
+      "comment": "Remove a folder from a locations list.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        }
+      }
+    },
+    "locations.add": {
+      "comment": "Add a folder to a locations list.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Folder…"
+          }
+        }
+      }
+    },
+    "locations.add.prompt": {
+      "comment": "Folder chooser button for adding a location.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add"
+          }
+        }
+      }
+    },
+    "locations.menu": {
+      "comment": "File submenu of folders saved for scanning.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved Locations"
+          }
+        }
+      }
+    },
+    "locations.saveCurrent": {
+      "comment": "Add the scanned folder to the saved locations.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Current Location"
+          }
+        }
+      }
+    },
+    "locations.edit": {
+      "comment": "Open the Locations settings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit Locations…"
+          }
+        }
+      }
+    },
+    "colourMode.changes": {
+      "comment": "Treemap colour mode: growth and shrinkage since the previous scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes"
+          }
+        }
+      }
+    },
+    "locations.tab": {
+      "comment": "Saved and excluded locations settings tab.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locations"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

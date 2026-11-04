@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import SwiftUI
 import TesseraeKit
 
@@ -121,6 +122,10 @@ struct ScanCommandsValue {
     let canRescan: Bool
     let rescan: () -> Void
     var showStartScreen: () -> Void = {}
+    var savedLocations: [URL] = []
+    var scanLocation: (URL) -> Void = { _ in }
+    var currentLocation: URL? = nil
+    var saveLocation: (URL) -> Void = { _ in }
     var rescanEnabled: Bool { enabled && canRescan }
     func rescanIfEnabled() { if rescanEnabled { rescan() } }
 }
@@ -157,13 +162,29 @@ struct ScanCommands: Commands {
                           comment: "Open a folder chooser to scan a folder.")) { actions?.chooseFolder() }
                 .keyboardShortcut("o")
                 .disabled(actions?.enabled != true)
+            Menu(String(localized: "locations.menu", defaultValue: "Saved Locations",
+                        comment: "File submenu of folders saved for scanning.")) {
+                ForEach(actions?.savedLocations ?? [], id: \.self) { url in
+                    Button(FileManager.default.displayName(atPath: url.path)) { actions?.scanLocation(url) }
+                        .help(url.path)
+                }
+                if !(actions?.savedLocations ?? []).isEmpty { Divider() }
+                Button(String(localized: "locations.saveCurrent", defaultValue: "Save Current Location",
+                              comment: "Add the scanned folder to the saved locations.")) {
+                    if let url = actions?.currentLocation { actions?.saveLocation(url) }
+                }.disabled(actions?.currentLocation == nil)
+                Button(String(localized: "locations.edit", defaultValue: "Edit Locations…",
+                              comment: "Open the Locations settings.")) {
+                    _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+            }.disabled(actions?.enabled != true)
         }
     }
 }
 
 
 enum ColourMenuMode: Int, CaseIterable {
-    case folder, age, typeFocus
+    case folder, age, typeFocus, change
     var title: String { [String(
         localized: "onboardingView.folder",
         defaultValue: "Folder",
@@ -176,8 +197,12 @@ enum ColourMenuMode: Int, CaseIterable {
         localized: "onboardingView.type.focus",
         defaultValue: "Type focus",
         comment: "OnboardingView: Type focus."
+    ), String(
+        localized: "colourMode.changes",
+        defaultValue: "Changes",
+        comment: "Treemap colour mode: growth and shrinkage since the previous scan."
     )][rawValue] }
-    var shortcut: KeyEquivalent { ["1", "2", "3"][rawValue] }
+    var shortcut: KeyEquivalent { ["1", "2", "3", "4"][rawValue] }
 }
 
 struct ColourCommandsValue {

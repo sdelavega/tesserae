@@ -127,7 +127,7 @@ public final class AppSession: ObservableObject, Identifiable {
     /// thread-safe (`LabelStyle.measure` is). Tests substitute a probe.
     var labelMeasure: @Sendable (String) -> CGSize = LabelStyle.measure
 
-    init(snapshot: Snapshot, reconciliation: ReconciliationViewModel? = nil, access: AccessState = .unknown, scanTime: Date = Date(), guardContext: GuardContext? = nil, startupDiskName: String = StartupDisk.displayName, scanMode: ScanMode = .full, report: ScanReport? = nil) {
+    init(snapshot: Snapshot, reconciliation: ReconciliationViewModel? = nil, access: AccessState = .unknown, scanTime: Date = Date(), guardContext: GuardContext? = nil, startupDiskName: String = StartupDisk.displayName, scanMode: ScanMode = .full, report: ScanReport? = nil, excludedPaths: Set<Data> = []) {
         scanRootDisplayName = snapshot.root != Tile.noNode && snapshot.rawPath(snapshot.root) == Data(StartupDisk.root.path.utf8)
             ? startupDiskName : (snapshot.root == Tile.noNode ? "" : snapshot.scanRootName)
         self.scanMode = scanMode
@@ -138,7 +138,7 @@ public final class AppSession: ObservableObject, Identifiable {
                 defaultValue: " (ABI \(abiVersion))",
                 bundle: L10n.bundle,
                 comment: "AppModel: (ABI {abiVersion})."
-            ), reportCaveats: reconciliation?.reportCaveats)
+            ), reportCaveats: reconciliation?.reportCaveats, excluded: excludedPaths)
         self.reconciliation = reconciliation
         self.snapshot = snapshot
         reclaim = Reclaim(sessionID: id)
@@ -480,6 +480,11 @@ public final class AppSession: ObservableObject, Identifiable {
         navigator.ascend(to: node)
     }
 
+    /// Enter `node`'s folder from anywhere in the scan (not only an ancestor).
+    public func reveal(_ node: UInt32) {
+        navigator.reveal(node)
+    }
+
     private func requestTable() {
         tableTask?.cancel()
         // Clear and invalidate synchronously before scheduling async work.
@@ -509,6 +514,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var scanState: ScanState = .idle
     @Published public var colourChoice = 0
     @Published public private(set) var focusKinds: [FileKind] = []
+    /// The comparison with the previous complete scan of the same location;
+    /// nil while it loads or when there is no earlier scan.
+    @Published public private(set) var changeIndex: ChangeIndex?
+    @Published public private(set) var changesLoading = false
     @Published public private(set) var onboarding: Onboarding
     @Published public private(set) var onboardingPresented = false
     private var relaunchGeneration = 0
@@ -563,8 +572,16 @@ public final class AppModel: ObservableObject {
     private let stagingStat: FileStat
     private let contextLoader: @Sendable (Snapshot) -> GuardContext?
     private let factsLoader: @Sendable (URL, ScanFacts) -> ReconciliationViewModel
+    private let historyStore: ScanHistoryStore?
+    private var historyTask: Task<Void, Never>?
+    private let exclusionProvider: @MainActor () -> [URL]
+    /// Raw paths of the user exclusions passed to the current scan.
+    private var scanExclusions: Set<Data> = []
 
-    public convenience init() { self.init(coordinator: ScanCoordinator()) }
+    public convenience init() {
+        self.init(coordinator: ScanCoordinator(), historyStore: ScanHistoryStore.production,
+                  exclusionProvider: { LocationSettings.shared.excluded })
+    }
 
     init(coordinator: ScanCoordinator,
          accessLoader: @escaping @Sendable () -> AccessState = { AccessProbe().probe() },
@@ -576,7 +593,11 @@ public final class AppModel: ObservableObject {
          startupDiskName: String = StartupDisk.displayName,
          stagingStat: FileStat = ProductionFileStat(),
          contextLoader: @escaping @Sendable (Snapshot) -> GuardContext? = AppModel.loadGuardContext,
-         factsLoader: @escaping @Sendable (URL, ScanFacts) -> ReconciliationViewModel = ReconciliationViewModel.load) {
+         factsLoader: @escaping @Sendable (URL, ScanFacts) -> ReconciliationViewModel = ReconciliationViewModel.load,
+         historyStore: ScanHistoryStore? = nil,
+         exclusionProvider: @escaping @MainActor () -> [URL] = { [] }) {
+        self.historyStore = historyStore
+        self.exclusionProvider = exclusionProvider
         self.startupDiskName = startupDiskName
         self.homeDirectory = homeDirectory
         self.onboardingStore = onboardingStore
@@ -608,6 +629,7 @@ public final class AppModel: ObservableObject {
     deinit {
         scanStartTask?.cancel()
         stagingTask?.cancel()
+        historyTask?.cancel()
         factsTask?.cancel()
         factsWork?.cancel()
         accessWork?.cancel()
@@ -715,12 +737,18 @@ public final class AppModel: ObservableObject {
     func waitForStaging() async { await stagingTask?.value }
 
     public func stageSelection() {
+        guard let session else { return }
+        stage(nodes: session.selection.nodes.isEmpty
+            ? session.inspectorModel.info?.node.map { [$0] } ?? []
+            : session.selection.nodes.sorted())
+    }
+
+    /// Prepare `nodes` of the current session for Reclaim Space, through the
+    /// same guard checks as staging the selection.
+    public func stage(nodes: [UInt32]) {
         guard !isScanning, let session, !session.changedSinceScan, let context = session.guardContext else { return }
         cancelStaging()
         let generation = stagingGeneration
-        let nodes = session.selection.nodes.isEmpty
-            ? session.inspectorModel.info?.node.map { [$0] } ?? []
-            : session.selection.nodes.sorted()
         let stat = stagingStat
         isPreparingReclaim = true
         stagingTask = Task { [weak self] in
@@ -788,6 +816,10 @@ public final class AppModel: ObservableObject {
     func prepareSnapshot(_ snapshot: Snapshot?) {
         cancelStaging()
         session?.reclaim.clear()
+        historyTask?.cancel()
+        historyTask = nil
+        changeIndex = nil
+        changesLoading = false
         factsTask?.cancel()
         factsWork?.cancel()
         factsWork = nil
@@ -803,6 +835,7 @@ public final class AppModel: ObservableObject {
         let loadContext = contextLoader
         let scanTime = scanStartedAt
         let limited = coordinator.scanMode == .limited
+        let excludedPaths = scanExclusions
         let work = Task.detached(priority: .userInitiated) {
             let state = await access?.value ?? .unknown
             let scan = ScanFacts(allocatedSum: snapshot.root == Tile.noNode ? 0 : snapshot.allocated(snapshot.root),
@@ -817,9 +850,10 @@ public final class AppModel: ObservableObject {
         factsTask = Task { [weak self] in
             let (model, state, context) = await work.value
             guard let self, !Task.isCancelled, generation == self.factsGeneration else { return }
-            let session = AppSession(snapshot: snapshot, reconciliation: model, access: state, scanTime: scanTime, guardContext: context, startupDiskName: self.startupDiskName, scanMode: self.coordinator.scanMode)
+            let session = AppSession(snapshot: snapshot, reconciliation: model, access: state, scanTime: scanTime, guardContext: context, startupDiskName: self.startupDiskName, scanMode: self.coordinator.scanMode, excludedPaths: excludedPaths)
             if self.scanChangedSinceScan { session.markChangedSinceScan() }
             self.session = session
+            self.compareWithHistory(snapshot, session: session, scanTime: scanTime, limited: limited)
             self.factsTask = nil
             self.factsWork = nil
             self.scanState = self.coordinator.state
@@ -828,7 +862,32 @@ public final class AppModel: ObservableObject {
 
     func waitForFacts() async { await factsTask?.value }
 
+    /// Compare a finished scan with the previous one of its location, then
+    /// record it. Only complete scans become a baseline; the comparison runs
+    /// off the main actor and is dropped if another scan replaces this one.
+    private func compareWithHistory(_ snapshot: Snapshot, session: AppSession, scanTime: Date, limited: Bool) {
+        guard let store = historyStore, snapshot.root != Tile.noNode else { return }
+        let stats = snapshot.stats
+        let complete = stats.incomplete == 0 && stats.lost_entries == 0 && stats.depth_capped == 0
+        changesLoading = true
+        let work = Task.detached(priority: .utility) {
+            ScanHistory.compareAndRecord(snapshot: snapshot, store: store, scannedAt: scanTime,
+                                         limited: limited, complete: complete)
+        }
+        historyTask = Task { [weak self] in
+            let index = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard let self, !Task.isCancelled, self.session === session else { return }
+            self.changeIndex = index
+            self.changesLoading = false
+        }
+    }
+
+    func waitForHistory() async { await historyTask?.value }
+
     func replaceSnapshot(_ snapshot: Snapshot?) {
+        historyTask?.cancel()
+        changeIndex = nil
+        changesLoading = false
         scanGeneration &+= 1
         scanChangedSinceScan = false
         cancelStaging()
@@ -854,8 +913,16 @@ public final class AppModel: ObservableObject {
         scanStartTask?.cancel()
         scanPending = true
         let mode = mode ?? scanMode
-        let skip = mode == .limited ? ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
+        let limitedSkip = mode == .limited ? ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
             .map { homeDirectory.appendingPathComponent($0) } : []
+        let limitedPaths = Set(limitedSkip.map(\.path))
+        let excluded = ExclusionFilter.applicable(exclusionProvider(), root: url,
+                                                  exists: { FileManager.default.fileExists(atPath: $0) })
+            .filter { !limitedPaths.contains($0.path) }
+        scanExclusions = Set(excluded.compactMap { excludedURL in
+            excludedURL.withUnsafeFileSystemRepresentation { p in p.map { Data(bytes: $0, count: strlen($0)) } }
+        })
+        let skip = limitedSkip + excluded
         scanStartTask = Task { [weak self] in
             await ReclaimCoordinator.shared.acquire()
             defer { ReclaimCoordinator.shared.release() }
@@ -891,6 +958,7 @@ public final class AppModel: ObservableObject {
         switch colourChoice {
         case 1: return .age(now: Date(timeIntervalSince1970: Double(session?.snapshot.stats.started_at ?? 0)))
         case 2: return .typeFocus(focusKinds)
+        case 3: return .change(changeIndex)
         default: return .folder
         }
     }
@@ -902,12 +970,37 @@ public final class AppModel: ObservableObject {
         case .typeFocus(let kinds):
             focusKinds = Array(kinds.prefix(3))
             colourChoice = 2
+        case .change: colourChoice = 3
         }
     }
 
     public func toggleFocus(_ kind: FileKind) {
         if let index = focusKinds.firstIndex(of: kind) { focusKinds.remove(at: index) }
         else if focusKinds.count < 3 { focusKinds.append(kind) }
+    }
+
+    /// One swatch per change class, in palette order.
+    public func changeLegend(dark: Bool) -> [FocusLegendItem] {
+        let palette = Palette.colours(.change(nil), dark: dark)
+        let titles = [
+            String(localized: "changes.legend.grewSmall", defaultValue: "Grew a little", bundle: L10n.bundle,
+                   comment: "Change colour legend: grew by less than 100 MB."),
+            String(localized: "changes.legend.grewMedium", defaultValue: "Grew 100 MB+", bundle: L10n.bundle,
+                   comment: "Change colour legend: grew by 100 MB to 1 GB."),
+            String(localized: "changes.legend.grewLarge", defaultValue: "Grew 1 GB+", bundle: L10n.bundle,
+                   comment: "Change colour legend: grew by 1 GB or more."),
+            String(localized: "changes.legend.appeared", defaultValue: "New or newly large", bundle: L10n.bundle,
+                   comment: "Change colour legend: absent from, or too small to be recorded by, the earlier scan."),
+            String(localized: "changes.legend.shrankSmall", defaultValue: "Shrank", bundle: L10n.bundle,
+                   comment: "Change colour legend: shrank by less than 100 MB."),
+            String(localized: "changes.legend.shrankLarge", defaultValue: "Shrank 100 MB+", bundle: L10n.bundle,
+                   comment: "Change colour legend: shrank by 100 MB or more."),
+        ]
+        return titles.enumerated().map { slot, title in
+            FocusLegendItem(accessibilityLabel: title, colour: palette[Palette.firstColourIndex + slot])
+        } + [FocusLegendItem(accessibilityLabel: String(localized: "changes.legend.unchanged", defaultValue: "Unchanged",
+                                                         bundle: L10n.bundle, comment: "Change colour legend: no significant change."),
+                             colour: palette[Palette.neutralIndex])]
     }
 
     public func focusLegend(dark: Bool) -> [FocusLegendItem] {

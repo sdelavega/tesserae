@@ -87,14 +87,25 @@ public struct ScanReport: Equatable, Sendable {
     private let diagnosticsText: String
 
     public init(snapshot: Snapshot, caveats: [String], access: AccessState, scanTime: Date,
-                appVersion: String, engineVersion: String, locale: Locale = .current, timeZone: TimeZone = .current, reportCaveats: [ReportCaveat]? = nil) {
+                appVersion: String, engineVersion: String, locale: Locale = .current, timeZone: TimeZone = .current, reportCaveats: [ReportCaveat]? = nil,
+                excluded: Set<Data> = []) {
         self.init(snapshot: snapshot, caveats: reportCaveats ?? caveats.map { .text($0) }, access: access, scanTime: scanTime,
                   appVersion: appVersion, engineVersion: engineVersion, locale: locale, timeZone: timeZone,
-                  displayPaths: true)
+                  displayPaths: true, excluded: excluded)
     }
 
+    /// The reason shown for a folder left out by the Locations setting. The
+    /// engine reports every requested skip as a limited-scan skip.
+    public static let excludedReason = String(
+        localized: "scanReport.excluded.in.settings",
+        defaultValue: "excluded in Settings",
+        bundle: L10n.bundle,
+        comment: "ScanReport: reason a folder was skipped because the user excluded it in Settings."
+    )
+
     private init(snapshot: Snapshot, caveats: [ReportCaveat], access: AccessState, scanTime: Date,
-                 appVersion: String, engineVersion: String, locale: Locale, timeZone: TimeZone, displayPaths: Bool) {
+                 appVersion: String, engineVersion: String, locale: Locale, timeZone: TimeZone, displayPaths: Bool,
+                 excluded: Set<Data> = []) {
         stalledPath = snapshot.stalledAt ?? caveats.compactMap { caveat -> Data? in
             if case .stalled(_, let raw) = caveat { return raw }
             return nil
@@ -106,7 +117,11 @@ public struct ScanReport: Equatable, Sendable {
             bundle: L10n.bundle,
             comment: "ScanReport: permission denied."
         )) }
-        skipped = snapshot.skipped.map { Location(rawPath: $0.path, reason: $0.reason) }
+        skipped = snapshot.skipped.map { skip in
+            excluded.contains(skip.path) && isRequestedSkip(skip, in: snapshot)
+                ? Location(rawPath: skip.path, reason: Self.excludedReason)
+                : Location(rawPath: skip.path, reason: skip.reason)
+        }
         let stats = snapshot.stats
         var plain: [String] = []
         if stats.unreadable_count > 0 {
@@ -370,7 +385,7 @@ public struct ScanReport: Equatable, Sendable {
             .joined(separator: "\n\n")
         diagnosticsText = displayPaths ? Self(snapshot: snapshot, caveats: caveats, access: access, scanTime: scanTime,
             appVersion: appVersion, engineVersion: engineVersion, locale: locale, timeZone: timeZone,
-            displayPaths: false).text : text
+            displayPaths: false, excluded: excluded).text : text
     }
 
     @MainActor
@@ -383,4 +398,9 @@ public struct ScanReport: Equatable, Sendable {
 @MainActor
 public protocol DiagnosticsPasteboard {
     @discardableResult func writePlaintext(_ text: String) -> Bool
+}
+
+/// Whether `skip` is one of the requested (not mount or cloud) skips.
+private func isRequestedSkip(_ skip: Snapshot.RequestedSkip, in snapshot: Snapshot) -> Bool {
+    snapshot.skippedByRequest.contains(skip)
 }
