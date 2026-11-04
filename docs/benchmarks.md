@@ -732,9 +732,9 @@ was **confirmed by the user on 2026-10-20**: unanswered macOS privacy consent
 prompts blocked the scan while the user was away. Limited scan (Task 7)
 avoids those protected folders.
 
-Source of the complete run numbers: the Task 5 Step 3 ledger in
-`.superpowers/sdd/2026-10-20-tesserae-phase-3-reconciliation/progress.md`;
-the complete no-FDA JSON was overwritten. Local raw reports (not committed):
+Source of the complete run numbers: the Phase 3 Task 5 execution ledger,
+which was never committed and is no longer available; the complete no-FDA
+JSON was overwritten. Local raw reports (not committed):
 `apple/build/access-without-fda.json` records the stalled run,
 `apple/build/access-with-fda.json` records the granted run, and
 `apple/build/access-recheck.json` and `apple/build/access-signed-precheck.json`

@@ -82,6 +82,7 @@ struct TesseraeApp: App {
         .commands {
             ReclaimCommands()
             ScanCommands()
+            CleanupCommands()
             ColourCommands()
             CommandGroup(replacing: .appInfo) {
                 Button(String(
@@ -124,9 +125,11 @@ struct TesseraeApp: App {
             TabView {
                 GeneralSettingsView().tabItem { Text(String(localized: "detail.general", defaultValue: "General",
                     comment: "General settings tab.")) }
+                LocationsSettingsView().tabItem { Text(String(localized: "locations.tab", defaultValue: "Locations",
+                    comment: "Saved and excluded locations settings tab.")) }
                 UpdateSettingsView(updates: updates).tabItem { Text(String(localized: "detail.updates", defaultValue: "Updates",
                     comment: "Automatic updates settings tab.")) }
-            }.frame(width: 480, height: 210)
+            }.frame(width: 520, height: 420)
         }
     }
 }

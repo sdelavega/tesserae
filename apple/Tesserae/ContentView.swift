@@ -23,6 +23,8 @@ struct ContentView: View {
     @StateObject private var model = AppModel()
     @StateObject private var volumes = VolumeListModel()
     @StateObject private var reclaimUI = ReclaimPresentation()
+    @StateObject private var cleanup = CleanupPresentation()
+    @ObservedObject private var locations = LocationSettings.shared
     @State private var showReclaim = true
     #if TESSERAE_TEST_HOOKS
     /// The frame-gate runner exists only when `TESSERAE_FRAME_TIMING=1`.
@@ -47,6 +49,10 @@ struct ContentView: View {
                 }
             }
             if model.colourChoice == 2 { focusControls }
+            if model.colourChoice == 3 {
+                ChangeLegendView(index: model.changeIndex, loading: model.changesLoading, snapshot: model.session?.snapshot,
+                                 legend: model.changeLegend(dark: dark), go: { node in model.session?.reveal(node) })
+            }
             if model.startScreenPresented {
                 startScreen
             } else if let session = model.session {
@@ -82,7 +88,26 @@ struct ContentView: View {
         .focusedSceneValue(\.scanCommands, ScanCommandsValue(
             startupDiskTitle: model.startupDiskScanTitle, enabled: !reclaimUI.showingConfirmation,
             scanStartupDisk: model.scanStartupDisk, chooseFolder: chooseFolder,
-            canRescan: model.canRescan, rescan: model.rescan, showStartScreen: model.showStartScreen))
+            canRescan: model.canRescan, rescan: model.rescan, showStartScreen: model.showStartScreen,
+            savedLocations: locations.saved, scanLocation: { model.scan($0) }, currentLocation: currentLocation,
+            saveLocation: { locations.addSaved($0) }))
+        .focusedSceneValue(\.cleanupCommands, CleanupCommandsValue(
+            enabled: model.session != nil && !model.isScanning && !reclaimUI.showingConfirmation && cleanup.sheet == nil,
+            findDuplicates: { if let session = model.session { cleanup.findDuplicates(in: session) } },
+            findRebuildable: { if let session = model.session { cleanup.findRebuildable(in: session) } }))
+        .sheet(item: $cleanup.sheet) { sheet in
+            if let session = cleanup.session, session === model.session {
+                switch sheet {
+                case .duplicates:
+                    DuplicatesSheet(cleanup: cleanup, snapshot: session.snapshot, canStage: canStage, stage: stageFound)
+                case .rebuildable:
+                    RebuildableSheet(cleanup: cleanup, snapshot: session.snapshot, canStage: canStage, stage: stageFound)
+                }
+            } else {
+                // The scan this search belonged to was replaced; nothing here can be staged.
+                VStack { ProgressView() }.frame(width: 200, height: 120).onAppear { cleanup.close() }
+            }
+        }
         .sheet(isPresented: Binding(get: { reclaimUI.decompression != nil }, set: { if !$0 { reclaimUI.dismissDecompression() } })) {
             if let review = reclaimUI.decompression {
                 if reclaimUI.running { TrashProgressView(done: 0, total: review.fileCount, cancellationRequested: reclaimUI.cancellationRequested, cancel: reclaimUI.cancelExecution) }
@@ -246,6 +271,27 @@ struct ContentView: View {
         guard !reclaimUI.showingConfirmation else { return }
         model.stageSelection()
         showReclaim = true
+    }
+
+    private var canStage: Bool {
+        model.session != nil && !model.stagingUnavailable && !model.isScanning && !model.reclaimBusy && !reclaimUI.showingConfirmation
+    }
+
+    /// Stage what a cleanup sheet found, then show it in Reclaim Space for review.
+    private func stageFound(_ nodes: [UInt32]) {
+        guard canStage else { return }
+        cleanup.close()
+        model.stage(nodes: nodes)
+        showReclaim = true
+    }
+
+    /// The current scan's root, as a location to save. The startup disk's Data
+    /// volume is saved as `/`, which scans the same way.
+    private var currentLocation: URL? {
+        guard let snapshot = model.session?.snapshot, snapshot.root != Tile.noNode else { return nil }
+        let raw = snapshot.rawPath(snapshot.root)
+        let path = raw == StartupDisk.dataRoot ? "/" : String(decoding: raw, as: UTF8.self)
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     private func chooseFolder() {

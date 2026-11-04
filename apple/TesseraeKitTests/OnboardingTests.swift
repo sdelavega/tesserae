@@ -24,8 +24,8 @@ final class OnboardingTests: XCTestCase {
         let app = AppModel(coordinator: ScanCoordinator(factory: { _, _ in nil }), accessLoader: { .unknown })
         await app.waitForAccess()
         let commands = ColourCommandsValue(choice: Binding(get: { app.colourChoice }, set: { app.colourChoice = $0 }))
-        XCTAssertEqual(ColourMenuMode.allCases.map(\.title), ["Folder", "Age", "Type focus"])
-        XCTAssertEqual(ColourMenuMode.allCases.map { $0.shortcut.character }, ["1", "2", "3"])
+        XCTAssertEqual(ColourMenuMode.allCases.map(\.title), ["Folder", "Age", "Type focus", "Changes"])
+        XCTAssertEqual(ColourMenuMode.allCases.map { $0.shortcut.character }, ["1", "2", "3", "4"])
         XCTAssertEqual(app.colourChoice, 0)
         for mode in ColourMenuMode.allCases {
             commands.selection(for: mode).wrappedValue = true

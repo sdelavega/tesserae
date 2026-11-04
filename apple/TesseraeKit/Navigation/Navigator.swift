@@ -104,6 +104,16 @@ public final class Navigator: ObservableObject {
         root = node
     }
 
+    /// Shows `node`: enters it if it is a folder that can be entered,
+    /// otherwise its nearest such folder.
+    public func reveal(_ node: UInt32) {
+        guard node != Tile.noNode, Int(node) < snapshot.nodes.count else { return }
+        var target = node
+        while !isNavigable(target), let p = parent(target) { target = p }
+        guard isNavigable(target), target != root else { return }
+        root = target
+    }
+
     public func sibling(_ step: Int) {
         guard step != 0, let p = parent(root) else { return }
         let siblings = OverlaySource(snapshot, overlay).children(p).filter(isNavigable)

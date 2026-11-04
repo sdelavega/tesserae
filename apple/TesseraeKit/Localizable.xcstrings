@@ -4022,6 +4022,248 @@
           }
         }
       }
+    },
+    "regenerable.nodeModules.title": {
+      "comment": "Rebuildable folder kind: node_modules folders.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Node.js packages"
+          }
+        }
+      }
+    },
+    "regenerable.derivedData.title": {
+      "comment": "Rebuildable folder kind: Xcode DerivedData.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xcode build data"
+          }
+        }
+      }
+    },
+    "regenerable.deviceSupport.title": {
+      "comment": "Rebuildable folder kind: Xcode device support files.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xcode device support"
+          }
+        }
+      }
+    },
+    "regenerable.simulatorCaches.title": {
+      "comment": "Rebuildable folder kind: CoreSimulator caches.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simulator caches"
+          }
+        }
+      }
+    },
+    "regenerable.packageCache.title": {
+      "comment": "Rebuildable folder kind: Homebrew, npm, pip and similar download caches.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Package manager caches"
+          }
+        }
+      }
+    },
+    "regenerable.swiftBuild.title": {
+      "comment": "Rebuildable folder kind: SwiftPM .build folders.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swift package builds"
+          }
+        }
+      }
+    },
+    "regenerable.cacheTag.title": {
+      "comment": "Rebuildable folder kind: folders containing a CACHEDIR.TAG file.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked as cache"
+          }
+        }
+      }
+    },
+    "regenerable.nodeModules.restore": {
+      "comment": "How node_modules folders are recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reinstalled by npm install, yarn or pnpm in the project."
+          }
+        }
+      }
+    },
+    "regenerable.derivedData.restore": {
+      "comment": "How Xcode DerivedData is recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rebuilt by Xcode the next time each project builds."
+          }
+        }
+      }
+    },
+    "regenerable.deviceSupport.restore": {
+      "comment": "How Xcode device support files are recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied again from a device the next time it is connected for development."
+          }
+        }
+      }
+    },
+    "regenerable.simulatorCaches.restore": {
+      "comment": "How CoreSimulator caches are recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recreated by Simulator as needed."
+          }
+        }
+      }
+    },
+    "regenerable.packageCache.restore": {
+      "comment": "How package manager caches are recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloaded again by the package manager when needed."
+          }
+        }
+      }
+    },
+    "regenerable.swiftBuild.restore": {
+      "comment": "How SwiftPM .build folders are recreated.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rebuilt by swift build or Xcode."
+          }
+        }
+      }
+    },
+    "regenerable.cacheTag.restore": {
+      "comment": "Why folders with a CACHEDIR.TAG file are rebuildable.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The tool that made it marked it as a cache it can recreate."
+          }
+        }
+      }
+    },
+    "changes.legend.grewSmall": {
+      "comment": "Change colour legend: grew by less than 100 MB.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grew a little"
+          }
+        }
+      }
+    },
+    "changes.legend.grewMedium": {
+      "comment": "Change colour legend: grew by 100 MB to 1 GB.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grew 100 MB+"
+          }
+        }
+      }
+    },
+    "changes.legend.grewLarge": {
+      "comment": "Change colour legend: grew by 1 GB or more.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grew 1 GB+"
+          }
+        }
+      }
+    },
+    "changes.legend.appeared": {
+      "comment": "Change colour legend: absent from, or too small to be recorded by, the earlier scan.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New or newly large"
+          }
+        }
+      }
+    },
+    "changes.legend.shrankSmall": {
+      "comment": "Change colour legend: shrank by less than 100 MB.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shrank"
+          }
+        }
+      }
+    },
+    "changes.legend.shrankLarge": {
+      "comment": "Change colour legend: shrank by 100 MB or more.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shrank 100 MB+"
+          }
+        }
+      }
+    },
+    "changes.legend.unchanged": {
+      "comment": "Change colour legend: no significant change.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unchanged"
+          }
+        }
+      }
+    },
+    "scanReport.excluded.in.settings": {
+      "comment": "ScanReport: reason a folder was skipped because the user excluded it in Settings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "excluded in Settings"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

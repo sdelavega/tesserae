@@ -27,7 +27,8 @@ import TesseraeFFI
 ///     [0]  neutral     (aggregates and non-focus tiles in age/type modes)
 ///     [1]  status      (#fab219, permission denied, every mode)
 ///     [2…] the mode's ramp: folder 8 slots × 4 steps, age 7 buckets (recent first),
-///          type focus 3 slots
+///          type focus 3 slots, change 6 slots (`ChangeIndex.Change` order
+///          without `unchanged`: grew small/medium/large, appeared, shrank small/large)
 ///
 /// so `colourIndex` results for ramp colours are `firstColourIndex + step`.
 public struct Palette {
@@ -68,6 +69,8 @@ public struct Palette {
     ]
     private static let focusLight: [UInt32] = [0x256bc0, 0xeb6834, 0x1baf7a]
     private static let focusDark: [UInt32] = [0x3987e5, 0xd95926, 0x199e70]
+    private static let changeLight: [UInt32] = [0xffd08f, 0xff9e7b, 0xe34948, 0x6250d6, 0x9ec5f4, 0x3987e5]
+    private static let changeDark: [UInt32] = [0xc98500, 0xee6c3b, 0xfb7a79, 0x9085e9, 0x256abf, 0x6faefe]
 
     /// The page surface the treemap sits on (light `#fcfcfb`, dark `#1a1a19`).
     public static func surface(dark: Bool) -> SIMD4<Float> {
@@ -83,6 +86,7 @@ public struct Palette {
         case .folder: ramp = dark ? folderDark : folderLight
         case .age: ramp = dark ? ageLight.reversed() : ageLight
         case .typeFocus: ramp = dark ? focusDark : focusLight
+        case .change: ramp = dark ? changeDark : changeLight
         }
         return [rgb(dark ? 0x3a3a37 : 0xd6d5cf), status] + ramp.map(rgb)
     }
@@ -116,6 +120,11 @@ public func colourIndex(_ node: UInt32, depth: UInt8, in src: Snapshot, mode: Co
             let slot = kinds.prefix(3).firstIndex(of: kind)
         else { return UInt16(Palette.neutralIndex) }
         return UInt16(first + slot)
+    case .change(let index):
+        guard let index else { return UInt16(Palette.neutralIndex) }
+        let change = index.change(node)
+        guard change != .unchanged else { return UInt16(Palette.neutralIndex) }
+        return UInt16(first + Int(change.rawValue) - 1)
     }
 }
 
@@ -134,6 +143,10 @@ public func colourIndex(
             return UInt16(Palette.neutralIndex)
         }
         return UInt16(2 + (slot - 1) * 4 + min(Int(tile.depth) - 1, 3))
+    }
+    // An aggregate of small items changed as its folder did.
+    if case .change(let index?) = mode, tile.node == Tile.noNode, tile.parent != Tile.noNode {
+        return colourIndex(tile.parent, depth: tile.depth, in: src, mode: .change(index))
     }
     if tile.node == Tile.noNode { return UInt16(Palette.neutralIndex) }
     return colourIndex(tile.node, depth: tile.depth, in: src, mode: mode)

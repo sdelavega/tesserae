@@ -53,6 +53,15 @@ files as they are scanned. For a complete picture, grant Full Disk Access
 
 ![The start screen listing the startup disk, a USB drive and a network volume, each with its format, used and free space and a Scan button](docs/images/welcome.png)
 
+### Saved and excluded locations
+
+**Settings → Locations** keeps two lists. **Saved locations** appear under
+**File → Saved Locations** for one-click scans; **Save Current Location** adds
+the folder you're looking at. **Never scan** lists folders every scan skips,
+such as backups or VM images. A whole-disk scan skips them too. The scan
+report lists each one as *excluded in Settings*, and its space counts as
+unscanned.
+
 ### Explore the map
 
 Each tile is a file or folder, sized by its space on disk. Click to zoom one
@@ -62,6 +71,12 @@ between sibling tiles, and Return enters a folder.
 **Folder** (⌘1), the default colour mode, gives each top-level folder a hue,
 with depth shading inside it. **Age** (⌘2) colours by modification date;
 **Type focus** (⌘3) highlights up to three file types.
+**Changes** (⌘4) colours what grew, shrank or is new since your previous
+complete scan of the same location, and links to the places that grew most.
+Tesserae keeps a small summary of each complete scan for this comparison
+(folders of 1 MB or more and files of 64 MB or more, by path and size) in
+`~/Library/Application Support/Tesserae/Scan History`. Limited and full scans
+are compared only with their own kind.
 
 Large folders have name-and-size strips. **View → Show Folder Names** turns
 these on or off. Rest your pointer on a tile for half a second to see its
@@ -134,6 +149,25 @@ Space automatically. Items left untouched stay with the reason; the results
 still include every item and its available Put Back or Decompress controls.
 
 ![Two folders staged in Reclaim Space, both defaulting to Compress with an estimated saving and their warnings to review; the folder tree shows Reported Size beside Allocated](docs/images/staging.png)
+
+### Find duplicates and rebuildable folders
+
+The **Clean Up** menu searches the current view:
+
+- **Find Duplicate Files…** (⌥⌘D) compares files of 1 MB or more with the
+  same size by their SHA-256 content. It never downloads cloud-only files,
+  and it ignores extra hard links to the same file. Each group keeps its
+  oldest copy unselected, and one copy can never be selected. APFS clones
+  already share their space, so removing a clone frees less than its size.
+- **Find Rebuildable Folders…** (⌥⌘B) lists folders that developer tools
+  recreate: `node_modules`, Xcode DerivedData and device support,
+  Simulator caches, Homebrew, npm, pip, Yarn, Gradle and Cargo download
+  caches, SwiftPM `.build` folders, and any folder marked with a
+  [`CACHEDIR.TAG`](https://bford.info/cachedir/) file.
+
+Neither search deletes anything. **Add Selected to Reclaim Space** stages
+what you chose, so every protection, warning and confirmation above still
+applies.
 
 ### Choose an archive format
 

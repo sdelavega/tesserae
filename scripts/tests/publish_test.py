@@ -65,7 +65,10 @@ class PublishingTests(unittest.TestCase):
         self.bin = self.base / "bin"
         self.bin.mkdir()
         self.calls = self.base / "calls"
-        self.env = {k: v for k, v in os.environ.items() if not any(s in k for s in ("TOKEN", "KEY", "SECRET", "PASSWORD"))}
+        # Drop ambient GIT_CONFIG_COUNT/KEY_n/VALUE_n as a set: the secret filter
+        # below would strip only the KEY_n half and leave git reading a broken list.
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("GIT_CONFIG_") and not any(s in k for s in ("TOKEN", "KEY", "SECRET", "PASSWORD"))}
         self.env.update(PATH=str(self.bin) + ":" + os.environ["PATH"], HOME=str(self.base), CALLS=str(self.calls), TEST_BASE=str(self.base), REAL_GIT=shutil.which("git"), GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid", GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid", GH_TOKEN="planted-gh-auth", GITHUB_TOKEN="planted-github-auth", OTHER_TOKEN="planted-token", OTHER_API_KEY="planted-api", OTHER_SECRET_VALUE="planted-secret", OTHER_PASSWORD_VALUE="planted-password")
         fake = self.bin / "fake"
         fake.write_text(FAKE.replace("__REAL_GIT__", self.env["REAL_GIT"]))
@@ -234,7 +237,6 @@ class PublishingTests(unittest.TestCase):
 
     def test_whole_feed_refuses_extra_duplicate_delta_and_changed_history(self):
         path = self.repo / "dist/appcast.xml"
-        new = path.read_bytes()
         old_item = b'<item><version xmlns="http://www.andymatuschak.org/xml-namespaces/sparkle">99</version><title>Historical &amp; exact</title><enclosure url="https://example.invalid/old.dmg" /></item>'
         old = b'<rss><channel><title>Feed</title>' + old_item + b'</channel></rss>'
         self.publish_feed(old)
