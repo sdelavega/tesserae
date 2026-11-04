@@ -100,13 +100,13 @@ struct OnboardingView: View {
                 Text(OnboardingViewModel.relaunchReason)
             }
             if let error = state.error {
-                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Aether.danger)
             }
             HStack {
                 Button(OnboardingViewModel.limited) { send(.useLimited) }
                 Spacer()
                 Button(OnboardingViewModel.settings) { send(.openSettings) }
-                Button(OnboardingViewModel.relaunch) { send(.relaunch) }.buttonStyle(.borderedProminent)
+                Button(OnboardingViewModel.relaunch) { send(.relaunch) }.buttonStyle(AetherPrimaryButtonStyle())
             }.disabled(state.isRelaunching)
         }.padding(24).frame(width: 560)
         .interactiveDismissDisabled()

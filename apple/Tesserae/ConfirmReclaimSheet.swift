@@ -124,8 +124,8 @@ struct TrashProgressView: View {
             )).font(.title2.bold())
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.12))
-                    Capsule().fill(Color.accentColor).frame(width: geometry.size.width * min(1, max(0, Double(done) / Double(max(1, total)))))
+                    Capsule().fill(Aether.well)
+                    Capsule().fill(Aether.accent).frame(width: geometry.size.width * min(1, max(0, Double(done) / Double(max(1, total)))))
                 }
             }.frame(height: 6).accessibilityLabel(String(
                 localized: "confirmTrashSheet.batch.progress",

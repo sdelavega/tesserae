@@ -50,7 +50,7 @@ struct ScanReportView: View {
                 localized: "scanReportView.the.clipboard.could.not.be.written.try.copy",
                 defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
                 comment: "ScanReportView: The clipboard could not be written. Try Copy Diagnostics again."
-            )).foregroundStyle(.red) }
+            )).foregroundStyle(Aether.danger) }
             if detail.current == .simple {
                 Button(showDetails ? String(localized: "detail.hideDetails", defaultValue: "Hide details",
                     comment: "Collapse the full scan report.") : String(localized: "detail.showDetails", defaultValue: "Show details",

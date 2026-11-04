@@ -97,7 +97,8 @@ struct ScanWarningView: View {
             Spacer(minLength: 8)
             if let dismiss { WarningDismissButton(dismiss: dismiss) }
         }.font(.callout).padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.yellow.opacity(0.16))
+            .background(Aether.card)
+            .overlay(alignment: .leading) { Rectangle().fill(Aether.warning).frame(width: 3) }
     }
 }
 
@@ -119,7 +120,7 @@ struct ScanFailureView: View {
                 localized: "scanStatusViews.the.clipboard.could.not.be.written.try.copy",
                 defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
                 comment: "ScanStatusViews: The clipboard could not be written. Try Copy Diagnostics again."
-            )).foregroundStyle(.red) }
+            )).foregroundStyle(Aether.danger) }
             Button(String(
                 localized: "scanStatusViews.choose.another.folder",
                 defaultValue: "Choose another folder…",
