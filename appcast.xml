@@ -173,8 +173,22 @@ Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bug
 - Staple the application as well as the disk image for distribution.
 </description>
             <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.1/Tesserae-0.2.1.dmg" length="10670247" type="application/octet-stream" ns0:edSignature="583kNLoCHJf1u9/gcNn3VNvuN4rHnhoPu2HG/J9ocPQNn+/M2CUjzjvgVIdU/xIGH1AOrM18xf4t0E1sh7zhBw==" />
+        </item><item xmlns:ns0="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <title>0.2.2</title>
+            <pubDate>Wed, 04 Nov 2026 20:27:19 -0500</pubDate>
+            <ns0:version>202</ns0:version>
+            <ns0:shortVersionString>0.2.2</ns0:shortVersionString>
+            <ns0:minimumSystemVersion>13.0</ns0:minimumSystemVersion>
+            <description ns0:format="markdown"># Tesserae 0.2.2
+
+- A Changes colour mode (⌘4) showing what grew, shrank or appeared since the previous complete scan of the same location, with links to the places that grew most. Tesserae keeps a small per-location summary of each complete scan for this comparison.
+- Find Duplicate Files… (⌥⌘D): groups files of 1 MB or more with identical SHA-256 content, never downloads cloud-only files, and ignores extra hard links. Each group keeps its oldest copy unselected.
+- Find Rebuildable Folders… (⌥⌘B): lists folders developer tools recreate on demand — node_modules, Xcode DerivedData and device support, Simulator caches, package manager download caches, SwiftPM .build folders, and folders marked with a CACHEDIR.TAG file.
+- Saved locations under File → Saved Locations for one-click scans, and a Settings → Locations pane with a Never scan list that every scan skips and the report marks as excluded in Settings.
+- Neither clean-up search deletes anything: both stage what you choose into Reclaim Space, where every protection, warning and confirmation still applies.</description>
+            <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.2/Tesserae-0.2.2.dmg" length="10929798" type="application/octet-stream" ns0:edSignature="VTGHhxztgruD9pyxy6IpvAGqds2Z/lmhub9vYfJOrWfdS/H0p9LDEzeizWvO7y4GGpYjNl8/VW3knWg4AH0gCQ==" />
         </item></channel>
 </rss><!-- sparkle-signatures:
-edSignature: E1pPHvNpG/hpQxBKTxtjSbF0rg5lMByuPdJO610mw5Gqew8N0kgw+9QUDg+0jNxi6pvGdpyyMgc+xdQ35E0gAA==
-length: 13323
+edSignature: 3NGhajaNf7th6NG+ha9sHIvQOjNKK17MqsReJjN0Orrc9/ayBC7mHONzKhHjX46rfhvrXsxB4BWOywOrnxfICQ==
+length: 15110
 -->
