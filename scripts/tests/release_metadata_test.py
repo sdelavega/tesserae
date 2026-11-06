@@ -90,7 +90,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         source = PROJECT.read_text()
         versions = re.findall(r"MARKETING_VERSION = ([^;]+);", source)
         self.assertTrue(versions)
-        self.assertEqual(set(versions), {"0.2.2"})
+        self.assertEqual(set(versions), {"0.2.3"})
         expected = self.version(versions[0]).stdout.strip()
         self.assertTrue(expected)
         app_versions = re.findall(r"CURRENT_PROJECT_VERSION = ([^;]+);", source)
