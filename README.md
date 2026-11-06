@@ -4,7 +4,7 @@ Tesserae is a GPL-3 disk-space visualizer for macOS 13 Ventura and later,
 with a Rust scan engine and a SwiftUI/Metal treemap. Explore what uses space,
 inspect files, and reclaim space with reviewed Trash, Compress and Archive actions.
 
-![Tesserae showing a home folder as a treemap, each top-level folder in its own colour with name strips, the folder tree below with Reported Size and Allocated columns, and a partial-scan warning with a "What wasn't scanned?" link and a dismiss button](docs/images/overview.png)
+![Tesserae showing a drive as a treemap, each top-level folder in its own colour with name strips, and the folder tree below with Reported Size and Allocated columns](docs/images/overview.png)
 
 ## Install
 
@@ -51,7 +51,7 @@ the read-only system volume appears in the space breakdown. Progress counts
 files as they are scanned. For a complete picture, grant Full Disk Access
 (see below).
 
-![The start screen listing the startup disk, a USB drive and a network volume, each with its format, used and free space and a Scan button](docs/images/welcome.png)
+![The start screen listing the startup disk and two other disks, each with its format, used and free space and a Scan button, under // section labels](docs/images/welcome.png)
 
 ### Saved and excluded locations
 
@@ -94,7 +94,7 @@ reorder that list. Both lists have **Reported Size** and **Allocated** columns:
 Reported Size is the file content size; Allocated is the space it uses on disk,
 so already-compressed files are easier to spot.
 
-![The pointer resting on a video tile: a pop-up and the Inspector both show its path from the scanned drive, USB321FD › Movies › Coast road trip.mov, with its size and date](docs/images/inspect.png)
+![The pointer resting on a video tile: a pop-up and the Inspector both show its path, Demo Drive › Movies › Lake house - rough cut.mov, with its kind, size and date](docs/images/inspect.png)
 
 ### Check the scan
 
@@ -118,7 +118,7 @@ Dismissing a banner leaves the report and its counts available.
 
 ![The "What wasn't scanned?" sheet listing the locations a partial scan couldn't include, with Show Scan Report and Done buttons](docs/images/partial.png)
 
-![The scan report in Simple detail beside Reclaim Space: one folder couldn't be read, items only in iCloud and a skipped location, with Copy Diagnostics and Show details](docs/images/report.png)
+![The scan report beside Reclaim Space and the Inspector, with Copy Diagnostics and the full scan summary](docs/images/report.png)
 
 ### Reclaim space
 
@@ -150,7 +150,7 @@ After a batch, items that were trashed, compressed or archived leave Reclaim
 Space automatically. Items left untouched stay with the reason; the results
 still include every item and its available Put Back or Decompress controls.
 
-![Two folders staged in Reclaim Space, both defaulting to Compress with an estimated saving and their warnings to review; the folder tree shows Reported Size beside Allocated](docs/images/staging.png)
+![Three node_modules folders staged in Reclaim Space, each with Move to Trash and a warning that this disk can't compress files in place; the staged folders are hatched on the treemap](docs/images/staging.png)
 
 ### Find duplicates and rebuildable folders
 
@@ -165,7 +165,12 @@ The **Clean Up** menu searches the current view:
   recreate: `node_modules`, Xcode DerivedData and device support,
   Simulator caches, Homebrew, npm, pip, Yarn, Gradle and Cargo download
   caches, SwiftPM `.build` folders, and any folder marked with a
-  [`CACHEDIR.TAG`](https://bford.info/cachedir/) file.
+  [`CACHEDIR.TAG`](https://bford.info/cachedir/) file. A `node_modules`
+  folder counts only when its project has a `package.json`, and folders that
+  contain anything Tesserae couldn't read, cloud-only items or a Never scan
+  location are listed but not selected for you.
+
+![The Rebuildable Folders sheet listing three node_modules folders under a // Node.js packages label, all selected, with how they are reinstalled and Add Selected to Reclaim Space](docs/images/rebuildable.png)
 
 Neither search deletes anything. **Add Selected to Reclaim Space** stages
 what you chose, so every protection, warning and confirmation above still
