@@ -1848,6 +1848,89 @@
           }
         }
       }
+    },
+    "history.clear": {
+      "comment": "Remove stored scan comparison baselines.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Scan History…"
+          }
+        }
+      }
+    },
+    "history.clear.action": {
+      "comment": "Confirm clearing scan history.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Scan History"
+          }
+        }
+      }
+    },
+    "history.clear.confirm": {
+      "comment": "Confirm permanent removal of scan comparison metadata.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove all stored scan history? Future scans will start new comparisons."
+          }
+        }
+      }
+    },
+    "history.clear.failed": {
+      "comment": "Scan history deletion failed.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not clear scan history. Try again."
+          }
+        }
+      }
+    },
+    "safety.refused.ok": {
+      "comment": "Dismiss a safety refusal.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
+    "safety.refused.title": {
+      "comment": "Title for a scan or cleanup safety refusal.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action refused"
+          }
+        }
+      }
+    },
+    "duplicates.failed": {
+      "comment": "Duplicate search failed to enforce safe file reading.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duplicate search could not safely read files. Try again later."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

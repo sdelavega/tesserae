@@ -8,6 +8,8 @@ rulings list kept outside the repo.
 
 ## Post-0.1.0
 
+- **F5: stalled duplicate reads on SMB/NFS.** Cancellation is checked between reads; a blocked kernel `read()` can retain its worker thread until the server responds. Bound or isolate network reads in a future change. **N7:** CACHEDIR.TAG reads have the same limitation: the dedicated no-materialization thread is joined by an uninterruptible semaphore wait, so a stalled tag open/read delays cancellation until the server responds.
+
 - **Include system volume.** Add an explicit opt-in scan of the sealed system
   volume alongside the startup disk's Data volume. For 0.1.0, Scan Macintosh HD
   and selecting the boot volume in the folder picker scan `/System/Volumes/Data`;

@@ -74,6 +74,14 @@ public struct RegenerableItem: Identifiable, Equatable, Sendable {
     public let kind: RegenerableKind
     public let allocated: UInt64
     public var id: UInt32 { node }
+    public var hasUnknownContent: Bool = false
+    public var preselected: Bool { !hasUnknownContent }
+    public var selectionReason: String? {
+        guard hasUnknownContent else { return nil }
+        return String(localized: "regenerable.unknownContent",
+            defaultValue: "Not selected: this folder contains excluded, unreadable or cloud-only content that was not checked.",
+            bundle: L10n.bundle, comment: "Why a rebuildable folder is not preselected.")
+    }
 }
 
 public enum RegenerableFinder {
@@ -96,7 +104,11 @@ public enum RegenerableFinder {
                      verifyTag: (Data) -> Bool) -> RegenerableKind? {
         let name = lower(s.nameBytes(node))
         func up(_ level: Int) -> String { level < ancestors.count ? ancestors[level] : "" }
-        if name == "node_modules" { return .nodeModules }
+        if name == "node_modules", s.nodes[Int(node)].parent != Tile.noNode,
+           s.children(s.nodes[Int(node)].parent).contains(where: {
+               !s.isDirectory($0) && s.nameBytes($0) == Data("package.json".utf8)
+                   && s.nodes[Int($0)].flags & UInt16(TESS_FLAG_SYMLINK | TESS_FLAG_DATALESS | TESS_FLAG_PERM_DENIED) == 0
+           }) { return .nodeModules }
         if name == "deriveddata", up(0) == "xcode", up(1) == "developer" { return .xcodeDerivedData }
         if deviceSupport.contains(name), up(0) == "xcode", up(1) == "developer" { return .xcodeDeviceSupport }
         if name == "caches", up(0) == "coresimulator", up(1) == "developer" { return .simulatorCaches }
@@ -106,7 +118,11 @@ public enum RegenerableFinder {
         if name == "cache", up(0) == "registry", up(1) == ".cargo" { return .packageCache }
         if name == "store", up(0) == "pnpm", up(1) == "library" { return .packageCache }
         let children = s.children(node)
-        if children.contains(where: { !s.isDirectory($0) && s.nameBytes($0) == cacheTagName && verifyTag(s.rawPath($0)) }) {
+        if children.contains(where: {
+            !s.isDirectory($0) && s.nameBytes($0) == cacheTagName
+                && s.nodes[Int($0)].flags & UInt16(TESS_FLAG_DATALESS | TESS_FLAG_SYMLINK | TESS_FLAG_PERM_DENIED) == 0
+                && verifyTag(s.rawPath($0))
+        }) {
             return .cacheDirectoryTag
         }
         if name == ".build", s.nodes[Int(node)].parent != UInt32.max {
@@ -142,7 +158,10 @@ public enum RegenerableFinder {
             guard s.isDirectory(node), s.nodes[Int(node)].flags & unreadable == 0 else { continue }
             if let kind = kind(of: node, in: s, ancestors: ancestors, verifyTag: verifyTag) {
                 let size = source.allocated(node)
-                if size >= minimumSize { found.append(RegenerableItem(node: node, kind: kind, allocated: size)) }
+                if size >= minimumSize {
+                    found.append(RegenerableItem(node: node, kind: kind, allocated: size,
+                        hasUnknownContent: containsUnknown(node, in: s, source: source)))
+                }
                 continue
             }
             let mine = Array(([lower(s.nameBytes(node))] + ancestors).prefix(3))
@@ -153,9 +172,42 @@ public enum RegenerableFinder {
         return found.sorted { $0.allocated == $1.allocated ? $0.node < $1.node : $0.allocated > $1.allocated }
     }
 
+    private static func containsUnknown(_ root: UInt32, in s: Snapshot, source: OverlaySource) -> Bool {
+        var stack = [root]
+        while let node = stack.popLast() {
+            if Task.isCancelled { return true }
+            if s.nodes[Int(node)].flags & UInt16(TESS_FLAG_PERM_DENIED | TESS_FLAG_DATALESS
+                | TESS_FLAG_SKIPPED_REQUEST | TESS_FLAG_AGGREGATED) != 0 { return true }
+            if s.isDirectory(node) { stack.append(contentsOf: source.children(node)) }
+        }
+        return false
+    }
+
     /// Whether the file at `path` starts with the CACHEDIR.TAG signature
     /// (https://bford.info/cachedir/). Reads at most 43 bytes.
     public static func readTag(_ path: Data) -> Bool {
+        readTagOnThread(path, policy: { setiopolicy_np(3, 1, 1) == 0 })
+    }
+
+    static func readTagOnThread(_ path: Data, policy: @escaping @Sendable () -> Bool) -> Bool {
+        let result = TagResult()
+        let thread = Thread {
+            defer { result.done.signal() }
+            guard policy() else { return }
+            result.value = readLocalTag(path)
+        }
+        thread.qualityOfService = .utility
+        thread.start()
+        result.done.wait()
+        return result.value
+    }
+
+    private final class TagResult: @unchecked Sendable {
+        let done = DispatchSemaphore(value: 0)
+        var value = false
+    }
+
+    private static func readLocalTag(_ path: Data) -> Bool {
         guard path.first == 0x2f, !path.contains(0) else { return false }
         let fd = (path + Data([0])).withUnsafeBytes {
             open($0.baseAddress!.assumingMemoryBound(to: CChar.self), O_RDONLY | O_NOFOLLOW | O_CLOEXEC)

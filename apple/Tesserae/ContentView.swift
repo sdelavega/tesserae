@@ -95,6 +95,12 @@ struct ContentView: View {
             enabled: model.session != nil && !model.isScanning && !reclaimUI.showingConfirmation && cleanup.sheet == nil,
             findDuplicates: { if let session = model.session { cleanup.findDuplicates(in: session) } },
             findRebuildable: { if let session = model.session { cleanup.findRebuildable(in: session) } }))
+        .alert(String(localized: "safety.refused.title", defaultValue: "Action refused",
+                       comment: "Title for a scan or cleanup safety refusal."),
+               isPresented: Binding(get: { model.safetyRefusal != nil }, set: { if !$0 { model.safetyRefusal = nil } })) {
+            Button(String(localized: "safety.refused.ok", defaultValue: "OK",
+                          comment: "Dismiss a safety refusal.")) { model.safetyRefusal = nil }
+        } message: { Text(model.safetyRefusal ?? "") }
         .sheet(item: $cleanup.sheet) { sheet in
             if let session = cleanup.session, session === model.session {
                 switch sheet {
@@ -269,8 +275,7 @@ struct ContentView: View {
 
     private func stage() {
         guard !reclaimUI.showingConfirmation else { return }
-        model.stageSelection()
-        showReclaim = true
+        model.stageSelection(onStaged: { showReclaim = true })
     }
 
     private var canStage: Bool {
@@ -280,9 +285,11 @@ struct ContentView: View {
     /// Stage what a cleanup sheet found, then show it in Reclaim Space for review.
     private func stageFound(_ nodes: [UInt32]) {
         guard canStage else { return }
+        let groups: [DuplicateGroup]
+        if cleanup.sheet == .duplicates, case .done(let found) = cleanup.duplicates { groups = found }
+        else { groups = [] }
         cleanup.close()
-        model.stage(nodes: nodes)
-        showReclaim = true
+        model.stage(nodes: nodes, duplicateGroups: groups, onStaged: { showReclaim = true })
     }
 
     /// The current scan's root, as a location to save. The startup disk's Data

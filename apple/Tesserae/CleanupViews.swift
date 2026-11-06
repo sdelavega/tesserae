@@ -90,10 +90,7 @@ final class CleanupPresentation: ObservableObject {
         var id: String { rawValue }
     }
 
-    enum DuplicateState: Equatable {
-        case searching(DuplicateFinder.Progress)
-        case done([DuplicateGroup])
-    }
+    typealias DuplicateState = DuplicateSearchState
 
     @Published var sheet: Sheet?
     @Published private(set) var duplicates: DuplicateState = .done([])
@@ -111,8 +108,10 @@ final class CleanupPresentation: ObservableObject {
         }
         task = Task { [weak self] in
             let groups = await DuplicateFinder.run(in: snapshot, under: root, overlay: overlay, progress: report)
-            guard let self, !Task.isCancelled, let groups else { return }
-            self.duplicates = .done(groups)
+            guard let self, !Task.isCancelled else { return }
+            self.duplicates = .finished(groups)
+            guard let groups else { return }
+            session.rememberDuplicateGroups(groups)
             // Keep the oldest copy of each file; select the rest.
             self.selected = Set(groups.flatMap { $0.members.dropFirst() })
         }
@@ -133,7 +132,7 @@ final class CleanupPresentation: ObservableObject {
             let items = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
             guard let self, !Task.isCancelled else { return }
             self.rebuildable = items
-            self.selected = Set(items.map(\.node))
+            self.selected = Set(items.filter(\.preselected).map(\.node))
         }
     }
 
@@ -211,6 +210,11 @@ struct DuplicatesSheet: View {
                             comment: "Progress while reading candidate files to find duplicates."))
                     .foregroundStyle(Aether.muted).monospacedDigit()
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed:
+            Text(String(localized: "duplicates.failed",
+                        defaultValue: "Duplicate search could not safely read files. Try again later.",
+                        comment: "Duplicate search failed to enforce safe file reading."))
+                .foregroundStyle(Aether.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
         case .done(let groups) where groups.isEmpty:
             Text(String(localized: "duplicates.none", defaultValue: "No duplicate files were found here.",
                         comment: "The duplicate search finished without finding any."))
@@ -303,11 +307,14 @@ struct RebuildableSheet: View {
                             Section {
                                 ForEach(matches) { item in
                                     Toggle(isOn: cleanup.binding(for: item.node)) {
-                                        HStack {
-                                            Text(snapshot.displayPath(item.node)).lineLimit(1).truncationMode(.middle)
-                                            Spacer()
-                                            Text(displaySize(item.allocated, locale: locale)).monospacedDigit()
-                                                .foregroundStyle(Aether.muted)
+                                        VStack(alignment: .leading) {
+                                            HStack {
+                                                Text(snapshot.displayPath(item.node)).lineLimit(1).truncationMode(.middle)
+                                                Spacer()
+                                                Text(displaySize(item.allocated, locale: locale)).monospacedDigit()
+                                                    .foregroundStyle(Aether.muted)
+                                            }
+                                            if let reason = item.selectionReason { Text(reason).foregroundStyle(Aether.muted) }
                                         }
                                     }.toggleStyle(.checkbox)
                                 }
@@ -361,6 +368,8 @@ struct CleanupCommands: Commands {
 
 struct LocationsSettingsView: View {
     @ObservedObject private var locations = LocationSettings.shared
+    @State private var confirmingClear = false
+    @State private var clearError: String?
 
     var body: some View {
         Form {
@@ -385,7 +394,25 @@ struct LocationsSettingsView: View {
                             defaultValue: "Scans skip these folders, and the scan report lists them as excluded in Settings. Their space counts as unscanned.",
                             comment: "What excluding a folder does.")).font(.footnote).foregroundStyle(Aether.muted)
             }
+            Section {
+                Button(String(localized: "history.clear", defaultValue: "Clear Scan History…",
+                               comment: "Remove stored scan comparison baselines.")) { confirmingClear = true }
+                if let clearError { Text(clearError) }
+            }
         }.padding(20)
+        .confirmationDialog(String(localized: "history.clear.confirm",
+            defaultValue: "Remove all stored scan history? Future scans will start new comparisons.",
+             comment: "Confirm permanent removal of scan comparison metadata."),
+            isPresented: $confirmingClear) {
+            Button(String(localized: "history.clear.action", defaultValue: "Clear Scan History",
+                           comment: "Confirm clearing scan history."), role: .destructive) {
+                do { try ScanHistoryStore.production?.clear(); clearError = nil }
+                catch {
+                    clearError = String(localized: "history.clear.failed", defaultValue: "Could not clear scan history. Try again.",
+                         comment: "Scan history deletion failed.")
+                }
+            }
+        }
     }
 
     private func list(_ urls: [URL], remove: @escaping @MainActor (URL) -> Void) -> some View {

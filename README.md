@@ -75,8 +75,10 @@ with depth shading inside it. **Age** (⌘2) colours by modification date;
 complete scan of the same location, and links to the places that grew most.
 Tesserae keeps a small summary of each complete scan for this comparison
 (folders of 1 MB or more and files of 64 MB or more, by path and size) in
-`~/Library/Application Support/Tesserae/Scan History`. Limited and full scans
-are compared only with their own kind.
+`~/Library/Application Support/Tesserae/Scan History`. History retains at most
+50 recently used roots; remove its stored path metadata with Settings → Locations
+→ Clear Scan History…. Limited and full scans are compared only with their own
+kind and the same exclusions and unreadable folders.
 
 Large folders have name-and-size strips. **View → Show Folder Names** turns
 these on or off. Rest your pointer on a tile for half a second to see its

@@ -4264,6 +4264,50 @@
           }
         }
       }
+    },
+    "duplicates.refused.changed": {
+      "comment": "Duplicate staging refused because content timestamps or identity changed.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A duplicate or the copy to keep changed after comparison. Find duplicate files again before staging."
+          }
+        }
+      }
+    },
+    "duplicates.refused.lastCopy": {
+      "comment": "Duplicate staging refused because every copy is covered by staging.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These items would leave no copy outside Reclaim Space. Remove a copy or its containing folder from Reclaim Space first."
+          }
+        }
+      }
+    },
+    "regenerable.unknownContent": {
+      "comment": "Why a rebuildable folder is not preselected.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected: this folder contains excluded, unreadable or cloud-only content that was not checked."
+          }
+        }
+      }
+    },
+    "scan.refused.excluded": {
+      "comment": "Refuse scanning a root covered by a user exclusion.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder is inside a Never scan location. Remove that exclusion in Settings → Locations before scanning it."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

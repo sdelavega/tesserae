@@ -60,6 +60,16 @@ public final class AppSession: ObservableObject, Identifiable {
     public let scanMode: ScanMode
     public let navigator: Navigator
     public let selection = Selection()
+    /// Groups and stamps survive closing the cleanup sheet and guard all staging.
+    public private(set) var duplicateGroups: [DuplicateGroup] = []
+
+    public func rememberDuplicateGroups(_ groups: [DuplicateGroup]) {
+        // Preserve earlier discoveries outside the current search root.
+        for group in groups {
+            duplicateGroups.removeAll { !Set($0.members).isDisjoint(with: group.members) }
+            duplicateGroups.append(group)
+        }
+    }
     @Published public private(set) var isPreparingReclaim = false
     @Published public private(set) var changedSinceScan = false
     public let reclaim: Reclaim
@@ -511,6 +521,7 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var session: AppSession? {
         didSet { stagingUnavailable = session != nil && (session?.guardContext == nil || session?.changedSinceScan == true) }
     }
+    @Published public var safetyRefusal: String?
     @Published public private(set) var scanState: ScanState = .idle
     @Published public var colourChoice = 0
     @Published public private(set) var focusKinds: [FileKind] = []
@@ -736,17 +747,19 @@ public final class AppModel: ObservableObject {
 
     func waitForStaging() async { await stagingTask?.value }
 
-    public func stageSelection() {
+    public func stageSelection(onStaged: (@MainActor () -> Void)? = nil) {
         guard let session else { return }
         stage(nodes: session.selection.nodes.isEmpty
             ? session.inspectorModel.info?.node.map { [$0] } ?? []
-            : session.selection.nodes.sorted())
+            : session.selection.nodes.sorted(), onStaged: onStaged)
     }
 
     /// Prepare `nodes` of the current session for Reclaim Space, through the
     /// same guard checks as staging the selection.
-    public func stage(nodes: [UInt32]) {
+    public func stage(nodes: [UInt32], duplicateGroups: [DuplicateGroup] = [],
+                      onStaged: (@MainActor () -> Void)? = nil) {
         guard !isScanning, let session, !session.changedSinceScan, let context = session.guardContext else { return }
+        session.rememberDuplicateGroups(duplicateGroups)
         cancelStaging()
         let generation = stagingGeneration
         let stat = stagingStat
@@ -759,12 +772,37 @@ public final class AppModel: ObservableObject {
             guard !Task.isCancelled, !self.isScanning, !session.changedSinceScan,
                   generation == self.stagingGeneration, self.session === session else { return }
             let snapshot = session.snapshot, overlay = session.overlay, existing = session.reclaim.items
+            let groups = session.duplicateGroups
+            let staged = session.reclaim.stagedNodes
+            let refusal = await Task.detached(priority: .userInitiated) {
+                DuplicateFinder.stagingRefusal(selected: nodes, groups: groups, snapshot: snapshot, staged: staged)
+            }.value
+            guard !Task.isCancelled, generation == self.stagingGeneration,
+                  self.session === session, !self.isScanning, !session.changedSinceScan,
+                  session.overlay.revision == overlay.revision else { return }
+            if let reason = refusal {
+                self.safetyRefusal = reason
+                return
+            }
             let prepared = await PutBackExecutor.shared.prepare(nodes, snapshot: snapshot, context: context,
                 stat: stat, overlay: overlay, existing: existing, sessionID: session.id)
             guard !Task.isCancelled, generation == self.stagingGeneration,
                   self.session === session, !self.isScanning, !session.changedSinceScan,
                   session.overlay.revision == overlay.revision else { return }
+            let finalStaged = session.reclaim.stagedNodes
+            let finalGroups = session.duplicateGroups
+            let finalRefusal = await Task.detached(priority: .userInitiated) {
+                DuplicateFinder.stagingRefusal(selected: nodes, groups: finalGroups, snapshot: snapshot, staged: finalStaged)
+            }.value
+            guard !Task.isCancelled, generation == self.stagingGeneration,
+                  self.session === session, !self.isScanning, !session.changedSinceScan,
+                  session.overlay.revision == overlay.revision else { return }
+            if let reason = finalRefusal {
+                self.safetyRefusal = reason
+                return
+            }
             session.reclaim.publish(prepared, context: context)
+            onStaged?()
         }
     }
 
@@ -867,12 +905,12 @@ public final class AppModel: ObservableObject {
     /// off the main actor and is dropped if another scan replaces this one.
     private func compareWithHistory(_ snapshot: Snapshot, session: AppSession, scanTime: Date, limited: Bool) {
         guard let store = historyStore, snapshot.root != Tile.noNode else { return }
-        let stats = snapshot.stats
-        let complete = stats.incomplete == 0 && stats.lost_entries == 0 && stats.depth_capped == 0
+        let complete = ScanHistory.isComplete(snapshot)
+        let scope = ScanHistory.scope(limited: limited, exclusions: scanExclusions)
         changesLoading = true
         let work = Task.detached(priority: .utility) {
             ScanHistory.compareAndRecord(snapshot: snapshot, store: store, scannedAt: scanTime,
-                                         limited: limited, complete: complete)
+                                         limited: limited, complete: complete, scope: scope)
         }
         historyTask = Task { [weak self] in
             let index = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
@@ -906,6 +944,12 @@ public final class AppModel: ObservableObject {
 
     private func startScan(_ url: URL, mode: ScanMode? = nil) {
         let url = StartupDisk.scanRoot(for: url)
+        guard !ExclusionFilter.refuses(url, exclusions: exclusionProvider()) else {
+            safetyRefusal = String(localized: "scan.refused.excluded",
+                defaultValue: "This folder is inside a Never scan location. Remove that exclusion in Settings → Locations before scanning it.",
+                bundle: L10n.bundle, comment: "Refuse scanning a root covered by a user exclusion.")
+            return
+        }
         scanRoot = url.withUnsafeFileSystemRepresentation { p in p.map { Data(bytes: $0, count: strlen($0)) } }
         scanChangedSinceScan = false
         scanGeneration &+= 1

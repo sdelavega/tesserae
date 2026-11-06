@@ -18,6 +18,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import XCTest
+import TesseraeFFI
 
 @testable import TesseraeKit
 
@@ -408,5 +409,410 @@ final class LocationsTests: XCTestCase {
         XCTAssertEqual(session.snapshot.stats.files, 1)
         let reasons = session.scanReport.skipped.map { $0.reason }
         XCTAssertEqual(reasons, [ScanReport.excludedReason], "an excluded folder is not reported as a limited scan")
+    }
+}
+
+// MARK: - Safety regressions from the 0.2.3 review
+
+final class CleanupSafetyTests: XCTestCase {
+    private func context(_ snapshot: Snapshot) -> GuardContext {
+        GuardContext(scanRoot: snapshot.rawPath(snapshot.root), volumeRoot: Data("/".utf8),
+            scanRootDevice: snapshot.rootDevice, appBundle: URL(fileURLWithPath: "/Applications/Tesserae.app"),
+            home: Data("/Users/tester".utf8))
+    }
+
+    func test_node_modules_requires_a_parent_manifest() {
+        for manifest in [false, true] {
+            var children: [Spec] = [.dir("node_modules", [.file("output", 2 * MiB)])]
+            if manifest { children.append(.file("package.json", 1)) }
+            let tree = TestSnapshot(.dir("/scan", children))
+            let found = RegenerableFinder.find(in: tree.snapshot, under: tree.snapshot.root, verifyTag: { _ in false })
+            XCTAssertEqual(found.count, manifest ? 1 : 0)
+        }
+    }
+
+    func test_unknown_descendants_prevent_rebuildable_preselection() throws {
+        var skipped = Spec.dir("private-work", [])
+        skipped.skippedByRequest = true
+        var cloud = Spec.file("cloud", 10)
+        cloud.dataless = true
+        for unknown in [skipped, .denied("locked"), cloud] {
+            let tree = TestSnapshot(.dir("/scan", [.file("package.json", 1),
+                .dir("node_modules", [.file("known", 2 * MiB), unknown])]))
+            let found = RegenerableFinder.find(in: tree.snapshot, under: tree.snapshot.root, verifyTag: { _ in false })
+            let item = try XCTUnwrap(found.first)
+            XCTAssertFalse(item.preselected)
+            XCTAssertNotNil(item.selectionReason)
+        }
+    }
+
+    func test_dataless_cache_tag_is_never_verified_and_failed_policy_refuses_read() throws {
+        var tag = Spec.file("CACHEDIR.TAG", 43)
+        tag.dataless = true
+        let tree = TestSnapshot(.dir("/scan", [.dir("cache", [tag, .file("out", 2 * MiB)])]))
+        let found = RegenerableFinder.find(in: tree.snapshot, under: tree.snapshot.root, verifyTag: { _ in
+            XCTFail("a dataless tag must not be opened")
+            return true
+        })
+        XCTAssertTrue(found.isEmpty)
+        let directory = try temporaryDirectory("tag-policy")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("CACHEDIR.TAG")
+        try RegenerableFinder.cacheTagSignature.write(to: file)
+        XCTAssertFalse(RegenerableFinder.readTagOnThread(Data(file.path.utf8), policy: { false }))
+        XCTAssertTrue(RegenerableFinder.readTagOnThread(Data(file.path.utf8), policy: {
+            XCTAssertFalse(Thread.isMainThread)
+            return setiopolicy_np(3, 1, 1) == 0
+        }))
+    }
+
+    func test_duplicate_no_node_returns_no_candidates() {
+        let tree = TestSnapshot(.dir("/scan", [.file("a", 1), .file("b", 1)]))
+        XCTAssertTrue(DuplicateFinder.candidates(in: tree.snapshot, under: Tile.noNode,
+            overlay: SizeOverlay(), minimumSize: 1).isEmpty)
+    }
+
+    @MainActor
+    func test_modified_duplicate_or_keeper_is_refused_at_staging() async throws {
+        let directory = try temporaryDirectory("duplicate-stamps")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let content = Data("same contents".utf8)
+        let a = directory.appendingPathComponent("a"), b = directory.appendingPathComponent("b")
+        for changed in [a, b] {
+            try content.write(to: a); try content.write(to: b)
+            let tree = TestSnapshot(.dir(directory.path, [.file("a", UInt64(content.count)), .file("b", UInt64(content.count))]))
+            let groups = try XCTUnwrap(DuplicateFinder.find(in: tree.snapshot, under: tree.snapshot.root,
+                minimumSize: 1, reader: ProductionContentReader()))
+            XCTAssertEqual(groups.count, 1)
+            let ctx = context(tree.snapshot)
+            let app = AppModel(coordinator: ScanCoordinator(), contextLoader: { _ in ctx })
+            app.replaceSnapshot(tree.snapshot)
+            let selected = [tree.index["b"]!]
+            XCTAssertNil(DuplicateFinder.stagingRefusal(selected: selected, groups: groups, snapshot: tree.snapshot, staged: []))
+            let old = try XCTUnwrap(DuplicateStamp.read(Data(changed.path.utf8)))
+            let handle = try FileHandle(forWritingTo: changed)
+            try handle.write(contentsOf: Data("new! contents".utf8))
+            try handle.close()
+            // Force a deterministic timestamp change even on a coarse filesystem.
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 42)], ofItemAtPath: changed.path)
+            let fresh = try XCTUnwrap(DuplicateStamp.read(Data(changed.path.utf8)))
+            XCTAssertEqual(old.inode, fresh.inode)
+            XCTAssertEqual(old.size, fresh.size)
+            XCTAssertNotNil(DuplicateFinder.stagingRefusal(selected: selected, groups: groups, snapshot: tree.snapshot, staged: []))
+            app.stage(nodes: selected, duplicateGroups: groups)
+            await app.waitForStaging()
+            XCTAssertNotNil(app.safetyRefusal)
+            XCTAssertEqual(app.session?.reclaim.stagedNodes, [])
+        }
+    }
+
+    @MainActor
+    func test_staged_keeper_or_ancestor_blocks_last_copy() async throws {
+        let directory = try temporaryDirectory("duplicate-keeper")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let folder = directory.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for url in [folder.appendingPathComponent("a"), directory.appendingPathComponent("b")] {
+            try Data("same".utf8).write(to: url)
+        }
+        let tree = TestSnapshot(.dir(directory.path, [.dir("folder", [.file("a", 4)]), .file("b", 4)]))
+        let groups = try XCTUnwrap(DuplicateFinder.find(in: tree.snapshot, under: tree.snapshot.root,
+            minimumSize: 1, reader: ProductionContentReader()))
+        XCTAssertEqual(groups.count, 1)
+        let selected = [tree.index["b"]!]
+        XCTAssertNil(DuplicateFinder.stagingRefusal(selected: selected, groups: groups, snapshot: tree.snapshot, staged: []))
+        let ctx = context(tree.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), contextLoader: { _ in ctx })
+        for staged in [tree.index["a"]!, tree.index["folder"]!] {
+            app.replaceSnapshot(tree.snapshot)
+            let session = try XCTUnwrap(app.session)
+            session.reclaim.publish(Reclaim.prepare([staged], in: tree.snapshot, context: ctx,
+                stat: ProductionFileStat(), overlay: SizeOverlay(), existing: []), context: ctx)
+            XCTAssertEqual(session.reclaim.stagedNodes, [staged])
+            XCTAssertNotNil(DuplicateFinder.stagingRefusal(selected: selected, groups: groups,
+                snapshot: tree.snapshot, staged: [staged]))
+            app.safetyRefusal = nil
+            app.stage(nodes: selected, duplicateGroups: groups)
+            await app.waitForStaging()
+            XCTAssertNotNil(app.safetyRefusal)
+            XCTAssertEqual(session.reclaim.stagedNodes, [staged])
+        }
+    }
+
+    @MainActor
+    func test_sheet_staging_then_selection_of_keeper_or_ancestor_is_refused() async throws {
+        let directory = try temporaryDirectory("duplicate-normal-staging")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let folder = directory.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for url in [folder.appendingPathComponent("a"), directory.appendingPathComponent("b")] {
+            try Data("same".utf8).write(to: url)
+        }
+        let tree = TestSnapshot(.dir(directory.path, [.dir("folder", [.file("a", 4)]), .file("b", 4)]))
+        let groups = try XCTUnwrap(DuplicateFinder.find(in: tree.snapshot, under: tree.snapshot.root,
+            minimumSize: 1, reader: ProductionContentReader()))
+        XCTAssertEqual(groups.count, 1)
+        let ctx = context(tree.snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), contextLoader: { _ in ctx })
+        for keeper in [tree.index["a"]!, tree.index["folder"]!] {
+            app.replaceSnapshot(tree.snapshot)
+            let session = try XCTUnwrap(app.session)
+            var didStage = false
+            app.stage(nodes: [tree.index["b"]!], duplicateGroups: groups, onStaged: { didStage = true })
+            await app.waitForStaging()
+            XCTAssertTrue(didStage)
+            XCTAssertEqual(session.reclaim.stagedNodes, [tree.index["b"]!])
+            session.selection.nodes = [keeper]
+            app.safetyRefusal = nil
+            didStage = false
+            app.stageSelection(onStaged: { didStage = true })
+            await app.waitForStaging()
+            XCTAssertFalse(didStage, "Refused selection must not open Reclaim Space")
+            XCTAssertNotNil(app.safetyRefusal)
+            XCTAssertEqual(session.reclaim.stagedNodes, [tree.index["b"]!])
+            didStage = false
+            app.stage(nodes: [keeper], onStaged: { didStage = true })
+            await app.waitForStaging()
+            XCTAssertFalse(didStage, "Refusal must not open Reclaim Space")
+        }
+    }
+
+    @MainActor
+    func test_scan_root_inside_never_scan_is_refused() async throws {
+        let suite = "Tesserae.RefusalTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = URL(fileURLWithPath: "/scan/private")
+        let coordinator = ScanCoordinator(factory: { _, _ in
+            XCTFail("excluded roots must not reach the scanner")
+            return nil
+        })
+        let app = AppModel(coordinator: coordinator, accessLoader: { .granted },
+            onboardingStore: OnboardingStore(defaults: defaults), exclusionProvider: { [root] })
+        await app.waitForAccess()
+        for url in [root, root.appendingPathComponent("child")] {
+            app.scan(url)
+            XCTAssertNotNil(app.safetyRefusal)
+            XCTAssertFalse(app.scanPending)
+            XCTAssertNil(app.session)
+        }
+    }
+
+    func test_data_volume_spelling_is_normalized_for_exclusions_and_history() throws {
+        let plain = URL(fileURLWithPath: "/Users/example/private")
+        let data = URL(fileURLWithPath: "/System/Volumes/Data/Users/example/private")
+        XCTAssertTrue(ExclusionFilter.refuses(data.appendingPathComponent("child"), exclusions: [plain]))
+        XCTAssertTrue(ExclusionFilter.refuses(plain, exclusions: [data]))
+        XCTAssertEqual(ExclusionFilter.applicable([plain], root: data.deletingLastPathComponent(), exists: { _ in true }).map { $0.standardized.path }, [data.standardized.path])
+        XCTAssertFalse(ExclusionFilter.refuses(URL(fileURLWithPath: "/Users/example/private-other"), exclusions: [plain]))
+        let directory = try temporaryDirectory("history-alias")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        XCTAssertEqual(store.fileURL(for: Data(plain.path.utf8)), store.fileURL(for: Data(data.path.utf8)))
+        let summary = ScanSummary(rootPath: Data(plain.path.utf8), scannedAt: Date(), limited: false,
+            paths: [Data()], allocated: [1])
+        try store.save(summary)
+        XCTAssertEqual(store.load(root: Data(data.path.utf8)), summary)
+    }
+
+    func test_limited_baseline_does_not_overwrite_full_and_scope_mismatch_does_not_compare() throws {
+        let directory = try temporaryDirectory("history-scope")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        let tree = TestSnapshot(.dir("/scan", [.file("large", 2 * MiB)]))
+        let first = Date(timeIntervalSince1970: 1), second = Date(timeIntervalSince1970: 2)
+        let root = Data("/scan".utf8)
+        let scope = ScanHistory.scope(limited: false, exclusions: [])
+        _ = ScanHistory.compareAndRecord(snapshot: tree.snapshot, store: store, scannedAt: first,
+            limited: false, complete: true, scope: scope)
+        _ = ScanHistory.compareAndRecord(snapshot: tree.snapshot, store: store, scannedAt: second,
+            limited: true, complete: true, scope: ScanHistory.scope(limited: true, exclusions: []))
+        XCTAssertEqual(store.load(root: root)?.scannedAt, first)
+        XCTAssertEqual(store.load(root: root, limited: true)?.scannedAt, second)
+        XCTAssertNotNil(ScanHistory.compareAndRecord(snapshot: tree.snapshot, store: store, scannedAt: second,
+            limited: false, complete: false, scope: scope))
+        XCTAssertNil(ScanHistory.compareAndRecord(snapshot: tree.snapshot, store: store, scannedAt: second,
+            limited: false, complete: false, scope: ScanHistory.scope(limited: false, exclusions: [Data("/scan/private".utf8)])))
+        XCTAssertEqual(ScanHistory.scope(limited: false, exclusions: [Data("/Users/example".utf8)]),
+            ScanHistory.scope(limited: false, exclusions: [Data("/System/Volumes/Data/Users/example".utf8)]))
+    }
+
+    func test_matching_unreadable_sets_compare_and_changed_set_becomes_baseline() throws {
+        let directory = try temporaryDirectory("history-unreadable")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        var stats = TessScanStats(); stats.unreadable_count = 2
+        let first = TestSnapshot(.dir("/scan", [.denied("locked"), .denied("other")]), stats: stats,
+            unreadable: [Data("/scan/locked".utf8), Data("/scan/other".utf8)])
+        let same = TestSnapshot(.dir("/scan", [.denied("locked"), .denied("other")]), stats: stats,
+            unreadable: [Data("/scan/other".utf8), Data("/scan/locked/nested".utf8), Data("/scan/locked".utf8)])
+        let different = TestSnapshot(.dir("/scan", [.denied("locked")]), stats: stats,
+            unreadable: [Data("/scan/locked".utf8)])
+        let granted = TestSnapshot(.dir("/scan", [.dir("locked", [])]))
+        XCTAssertTrue(ScanHistory.isComplete(first.snapshot))
+        func record(_ tree: TestSnapshot, at time: Double) -> ChangeIndex? {
+            ScanHistory.compareAndRecord(snapshot: tree.snapshot, store: store,
+                scannedAt: Date(timeIntervalSince1970: time), limited: false, complete: true)
+        }
+        XCTAssertNil(record(first, at: 1))
+        XCTAssertEqual(record(same, at: 2)?.baselineDate, Date(timeIntervalSince1970: 1))
+        XCTAssertNil(record(different, at: 3))
+        XCTAssertEqual(store.load(root: Data("/scan".utf8))?.scannedAt, Date(timeIntervalSince1970: 3))
+        XCTAssertEqual(record(different, at: 4)?.baselineDate, Date(timeIntervalSince1970: 3))
+        XCTAssertNil(record(granted, at: 5))
+        XCTAssertEqual(record(granted, at: 6)?.baselineDate, Date(timeIntervalSince1970: 5))
+    }
+
+    func test_older_save_cannot_replace_newer_baseline() throws {
+        let directory = try temporaryDirectory("history-order")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        let root = Data("/scan".utf8)
+        for timestamp in [2, 1] {
+            try store.save(ScanSummary(rootPath: root, scannedAt: Date(timeIntervalSince1970: Double(timestamp)),
+                limited: false, paths: [Data()], allocated: [UInt64(timestamp)]))
+        }
+        XCTAssertEqual(store.load(root: root)?.allocated, [2])
+    }
+
+    func test_history_retains_fifty_roots_and_clear_empties_files() throws {
+        let directory = try temporaryDirectory("history-retention")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        for index in 0..<50 {
+            for limited in [false, true] {
+                let summary = ScanSummary(rootPath: Data("/scan/\(index)".utf8), scannedAt: Date(),
+                    limited: limited, paths: [Data()], allocated: [1])
+                try store.save(summary)
+                try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(index))],
+                    ofItemAtPath: store.fileURL(for: summary.rootPath, limited: limited).path)
+            }
+        }
+        // Reading the oldest root makes it recently used, in either mode.
+        XCTAssertNotNil(store.load(root: Data("/scan/0".utf8), limited: true))
+        try store.save(ScanSummary(rootPath: Data("/scan/50".utf8), scannedAt: Date(),
+            limited: false, paths: [Data()], allocated: [1]))
+        let retained = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(retained.count, 101)
+        XCTAssertEqual(try retained.filter { try !Data(contentsOf: $0).isEmpty }.count, 99)
+        for limited in [false, true] {
+            XCTAssertEqual(try Data(contentsOf: store.fileURL(for: Data("/scan/1".utf8), limited: limited)), Data())
+        }
+        XCTAssertNotNil(store.load(root: Data("/scan/0".utf8)))
+        XCTAssertNil(store.load(root: Data("/scan/1".utf8)))
+        XCTAssertNil(store.load(root: Data("/scan/1".utf8), limited: true))
+        try store.clear()
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)), Set(retained))
+        for url in retained { XCTAssertEqual(try Data(contentsOf: url), Data()) }
+        XCTAssertNil(store.load(root: Data("/scan/0".utf8)))
+        // A cleared filename is reused for the next baseline.
+        try store.save(ScanSummary(rootPath: Data("/scan/0".utf8), scannedAt: Date(),
+            limited: false, paths: [Data()], allocated: [2]))
+        XCTAssertNotNil(store.load(root: Data("/scan/0".utf8)))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)), Set(retained))
+    }
+
+    func test_legacy_history_is_emptied_on_first_v2_write() throws {
+        let directory = try temporaryDirectory("history-legacy")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        let oldRoot = Data("/old-root".utf8)
+        let name = store.fileURL(for: oldRoot).lastPathComponent.replacingOccurrences(of: "-full", with: "")
+        let legacy = directory.appendingPathComponent(name)
+        let old = try PropertyListSerialization.data(fromPropertyList: ["version": 1, "rootPath": oldRoot], format: .binary, options: 0)
+        try old.write(to: legacy)
+        XCTAssertNil(store.load(root: oldRoot))
+        try store.save(ScanSummary(rootPath: Data("/new-root".utf8), scannedAt: Date(),
+            limited: false, paths: [Data()], allocated: [1]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
+        XCTAssertEqual(try Data(contentsOf: legacy), Data())
+        XCTAssertNil(store.load(root: oldRoot))
+    }
+
+    func test_history_prune_tolerates_empty_filename_components() throws {
+        let directory = try temporaryDirectory("history-stray")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        for name in ["-.plist", "--.plist", ".plist"] {
+            try Data([1]).write(to: directory.appendingPathComponent(name))
+        }
+        let root = Data("/scan".utf8)
+        try store.save(ScanSummary(rootPath: root, scannedAt: Date(), limited: false, paths: [Data()], allocated: [1]))
+        XCTAssertNotNil(store.load(root: root))
+    }
+
+    func test_duplicate_search_failure_finishes_in_failed_state() async {
+        let tree = TestSnapshot(.dir("/scan", [.file("a", MiB), .file("b", MiB)]))
+        let result = await DuplicateFinder.run(in: tree.snapshot, under: tree.snapshot.root, overlay: SizeOverlay(), policy: {
+            XCTAssertFalse(Thread.isMainThread)
+            return false
+        })
+        XCTAssertNil(result)
+        XCTAssertEqual(DuplicateSearchState.finished(result), .failed)
+        XCTAssertEqual(DuplicateSearchState.finished([]), .done([]))
+    }
+
+    @MainActor
+    func test_never_scan_rejects_volume_roots_and_ignores_old_root_exclusions() throws {
+        let suite = "Tesserae.VolumeExclusionTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = LocationSettings(defaults: defaults)
+        let roots = ["/", "/System/Volumes/Data", "/Volumes/Backup"].map { URL(fileURLWithPath: $0) }
+        for root in roots { settings.addExcluded(root) }
+        XCTAssertTrue(settings.excluded.isEmpty)
+        for root in roots {
+            XCTAssertFalse(ExclusionFilter.refuses(root.appendingPathComponent("child"), exclusions: roots))
+            XCTAssertTrue(ExclusionFilter.applicable(roots, root: root, exists: { _ in true }).isEmpty)
+        }
+        settings.addExcluded(URL(fileURLWithPath: "/scan/private"))
+        XCTAssertEqual(settings.excluded.map { $0.standardized.path }, ["/scan/private"])
+        XCTAssertTrue(ExclusionFilter.refuses(URL(fileURLWithPath: "/scan/private/child"), exclusions: settings.excluded))
+    }
+
+    func test_clear_invalidates_inflight_history_save() throws {
+        let directory = try temporaryDirectory("history-clear-race")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        let generation = store.generation
+        try store.clear()
+        let summary = ScanSummary(rootPath: Data("/scan".utf8), scannedAt: Date(), limited: false,
+            paths: [Data()], allocated: [1])
+        try store.save(summary, generation: generation)
+        XCTAssertNil(store.load(root: summary.rootPath))
+    }
+
+    func test_cancelled_history_worker_does_not_save() async throws {
+        let directory = try temporaryDirectory("history-cancel")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanHistoryStore(directory: directory)
+        let tree = TestSnapshot(.dir("/scan", [.file("f", MiB)]))
+        let snapshot = tree.snapshot
+        let work = Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return ScanHistory.compareAndRecord(snapshot: snapshot, store: store, scannedAt: Date(),
+                limited: false, complete: true)
+        }
+        let result = await work.value
+        XCTAssertNil(result)
+        XCTAssertNil(store.load(root: Data("/scan".utf8)))
+    }
+
+    func test_history_heap_keeps_only_largest_entries() throws {
+        let tree = TestSnapshot(.dir("/scan", (1...100).map { .dir("dir\($0)", [.file("f\($0)", UInt64($0))]) }))
+        var policy = ScanHistoryPolicy(); policy.limit = 4; policy.minimumDirectory = 1; policy.minimumFile = 1000
+        let summary = try XCTUnwrap(ScanHistory.summary(of: tree.snapshot, scannedAt: Date(), limited: false, policy: policy))
+        XCTAssertEqual(summary.paths.count, 4)
+        XCTAssertEqual(Set(summary.paths.map(text)), ["", "dir100", "dir99", "dir98"])
+    }
+
+    func test_shrink_below_threshold_keeps_its_own_classification() {
+        let tree = TestSnapshot(.dir("/scan", [.dir("shrinking", [.file("small", MiB / 2)]),
+            .dir("growing", [.file("big", 7 * MiB / 2)])]))
+        let baseline = ScanSummary(rootPath: Data("/scan".utf8), scannedAt: Date(), limited: false,
+            paths: [Data(), Data("shrinking".utf8), Data("growing".utf8)], allocated: [4 * MiB, 2 * MiB, 2 * MiB])
+        let index = ChangeIndex(snapshot: tree.snapshot, baseline: baseline)
+        XCTAssertEqual(index.change(tree.snapshot.root), .unchanged)
+        XCTAssertEqual(index.change(tree.index["shrinking"]!), .shrankSmall)
     }
 }

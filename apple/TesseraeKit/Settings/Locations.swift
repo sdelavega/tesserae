@@ -66,6 +66,7 @@ public final class LocationSettings: ObservableObject {
     }
 
     public func addExcluded(_ url: URL) {
+        guard !ExclusionFilter.isVolumeRoot(url) else { return }
         excluded = Self.adding(url, to: excluded)
         store()
     }
@@ -84,27 +85,45 @@ public enum ExclusionFilter {
         root == "/" ? path.hasPrefix("/") : path == root || path.hasPrefix(root + "/")
     }
 
-    /// The exclusions that lie strictly inside `root`, as the paths the scan
-    /// will meet them by. A scan of the startup disk starts at its Data volume
-    /// and reaches `/Users/…` as `/System/Volumes/Data/Users/…`, so an
-    /// exclusion outside that volume's path is rewritten under it when the
-    /// rewritten path `exists`. Exclusions inside other exclusions, duplicates
-    /// and the root itself are dropped, so the scan report lists each once.
+    /// Canonical spelling shared by exclusions and scan history. Preserve raw
+    /// path bytes for history; no filename decoding or symlink traversal.
+    public static func normalized(_ path: Data) -> Data {
+        let prefix = Data(dataRoot.utf8)
+        if path == prefix { return Data("/".utf8) }
+        if path.starts(with: prefix + Data([0x2f])) { return Data(path.dropFirst(prefix.count)) }
+        return path
+    }
+
+    public static func normalized(_ url: URL) -> String {
+        String(decoding: normalized(Data(url.standardized.path.utf8)), as: UTF8.self)
+    }
+
+    static func isVolumeRoot(_ url: URL) -> Bool {
+        let path = normalized(url)
+        if path == "/" { return true }
+        // Also reject unmounted /Volumes entries retained in Settings.
+        if url.standardized.path.hasPrefix("/Volumes/"), url.standardized.path.split(separator: "/").count == 2 { return true }
+        guard let volume = try? volumeRoot(of: Data(url.standardized.path.utf8)) else { return false }
+        return normalized(volume) == Data(path.utf8)
+    }
+
+    public static func refuses(_ root: URL, exclusions: [URL]) -> Bool {
+        exclusions.contains { !isVolumeRoot($0) && isWithin(normalized(root), normalized($0)) }
+    }
+
+    /// Return only outermost descendants, mapped to the spelling used by the walker.
     public static func applicable(_ exclusions: [URL], root: URL, exists: (String) -> Bool) -> [URL] {
-        let rootPath = root.standardized.path
-        var paths: Set<String> = []
-        for url in exclusions {
-            var path = url.standardized.path
-            guard path.hasPrefix("/"), path != "/" else { continue }
-            if rootPath == dataRoot, !isWithin(path, dataRoot) {
-                let mapped = dataRoot + path
-                guard exists(mapped) else { continue }
-                path = mapped
-            }
-            if path != rootPath, isWithin(path, rootPath) { paths.insert(path) }
-        }
+        let rootPath = normalized(root)
+        let usesData = isWithin(root.standardized.path, dataRoot)
+        let paths = Set(exclusions.filter { !isVolumeRoot($0) }.map { normalized($0) }.filter {
+            $0 != rootPath && isWithin($0, rootPath)
+        })
         return paths.sorted()
             .filter { path in !paths.contains { other in other != path && isWithin(path, other) } }
-            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            .compactMap { path in
+                let mapped = usesData ? dataRoot + (path == "/" ? "" : path) : path
+                guard !usesData || exists(mapped) else { return nil }
+                return URL(fileURLWithPath: mapped, isDirectory: true)
+            }
     }
 }
