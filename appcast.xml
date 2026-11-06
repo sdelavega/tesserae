@@ -187,8 +187,54 @@ Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bug
 - Saved locations under File → Saved Locations for one-click scans, and a Settings → Locations pane with a Never scan list that every scan skips and the report marks as excluded in Settings.
 - Neither clean-up search deletes anything: both stage what you choose into Reclaim Space, where every protection, warning and confirmation still applies.</description>
             <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.2/Tesserae-0.2.2.dmg" length="10929798" type="application/octet-stream" ns0:edSignature="VTGHhxztgruD9pyxy6IpvAGqds2Z/lmhub9vYfJOrWfdS/H0p9LDEzeizWvO7y4GGpYjNl8/VW3knWg4AH0gCQ==" />
+        </item><item xmlns:ns0="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <title>0.2.3</title>
+            <pubDate>Fri, 06 Nov 2026 11:01:33 -0500</pubDate>
+            <ns0:version>203</ns0:version>
+            <ns0:shortVersionString>0.2.3</ns0:shortVersionString>
+            <ns0:minimumSystemVersion>13.0</ns0:minimumSystemVersion>
+            <description ns0:format="markdown"># Tesserae 0.2.3
+
+A safety and design release for Tesserae, a disk-space visualiser for macOS.
+
+## Safer clean-up searches
+
+- **Find Rebuildable Folders** only lists a `node_modules` folder when its project has a `package.json`. Folders that contain anything Tesserae couldn't read, cloud-only items or a Never scan location are listed but no longer selected for you.
+- **Find Duplicate Files** checks that every copy is still unchanged before staging it. If a copy was edited after the search, Tesserae asks you to search again.
+- **One copy is always kept**, however you stage: from the duplicates sheet, the map, the folder tree or the Inspector, and even when you stage a folder that contains a copy.
+- Checking for a `CACHEDIR.TAG` file never downloads a cloud-only file.
+
+## Changes and Never scan
+
+- Changes mode (⌘4) compares a scan only with an earlier one of the same kind (full or Limited) that covered the same places: the same Never scan list and the same unreadable folders. Scans of `/Users/…` and `/System/Volumes/Data/Users/…` count as the same location.
+- Changes now also reports a folder that shrank below the size Tesserae tracks.
+- Scan history keeps at most 50 locations. **Settings → Locations → Clear Scan History…** removes the stored folder and file names.
+- Scanning a folder on your Never scan list now explains that it's excluded instead of scanning it. Whole disks can't be added to the list.
+
+Because the history format changed, the first scan of each location after updating starts a new comparison.
+
+## Aether7B design
+
+- Tesserae now follows the Aether7B v1.1 design language throughout, including Settings and every sheet: `//` section labels, opaque content cards, a 12-point minimum text size (map labels included), tabular figures for sizes and counts, and adaptive status colours with an outline and dot instead of a fill.
+
+## Install
+
+- **Download:** `Tesserae-0.2.3.dmg` below. Open it and drag Tesserae to Applications. The app is signed, notarized and stapled.
+- **Homebrew:** `brew tap sdelavega/tap`, then `brew install --cask sdelavega/tap/tesserae`.
+
+Requires macOS 13 Ventura or later, on Apple Silicon or Intel.
+
+## Updates
+
+If you already use Tesserae, choose **Tesserae → Check for Updates…** to install this release. Tesserae checks a signed feed once a day, sending only the app and macOS versions. You can turn automatic checks off in **Settings → Updates**.
+
+## Feedback
+
+Please [open an issue](https://github.com/sdelavega/tesserae/issues/new) for bugs, confusing numbers or ideas.
+</description>
+            <enclosure url="https://github.com/sdelavega/tesserae/releases/download/v0.2.3/Tesserae-0.2.3.dmg" length="11046204" type="application/octet-stream" ns0:edSignature="SLY2VpVnIrL0H9CSypMKhATv4YnmaOIkzEin+Ja/aoxirKjcgd9QXGiU7OK2gwiZ65xpj6tP0J7rN8aAdBlnDw==" />
         </item></channel>
 </rss><!-- sparkle-signatures:
-edSignature: 3NGhajaNf7th6NG+ha9sHIvQOjNKK17MqsReJjN0Orrc9/ayBC7mHONzKhHjX46rfhvrXsxB4BWOywOrnxfICQ==
-length: 15110
+edSignature: vhc2LN1UJlSz/4DeNChYGdZ1qhbsD2Mw82nvKVPcWKFD+pjDEupm5AHN7I7Jvs2Bx/adOaaRCp1sbi8qGFvgAA==
+length: 18362
 -->
