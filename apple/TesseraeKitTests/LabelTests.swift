@@ -364,6 +364,7 @@ final class LabelTests: XCTestCase {
     }
 
     func test_overlay_ink_tokens_and_fade() {
+        XCTAssertEqual(LabelStyle.fontSize, 12, "Treemap labels and hover text share the 12pt floor")
         XCTAssertTrue(LabelStyle.ink(dark: false) == (0x0b, 0x0b, 0x0b))
         XCTAssertTrue(LabelStyle.ink(dark: true) == (0xf0, 0xef, 0xec))
         XCTAssertEqual(LabelStyle.fadeDuration, 0.15)

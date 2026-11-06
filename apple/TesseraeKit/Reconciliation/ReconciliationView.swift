@@ -17,6 +17,13 @@
 import AppKit
 import SwiftUI
 
+/// These type tokens and the app's local Aether tokens in AetherTheme.swift
+/// both mirror Aether7B v1.1; keep their 13pt small type aligned.
+public enum AetherTypography {
+    public static let smallSize: CGFloat = 13
+    public static let sm = Font.system(size: smallSize)
+}
+
 public struct ReconciliationView: View {
     public let model: ReconciliationViewModel
     public var grantAccess: (() -> Void)?
@@ -46,7 +53,7 @@ public struct ReconciliationView: View {
                     ForEach(Array(model.rows(for: detail.current).enumerated()), id: \.offset) { _, row in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(row.title).font(.system(size: 12)).foregroundStyle(compactLabelColour)
-                            Text(row.value).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                            Text(row.value).font(AetherTypography.sm.weight(.semibold)).monospacedDigit()
                         }
                         .help([row.help, row.detail, row.annotation].compactMap { $0 }.joined(separator: "\n"))
                         .accessibilityElement(children: .combine)

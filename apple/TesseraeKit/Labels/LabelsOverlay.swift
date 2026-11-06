@@ -23,7 +23,7 @@ import SwiftUI
 /// chosen per tile: the token with the higher WCAG 2.x contrast against that
 /// tile's fill (`ink(over:)`; final review I3).
 public enum LabelStyle {
-    public static let fontSize: CGFloat = 11
+    public static let fontSize: CGFloat = 12
     public static var font: NSFont { .systemFont(ofSize: fontSize) }
 
     /// The appearance's ink token as sRGB 0...255 components: `#0b0b0b` in

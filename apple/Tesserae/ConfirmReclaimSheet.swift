@@ -27,12 +27,12 @@ struct ConfirmReclaimSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(String(
+            AetherSheetHeading(String(
                 localized: "confirmReclaimSheet.apply",
                 defaultValue: "Apply staged actions?",
                 comment: "ConfirmReclaimSheet: Apply staged actions?."
-            )).font(.title2.bold())
-            Text(ReclaimCopy.staged(confirmation.items.count, locale: locale) + " · " + confirmation.total(locale: locale))
+            ))
+            Text(ReclaimCopy.staged(confirmation.items.count, locale: locale) + " · " + confirmation.total(locale: locale)).monospacedDigit()
             Text(String(
                 localized: "confirmReclaimSheet.warnings",
                 defaultValue: "Review every warning. Only checked warning items and items without warnings will proceed.",
@@ -40,7 +40,7 @@ struct ConfirmReclaimSheet: View {
             )).fixedSize(horizontal: false, vertical: true)
             if scrolls { ScrollView { warningRows } } else { warningRows; Spacer(minLength: 0) }
             HStack {
-                Text(ReclaimCopy.proceeding(confirmation.movingCount, locale: locale)).foregroundStyle(Aether.muted)
+                Text(ReclaimCopy.proceeding(confirmation.movingCount, locale: locale)).monospacedDigit().foregroundStyle(Aether.muted)
                 Spacer()
                 Button(String(
                     localized: "confirmTrashSheet.cancel",
@@ -51,43 +51,45 @@ struct ConfirmReclaimSheet: View {
                     localized: "confirmReclaimSheet.execute",
                     defaultValue: "Apply actions",
                     comment: "ConfirmReclaimSheet: Apply actions."
-                ), role: .destructive, action: move).disabled(confirmation.movingCount == 0)
+                ), role: .destructive, action: move)
+                    .buttonStyle(AetherPrimaryButtonStyle())
+                    .disabled(confirmation.movingCount == 0)
             }
-        }.padding(24).frame(width: 620, height: scrolls ? 520 : 780)
+        }.padding(24).frame(width: 620, height: scrolls ? 520 : 780).aetherTheme()
     }
     private var warningRows: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(confirmation.groupedForConfirmation.enumerated()), id: \.offset) { _, group in
-                Text(group.0.title).font(.headline)
+                AetherEyebrow(group.0.title)
                 ForEach(group.1) { item in
                     if let row = warningRow(for: item.id) {
                         warningRow(row)
                     } else {
                         Text(item.displayPath).fixedSize(horizontal: false, vertical: true)
                     }
-                    if case .archive(let format) = item.action { Text(format.title).font(.caption) }
+                    if case .archive(let format) = item.action { Text(format.title).font(Aether.xs) }
                     ForEach(Array((confirmation.notes[item.id] ?? []).enumerated()), id: \.offset) { _, text in
                         Text(text).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             if let first = confirmation.checkingItems.first {
-                Text(first.action.title).font(.headline)
+                AetherEyebrow(first.action.title)
                 ForEach(confirmation.checkingItems) { item in
                     Text(item.displayPath).bold()
                     Text(ReclaimCopy.checking).foregroundStyle(Aether.muted)
                 }
             }
             if !confirmation.deniedItems.isEmpty {
-                Text(String(
+                AetherEyebrow(String(
                     localized: "confirmTrashSheet.will.be.skipped",
                     defaultValue: "Will be skipped",
                     comment: "ConfirmReclaimSheet: Will be skipped."
-                )).font(.headline)
+                ))
                 ForEach(confirmation.deniedItems) { item in
                     Text(item.displayPath).bold()
-                    if case .denied(let reason) = item.verdict { Text(reasonText(reason, detailLevel: detail.current)) }
-                    else if case .unavailable(let reason) = item.actionAvailability { Text(reason) }
+                    if case .denied(let reason) = item.verdict { AetherStatus(reasonText(reason, detailLevel: detail.current)) }
+                    else if case .unavailable(let reason) = item.actionAvailability { AetherStatus(reason) }
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -100,10 +102,10 @@ struct ConfirmReclaimSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: Binding(get: { confirmation.confirmedWarnings.contains(item.id) },
                 set: { confirmation.setConfirmed(item.id, $0) })) {
-                Text(item.path).font(.headline).fixedSize(horizontal: false, vertical: true)
+                Text(item.path).font(Aether.sm.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
             }.toggleStyle(.checkbox)
             ForEach(Array(item.texts.enumerated()), id: \.offset) { _, text in
-                Text(text).fixedSize(horizontal: false, vertical: true).padding(.leading, 22)
+                AetherStatus(text)
             }
         }.padding(12).aetherSurface()
     }
@@ -116,12 +118,13 @@ struct TrashProgressView: View {
     var cancellationRequested = false
     var cancel: () -> Void = {}
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(String(
+        VStack(alignment: .leading, spacing: 16) {
+            AetherSheetHeading(String(
                 localized: "confirmReclaimSheet.progress",
                 defaultValue: "Applying actions…",
                 comment: "ConfirmReclaimSheet: Applying actions…."
-            )).font(.title2.bold())
+            ), eyebrow: String(localized: "aether.sheet.progress", defaultValue: "Progress",
+                comment: "Section label above progress sheet headings."))
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Aether.well)
@@ -145,7 +148,7 @@ struct TrashProgressView: View {
             Button(String(localized: "reclaim.stopAfterBatch", defaultValue: "Stop after this batch",
                 comment: "Request cancellation after the current compression or decompression batch finishes."),
                 action: cancel).disabled(cancellationRequested)
-        }.padding(24).frame(width: 620, height: 220)
+        }.padding(24).frame(width: 620, height: 220).aetherTheme()
         .interactiveDismissDisabled()
     }
 }

@@ -35,13 +35,14 @@ struct PartialResultSheet: View {
     let report: ScanReport
     let showReport: () -> Void
     let done: () -> Void
-    @State private var contentHeight: CGFloat = 340
+    @State private var contentHeight: CGFloat = 320
     @Environment(\.locale) private var locale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(String(localized: "partial.title", defaultValue: "What wasn't scanned?",
-                comment: "Title of the partial scan explanation sheet.")).font(.title2)
+            AetherSheetHeading(String(localized: "partial.title", defaultValue: "What wasn't scanned?",
+                comment: "Title of the partial scan explanation sheet."), eyebrow: String(localized: "aether.sheet.scan", defaultValue: "Scan",
+                comment: "Section label above scan sheet headings."))
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(Array(PartialResultExplanation(stats: stats, report: report, detail: detail.current,
@@ -53,7 +54,7 @@ struct PartialResultSheet: View {
                     .background(GeometryReader { geometry in
                         Color.clear.preference(key: PartialContentHeight.self, value: geometry.size.height)
                     })
-            }.frame(height: min(contentHeight, 340))
+            }.frame(height: min(contentHeight, 320))
                 .onPreferenceChange(PartialContentHeight.self) { if $0 > 0 { contentHeight = $0 } }
             HStack {
                 Button(String(localized: "partial.showReport", defaultValue: "Show Scan Report",
@@ -61,9 +62,10 @@ struct PartialResultSheet: View {
                 Spacer()
                 Button(String(localized: "partial.done", defaultValue: "Done",
                     comment: "Close the partial scan explanation sheet."), action: done)
+                    .buttonStyle(AetherPrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
-        }.padding(24).frame(width: 600)
+        }.padding(24).frame(width: 600).aetherTheme()
     }
 }
 

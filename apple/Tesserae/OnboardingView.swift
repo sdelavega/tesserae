@@ -89,15 +89,16 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(OnboardingViewModel.title, systemImage: "lock.shield").font(.title2)
+            AetherSheetHeading(OnboardingViewModel.title, eyebrow: String(localized: "aether.sheet.privacy", defaultValue: "Privacy",
+                comment: "Section label above privacy sheet headings."))
             Text(OnboardingViewModel.purpose)
             Text(OnboardingViewModel.privacy)
                 .foregroundStyle(Aether.muted)
             Text(OnboardingViewModel.consent)
-            Text(OnboardingViewModel.restart).font(.headline)
+            Text(OnboardingViewModel.restart).font(Aether.sm.weight(.semibold))
             Text(OnboardingViewModel.instructions)
             if state.needsRelaunch {
-                Text(OnboardingViewModel.relaunchTitle).font(.headline)
+                Text(OnboardingViewModel.relaunchTitle).font(Aether.sm.weight(.semibold))
                 Text(OnboardingViewModel.relaunchReason)
             }
             if let error = state.error {
@@ -109,7 +110,7 @@ struct OnboardingView: View {
                 Button(OnboardingViewModel.settings) { send(.openSettings) }
                 Button(OnboardingViewModel.relaunch) { send(.relaunch) }.buttonStyle(AetherPrimaryButtonStyle())
             }.disabled(state.isRelaunching)
-        }.padding(24).frame(width: 560)
+        }.padding(24).frame(width: 560).aetherTheme()
         .interactiveDismissDisabled()
     }
 }

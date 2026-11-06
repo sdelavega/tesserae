@@ -32,28 +32,28 @@ struct ReclaimView: View {
     @Environment(\.locale) private var locale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(String(
+        VStack(alignment: .leading, spacing: 16) {
+            AetherEyebrow(String(
                 localized: "reclaimView.reclaim.space",
                 defaultValue: "Reclaim Space",
                 comment: "ReclaimView: Reclaim Space."
-            )).font(.title2.bold())
+            ))
             Text(String(
                 localized: "reclaimView.staged.until.confirmation",
                 defaultValue: "Staged items stay where they are until you confirm their actions.",
                 comment: "ReclaimView: Staged items stay where they are until you confirm their actions."
             )).foregroundStyle(Aether.muted)
-            if unavailable { Text(unavailableMessage).font(.callout) }
-            Text(TrashConfirmation(items: items).total(locale: locale)).font(.headline)
+            if unavailable { AetherStatus(unavailableMessage) }
+            Text(TrashConfirmation(items: items).total(locale: locale)).monospacedDigit().font(Aether.sm.weight(.semibold))
             if items.isEmpty { Text(String(
                 localized: "reclaimView.no.items.staged",
                 defaultValue: "No items staged.",
                 comment: "ReclaimView: No items staged."
             )).foregroundStyle(Aether.muted) }
             ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(item.displayPath).font(.headline).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(item.displayPath).font(Aether.sm.weight(.semibold)).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                         Button(String(
                             localized: "reclaimView.remove.from.reclaim.space",
@@ -63,15 +63,15 @@ struct ReclaimView: View {
                     }
                     if let reason = item.outcomeReason {
                         let reason = detail.current == .simple ? item.presentationOutcome.map { keptOutcomeReason($0, detailLevel: .simple) } ?? reason : reason
-                        Text(reason).font(.callout).lineLimit(1).help(reason) }
+                        AetherStatus(reason).help(reason) }
                     if let viewModel {
                         ReclaimActionPicker(model: viewModel, item: item, advancedExpanded: advancedExpanded)
                             .disabled(busy)
-                        Text(viewModel.estimateText(for: item, locale: locale)).foregroundStyle(Aether.muted)
+                        Text(viewModel.estimateText(for: item, locale: locale)).monospacedDigit().foregroundStyle(Aether.muted)
                     } else {
-                        Text(ReclaimCopy.size(item.recordedSize, upperBound: item.recorded.isDirectory, unknownContent: item.hasUnknownContent, locale: locale)).foregroundStyle(Aether.muted)
+                        Text(ReclaimCopy.size(item.recordedSize, upperBound: item.recorded.isDirectory, unknownContent: item.hasUnknownContent, locale: locale)).monospacedDigit().foregroundStyle(Aether.muted)
                     }
-                    if case .unavailable(let reason) = item.actionAvailability, !item.isCheckingArchive { Text(reason).font(.callout) }
+                    if case .unavailable(let reason) = item.actionAvailability, !item.isCheckingArchive { AetherStatus(reason) }
                     if item.actionAvailability == .available {
                     switch item.verdict {
                     case .ok: Label(String(
@@ -101,7 +101,7 @@ struct ReclaimView: View {
             }
             if showsReview { Button(ReclaimCopy.review, action: confirm).disabled(items.isEmpty || unavailable || busy) }
 
-        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -113,18 +113,18 @@ struct RecentlyTrashedView: View {
     var restore: (LogEntry) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(String(
+            AetherEyebrow(String(
                 localized: "reclaimView.recently.trashed",
                 defaultValue: "Recently trashed",
                 comment: "ReclaimView: Recently trashed."
-            )).font(.title2.bold())
+            ))
             if entries.isEmpty { Text(String(
                 localized: "reclaimView.no.items.available.to.put.back",
                 defaultValue: "No items available to put back.",
                 comment: "ReclaimView: No items available to put back."
             )).foregroundStyle(Aether.muted) }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(entry.displayPath).textSelection(.enabled)
                     HStack {
                         Text(entry.ts, style: .date).foregroundStyle(Aether.muted)
@@ -140,11 +140,11 @@ struct RecentlyTrashedView: View {
                                 comment: "ReclaimView: Restore this item."
                             ) : ReclaimCopy.putBackWhileScanning)
                     }
-                    if let message = messages[entry.trashURL ?? ""] { Text(message).font(.callout) }
+                    if let message = messages[entry.trashURL ?? ""] { Text(message).font(Aether.sm) }
                 }
                 Divider()
             }
-        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -153,10 +153,10 @@ struct ReclaimStatusView: View {
     var logFailed = false
     var body: some View {
         if rescanCount != nil || logFailed {
-            VStack(alignment: .leading, spacing: 10) {
-                if let count = rescanCount { Label(ReclaimCopy.rescan(count), systemImage: "arrow.clockwise") }
-                if logFailed { Label(ReclaimCopy.logFailure, systemImage: "exclamationmark.triangle") }
-            }.font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 12) {
+                if let count = rescanCount { AetherStatus(ReclaimCopy.rescan(count), color: Aether.accent) }
+                if logFailed { AetherStatus(ReclaimCopy.logFailure) }
+            }.font(Aether.sm).padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -394,18 +394,18 @@ struct ReclaimActionPicker: View {
     let item: ReclaimItem
     @State var advancedExpanded = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Menu(item.action.title) {
                 let actions: [ReclaimAction] = model.volume(for: item).canCompress
                     ? [.compress, model.archiveAction(for: item), .trash]
                     : [.trash, .compress, model.archiveAction(for: item)]
                 ForEach(actions, id: \.self) { action in choice(action, title: action.title) }
             }
-            if case .unavailable(let reason) = model.availability(.compress, for: item) { Text(reason).font(.callout) }
+            if case .unavailable(let reason) = model.availability(.compress, for: item) { AetherStatus(reason) }
             if case .archive = item.action {
                 formatPicker(advanced: false)
                 DisclosureGroup(ReclaimCopy.advanced, isExpanded: $advancedExpanded) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         formatPicker(advanced: true)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -423,9 +423,9 @@ struct ReclaimActionPicker: View {
             set: { model.setAction(.archive($0), for: item.id) })) {
             ForEach(model.formats(for: item, advanced: advanced), id: \.self) { format in
                 let availability = model.availability(.archive(format), for: item)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(format.title)
-                    Text(format.note).font(.caption).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
+                    Text(format.note).font(Aether.xs).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
                 }.tag(format).disabled(availability != .available)
                     .help({ if case .unavailable(let reason) = availability { return reason }; return format.note }())
             }
@@ -439,14 +439,14 @@ struct RecentlyCompressedView: View {
     let decompress: (LogEntry) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(ReclaimCopy.recentlyCompressed).font(.title2.bold())
+            AetherEyebrow(ReclaimCopy.recentlyCompressed)
             if entries.isEmpty { Text(ReclaimCopy.noCompressedItems).foregroundStyle(Aether.muted) }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                 Text(entry.displayPath).textSelection(.enabled)
-                if let count = entry.compression?.filesChanged { Text(ReclaimCopy.items(count)) }
+                if let count = entry.compression?.filesChanged { Text(ReclaimCopy.items(count)).monospacedDigit() }
                 Button(ReclaimCopy.decompress) { decompress(entry) }.disabled(busy)
             }
-        }.padding(18)
+        }.padding(16)
     }
 }
 
@@ -458,7 +458,7 @@ struct ConfirmDecompressSheet: View {
     @Environment(\.locale) private var locale
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(confirmation.title(locale: locale)).font(.title2.bold())
+            AetherSheetHeading(confirmation.title(locale: locale))
             ScrollView {
                 ForEach(confirmation.rows, id: \.path) { row in
                     VStack(alignment: .leading, spacing: 8) {
@@ -469,7 +469,7 @@ struct ConfirmDecompressSheet: View {
                             }.toggleStyle(.checkbox)
                         } else { Text(DisplayPath.text(row.path)) }
                         ForEach(confirmation.warnings[row.path] ?? [], id: \.self) { reason in
-                            Text(reasonText(reason, detailLevel: detail.current)).fixedSize(horizontal: false, vertical: true)
+                            AetherStatus(reasonText(reason, detailLevel: detail.current))
                         }
                     }.padding(8)
                 }
@@ -478,8 +478,9 @@ struct ConfirmDecompressSheet: View {
                 Spacer()
                 Button(String(localized: "reclaim.cancel", defaultValue: "Cancel", comment: "Cancel decompression."),
                     role: .cancel, action: cancel).keyboardShortcut(.defaultAction)
-                Button(ReclaimCopy.decompress, action: execute).disabled(confirmation.allowedPaths.isEmpty)
+                Button(ReclaimCopy.decompress, action: execute)
+                    .disabled(confirmation.allowedPaths.isEmpty)
             }
-        }.padding(24).frame(width: 620, height: 520)
+        }.padding(24).frame(width: 620, height: 520).aetherTheme()
     }
 }

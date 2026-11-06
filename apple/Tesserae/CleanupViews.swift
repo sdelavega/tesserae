@@ -48,14 +48,16 @@ struct ChangeLegendView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(caption).font(.caption).foregroundStyle(Aether.muted)
+        VStack(alignment: .leading, spacing: 12) {
+            AetherEyebrow(caption)
             if index != nil {
-                HStack(spacing: 18) {
+                HStack(spacing: 16) {
                     ForEach(Array(legend.enumerated()), id: \.offset) { _, item in
-                        HStack(spacing: 6) {
-                            RoundedRectangle(cornerRadius: 3).fill(swatch(item.colour)).frame(width: 12, height: 12)
-                            Text(item.accessibilityLabel).font(.caption)
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 6).fill(swatch(item.colour))
+                                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Aether.borderStrong, lineWidth: 1))
+                                .frame(width: 12, height: 12)
+                            Text(item.accessibilityLabel).font(Aether.xs)
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(item.accessibilityLabel)
@@ -64,15 +66,14 @@ struct ChangeLegendView: View {
             }
             if let index, let snapshot, !index.largestGrowth.isEmpty {
                 HStack(spacing: 12) {
-                    Text(String(localized: "changes.grewMost", defaultValue: "Grew most:",
+                    AetherEyebrow(String(localized: "changes.grewMost", defaultValue: "Grew most:",
                                 comment: "Label before the folders that grew most since the previous scan."))
-                        .font(.caption).foregroundStyle(Aether.muted)
                     ForEach(index.largestGrowth, id: \.node) { growth in
                         let name = snapshot.displayName(growth.node)
                         let size = displaySize(growth.bytes, locale: locale)
                         Button(String(localized: "changes.growth.item", defaultValue: "\(name) +\(size)",
                                       comment: "A folder that grew and by how much; opens it in the map.")) { go(growth.node) }
-                            .buttonStyle(.link).font(.caption)
+                            .buttonStyle(.link).font(Aether.xs).monospacedDigit()
                             .help(snapshot.displayPath(growth.node))
                     }
                 }
@@ -111,7 +112,7 @@ final class CleanupPresentation: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             self.duplicates = .finished(groups)
             guard let groups else { return }
-            session.rememberDuplicateGroups(groups)
+            session.replaceDuplicateGroups(groups, under: root)
             // Keep the oldest copy of each file; select the rest.
             self.selected = Set(groups.flatMap { $0.members.dropFirst() })
         }
@@ -172,19 +173,20 @@ struct DuplicatesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(String(localized: "duplicates.title", defaultValue: "Duplicate Files",
-                        comment: "Title of the duplicate files sheet.")).font(.title2.bold())
+            AetherSheetHeading(String(localized: "duplicates.title", defaultValue: "Duplicate Files",
+                        comment: "Title of the duplicate files sheet."), eyebrow: String(localized: "aether.sheet.cleanup", defaultValue: "Clean up",
+                comment: "Section label above cleanup sheet headings."))
             Text(String(localized: "duplicates.explanation",
                         defaultValue: "Files of 1 MB or more with identical content in the current view. Cloud-only files are not downloaded or compared. The oldest copy of each file is left unselected. Copies that are APFS clones already share space, so removing them frees less.",
                         comment: "Explains how duplicate files are found and what is preselected."))
-                .font(.callout).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
+                .font(Aether.md).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
             content.frame(maxHeight: .infinity)
             HStack {
                 if case .done(let groups) = cleanup.duplicates, !groups.isEmpty {
                     let size = displaySize(selectedBytes, locale: locale)
                     Text(String(localized: "duplicates.selected.size", defaultValue: "Selected copies use \(size)",
                                 comment: "Space used by the duplicate copies selected for Reclaim Space."))
-                        .foregroundStyle(Aether.muted)
+                        .foregroundStyle(Aether.muted).monospacedDigit()
                 }
                 Spacer()
                 Button(String(localized: "cleanup.cancel", defaultValue: "Cancel", comment: "Close a cleanup sheet.")) {
@@ -197,13 +199,13 @@ struct DuplicatesSheet: View {
                 .buttonStyle(AetherPrimaryButtonStyle())
                 .disabled(!canStage || cleanup.selected.isEmpty)
             }
-        }.padding(20).frame(width: 760, height: 540)
+        }.padding(24).frame(width: 760, height: 540).aetherTheme()
     }
 
     @ViewBuilder private var content: some View {
         switch cleanup.duplicates {
         case .searching(let progress):
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 ProgressView(value: Double(progress.filesRead), total: Double(max(progress.filesToRead, 1)))
                 let read = progress.filesRead.formatted(), total = progress.filesToRead.formatted()
                 Text(String(localized: "duplicates.progress", defaultValue: "Comparing files: \(read) of \(total)",
@@ -211,10 +213,9 @@ struct DuplicatesSheet: View {
                     .foregroundStyle(Aether.muted).monospacedDigit()
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed:
-            Text(String(localized: "duplicates.failed",
+            AetherStatus(String(localized: "duplicates.failed",
                         defaultValue: "Duplicate search could not safely read files. Try again later.",
-                        comment: "Duplicate search failed to enforce safe file reading."))
-                .foregroundStyle(Aether.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        comment: "Duplicate search failed to enforce safe file reading."), color: Aether.danger).frame(maxWidth: .infinity, maxHeight: .infinity)
         case .done(let groups) where groups.isEmpty:
             Text(String(localized: "duplicates.none", defaultValue: "No duplicate files were found here.",
                         comment: "The duplicate search finished without finding any."))
@@ -224,16 +225,17 @@ struct DuplicatesSheet: View {
                 ForEach(groups) { group in
                     Section {
                         ForEach(group.members, id: \.self) { node in
-                            memberRow(node, in: group)
+                            memberRow(node, in: group).listRowBackground(Aether.card)
                         }
                     } header: {
                         let copies = group.members.count.formatted()
                         let size = displaySize(group.allocatedEach, locale: locale)
-                        Text(String(localized: "duplicates.group.header", defaultValue: "Copies: \(copies) · \(size) each",
+                        AetherEyebrow(String(localized: "duplicates.group.header", defaultValue: "Copies: \(copies) · \(size) each",
                                     comment: "Header of a group of identical files: how many copies and the size of each."))
                     }
                 }
             }
+            .listStyle(.plain).listRowSeparator(.hidden).scrollContentBackground(.hidden).aetherSurface()
         }
     }
 
@@ -243,9 +245,9 @@ struct DuplicatesSheet: View {
         let lastKept = unselected.count == 1 && unselected[0] == node
         let modified = Date(timeIntervalSince1970: Double(snapshot.nodes[Int(node)].modified))
         return Toggle(isOn: cleanup.binding(for: node)) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(snapshot.displayPath(node)).lineLimit(1).truncationMode(.middle)
-                Text(modified.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(Aether.muted)
+                Text(modified.formatted(date: .abbreviated, time: .shortened)).font(Aether.xs).monospacedDigit().foregroundStyle(Aether.muted)
             }
         }
         .toggleStyle(.checkbox)
@@ -264,12 +266,13 @@ struct RebuildableSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(String(localized: "rebuildable.title", defaultValue: "Rebuildable Folders",
-                        comment: "Title of the rebuildable folders sheet.")).font(.title2.bold())
+            AetherSheetHeading(String(localized: "rebuildable.title", defaultValue: "Rebuildable Folders",
+                        comment: "Title of the rebuildable folders sheet."), eyebrow: String(localized: "aether.sheet.cleanup", defaultValue: "Clean up",
+                comment: "Section label above cleanup sheet headings."))
             Text(String(localized: "rebuildable.explanation",
                         defaultValue: "Folders in the current view that developer tools recreate when needed, such as build output, installed packages and download caches. Removing them frees space now; rebuilding them later takes time and may need a network connection.",
                         comment: "Explains what rebuildable folders are and the cost of removing them."))
-                .font(.callout).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
+                .font(Aether.md).foregroundStyle(Aether.muted).fixedSize(horizontal: false, vertical: true)
             content.frame(maxHeight: .infinity)
             HStack {
                 if let items = cleanup.rebuildable, !items.isEmpty {
@@ -277,7 +280,7 @@ struct RebuildableSheet: View {
                     let size = displaySize(bytes, locale: locale)
                     Text(String(localized: "rebuildable.selected.size", defaultValue: "Selected folders use \(size)",
                                 comment: "Space used by the rebuildable folders selected for Reclaim Space."))
-                        .foregroundStyle(Aether.muted)
+                        .foregroundStyle(Aether.muted).monospacedDigit()
                 }
                 Spacer()
                 Button(String(localized: "cleanup.cancel", defaultValue: "Cancel", comment: "Close a cleanup sheet.")) {
@@ -290,7 +293,7 @@ struct RebuildableSheet: View {
                 .buttonStyle(AetherPrimaryButtonStyle())
                 .disabled(!canStage || cleanup.selected.isEmpty)
             }
-        }.padding(20).frame(width: 760, height: 540)
+        }.padding(24).frame(width: 760, height: 540).aetherTheme()
     }
 
     @ViewBuilder private var content: some View {
@@ -307,27 +310,28 @@ struct RebuildableSheet: View {
                             Section {
                                 ForEach(matches) { item in
                                     Toggle(isOn: cleanup.binding(for: item.node)) {
-                                        VStack(alignment: .leading) {
+                                        VStack(alignment: .leading, spacing: 8) {
                                             HStack {
                                                 Text(snapshot.displayPath(item.node)).lineLimit(1).truncationMode(.middle)
                                                 Spacer()
                                                 Text(displaySize(item.allocated, locale: locale)).monospacedDigit()
                                                     .foregroundStyle(Aether.muted)
                                             }
-                                            if let reason = item.selectionReason { Text(reason).foregroundStyle(Aether.muted) }
+                                            if let reason = item.selectionReason { AetherStatus(reason) }
                                         }
-                                    }.toggleStyle(.checkbox)
+                                    }.toggleStyle(.checkbox).listRowBackground(Aether.card)
                                 }
                             } header: {
                                 let total = displaySize(matches.reduce(UInt64(0)) { $0 + $1.allocated }, locale: locale)
-                                Text(String(localized: "rebuildable.kind.header", defaultValue: "\(kind.title) · \(total)",
+                                AetherEyebrow(String(localized: "rebuildable.kind.header", defaultValue: "\(kind.title) · \(total)",
                                             comment: "Header of a group of rebuildable folders: the kind and its total size."))
                             } footer: {
-                                Text(kind.restoration).font(.caption).foregroundStyle(Aether.muted)
+                                Text(kind.restoration).font(Aether.xs).foregroundStyle(Aether.muted)
                             }
                         }
                     }
                 }
+                .listStyle(.plain).listRowSeparator(.hidden).scrollContentBackground(.hidden).aetherSurface()
             }
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -372,34 +376,34 @@ struct LocationsSettingsView: View {
     @State private var clearError: String?
 
     var body: some View {
-        Form {
-            Section {
-                list(locations.saved, remove: locations.removeSaved)
-                addButton { locations.addSaved($0) }
-            } header: {
-                Text(String(localized: "locations.saved.header", defaultValue: "Saved locations",
-                            comment: "Settings section listing folders the user scans often."))
-            } footer: {
-                Text(String(localized: "locations.saved.footer", defaultValue: "Scan these from File → Saved Locations.",
-                            comment: "Where saved locations appear.")).font(.footnote).foregroundStyle(Aether.muted)
-            }
-            Section {
-                list(locations.excluded, remove: locations.removeExcluded)
-                addButton { locations.addExcluded($0) }
-            } header: {
-                Text(String(localized: "locations.excluded.header", defaultValue: "Never scan",
-                            comment: "Settings section listing folders every scan skips."))
-            } footer: {
-                Text(String(localized: "locations.excluded.footer",
-                            defaultValue: "Scans skip these folders, and the scan report lists them as excluded in Settings. Their space counts as unscanned.",
-                            comment: "What excluding a folder does.")).font(.footnote).foregroundStyle(Aether.muted)
-            }
-            Section {
-                Button(String(localized: "history.clear", defaultValue: "Clear Scan History…",
-                               comment: "Remove stored scan comparison baselines.")) { confirmingClear = true }
-                if let clearError { Text(clearError) }
-            }
-        }.padding(20)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    AetherEyebrow(String(localized: "locations.saved.header", defaultValue: "Saved locations",
+                        comment: "Settings section listing folders the user scans often."))
+                    list(locations.saved, remove: locations.removeSaved)
+                    addButton { locations.addSaved($0) }
+                    Text(String(localized: "locations.saved.footer", defaultValue: "Scan these from File → Saved Locations.",
+                        comment: "Where saved locations appear.")).font(Aether.xs).foregroundStyle(Aether.muted)
+                }.padding(16).aetherSurface()
+                VStack(alignment: .leading, spacing: 12) {
+                    AetherEyebrow(String(localized: "locations.excluded.header", defaultValue: "Never scan",
+                        comment: "Settings section listing folders every scan skips."))
+                    list(locations.excluded, remove: locations.removeExcluded)
+                    addButton { locations.addExcluded($0) }
+                    Text(String(localized: "locations.excluded.footer",
+                        defaultValue: "Scans skip these folders, and the scan report lists them as excluded in Settings. Their space counts as unscanned.",
+                        comment: "What excluding a folder does.")).font(Aether.xs).foregroundStyle(Aether.muted)
+                }.padding(16).aetherSurface()
+                VStack(alignment: .leading, spacing: 12) {
+                    AetherEyebrow(String(localized: "history.section", defaultValue: "Scan history",
+                        comment: "Settings section for stored scan comparisons."))
+                    Button(String(localized: "history.clear", defaultValue: "Clear Scan History…",
+                        comment: "Remove stored scan comparison baselines.")) { confirmingClear = true }
+                    if let clearError { AetherStatus(clearError, color: Aether.danger) }
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading).aetherSurface()
+            }.padding(16)
+        }
         .confirmationDialog(String(localized: "history.clear.confirm",
             defaultValue: "Remove all stored scan history? Future scans will start new comparisons.",
              comment: "Confirm permanent removal of scan comparison metadata."),
@@ -437,6 +441,6 @@ struct LocationsSettingsView: View {
             if panel.runModal() == .OK {
                 for url in panel.urls { add(url) }
             }
-        }
+        }.buttonStyle(AetherPrimaryButtonStyle())
     }
 }

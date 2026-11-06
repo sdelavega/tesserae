@@ -23,7 +23,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 # Exact exceptions only; symbols and shortcut arguments are not title arguments.
-ALLOWLIST = {"%@": "Format-only string; contains no words to translate."}
+ALLOWLIST = {"%@": "Format-only string; contains no words to translate.",
+             "//": "Aether7B eyebrow glyph; decorative, hidden from accessibility, no words to translate."}
 CALL = re.compile(r'\b(?:Text|TextField|SecureField|navigationTitle|Button|Label|Toggle|Picker|Menu|Window|ProgressView|CommandMenu|alert|confirmationDialog|help|accessibilityLabel|accessibilityValue|LocalizedStringKey)\s*\(\s*(?:(?:title|verbatim):\s*)?(#*"|""")|\bNSMenuItem\s*\(\s*title:\s*(#*"|""")')
 
 

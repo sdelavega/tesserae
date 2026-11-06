@@ -578,6 +578,63 @@ final class CleanupSafetyTests: XCTestCase {
     }
 
     @MainActor
+    func test_completed_duplicate_search_evicts_stale_groups_only_under_its_root() async throws {
+        let directory = try temporaryDirectory("duplicate-refresh")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for folder in ["inside", "outside"] {
+            let url = directory.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            for name in ["a", "b"] {
+                try Data(folder.utf8).write(to: url.appendingPathComponent(name))
+            }
+        }
+        let tree = TestSnapshot(.dir(directory.path, [
+            .dir("inside", [.file("a", 6), .file("b", 6)]),
+            .dir("outside", [.file("a", 7), .file("b", 7)])]))
+        let snapshot = tree.snapshot
+        let inside = tree.index["inside"]!, outside = tree.index["outside"]!
+        let insideMembers = Array(snapshot.children(inside))
+        let outsideMembers = Array(snapshot.children(outside))
+        let old = try XCTUnwrap(DuplicateFinder.find(in: snapshot, under: snapshot.root,
+            minimumSize: 1, reader: ProductionContentReader()))
+        XCTAssertEqual(old.count, 2)
+        let ctx = context(snapshot)
+        let app = AppModel(coordinator: ScanCoordinator(), contextLoader: { _ in ctx })
+        app.replaceSnapshot(snapshot)
+        let session = try XCTUnwrap(app.session)
+        session.rememberDuplicateGroups(old)
+        // Change a member without rescanning: the old guard refuses staging.
+        let changed = insideMembers[1]
+        try Data("edited".utf8).write(to: URL(fileURLWithPath: snapshot.displayPath(changed)))
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 42)],
+            ofItemAtPath: snapshot.displayPath(changed))
+        XCTAssertNotNil(DuplicateFinder.stagingRefusal(selected: [insideMembers[0]],
+            groups: session.duplicateGroups, snapshot: snapshot, staged: []))
+        let fresh = try XCTUnwrap(DuplicateFinder.find(in: snapshot, under: inside,
+            minimumSize: 1, reader: ProductionContentReader()))
+        XCTAssertTrue(fresh.isEmpty)
+        session.replaceDuplicateGroups(fresh, under: inside)
+        XCTAssertEqual(session.duplicateGroups, old.filter { Set($0.members) == Set(outsideMembers) })
+        XCTAssertNil(DuplicateFinder.stagingRefusal(selected: [insideMembers[0]],
+            groups: session.duplicateGroups, snapshot: snapshot, staged: []))
+        var didStage = false
+        app.stage(nodes: [insideMembers[0]], onStaged: { didStage = true })
+        await app.waitForStaging()
+        XCTAssertTrue(didStage, "Following the refusal remedy permits legitimate staging")
+        XCTAssertNotNil(DuplicateFinder.stagingRefusal(selected: outsideMembers,
+            groups: session.duplicateGroups, snapshot: snapshot, staged: []),
+            "A narrower search must preserve keep-one guards outside its root")
+        // A subsequent nonempty completion installs fresh groups and stamps.
+        try Data("inside".utf8).write(to: URL(fileURLWithPath: snapshot.displayPath(changed)))
+        let restored = try XCTUnwrap(DuplicateFinder.find(in: snapshot, under: inside,
+            minimumSize: 1, reader: ProductionContentReader()))
+        XCTAssertEqual(restored.count, 1)
+        session.replaceDuplicateGroups(restored, under: inside)
+        XCTAssertEqual(session.duplicateGroups.count, 2)
+        XCTAssertTrue(session.duplicateGroups.contains(restored[0]))
+    }
+
+    @MainActor
     func test_scan_root_inside_never_scan_is_refused() async throws {
         let suite = "Tesserae.RefusalTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -727,6 +784,12 @@ final class CleanupSafetyTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
         XCTAssertEqual(try Data(contentsOf: legacy), Data())
         XCTAssertNil(store.load(root: oldRoot))
+        let retiredAt = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: retiredAt], ofItemAtPath: legacy.path)
+        try store.save(ScanSummary(rootPath: Data("/another-root".utf8), scannedAt: Date(),
+            limited: false, paths: [Data()], allocated: [1]))
+        let modified = try legacy.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        XCTAssertEqual(modified, retiredAt, "Already-empty legacy files must not be rewritten")
     }
 
     func test_history_prune_tolerates_empty_filename_components() throws {

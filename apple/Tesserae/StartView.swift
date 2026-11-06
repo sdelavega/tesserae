@@ -25,9 +25,9 @@ struct StartView: View {
     @Environment(\.locale) private var locale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
             Text(String(localized: "start.title", defaultValue: "See where your space goes",
-                        comment: "Heading above the mounted volumes available to scan.")).font(.largeTitle)
+                        comment: "Heading above the mounted volumes available to scan.")).font(Aether.xxl).kerning(-0.51)
             ScrollView { volumeGroups.padding(.trailing, 8) }
             HStack {
                 Button(String(localized: "start.chooseFolder", defaultValue: "Choose a Folder…",
@@ -46,16 +46,16 @@ struct StartView: View {
     }
 
     var volumeGroups: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
             ForEach(VolumeGroup.allCases, id: \.rawValue) { group in
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(title(group)).font(.headline)
+                VStack(alignment: .leading, spacing: 12) {
+                    AetherEyebrow(title(group))
                     ForEach(volumes.volumes.filter { $0.group == group }) { volume in
                         row(volume)
                     }
                     if group == .network {
                         Text(String(localized: "start.network.note", defaultValue: "Network volumes scan more slowly.",
-                                    comment: "Explanation below the Network group.")).font(.callout).foregroundStyle(Aether.muted)
+                                    comment: "Explanation below the Network group.")).font(Aether.sm).foregroundStyle(Aether.muted)
                     }
                 }
             }
@@ -71,13 +71,13 @@ struct StartView: View {
     }
 
     private func row(_ volume: VolumeInfo) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 16) {
             Image(systemName: volume.group == .network ? "server.rack" : (volume.isStartup ? "internaldrive" : "externaldrive"))
                 .font(.title).foregroundStyle(Aether.accent).frame(width: 40).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(volume.name).font(.headline)
+                Text(volume.name).font(Aether.sm.weight(.semibold))
                 Text(volume.filesystem).foregroundStyle(Aether.muted)
-                Text(sizeText(volume)).font(.callout).foregroundStyle(Aether.muted)
+                Text(sizeText(volume)).font(Aether.sm).monospacedDigit().foregroundStyle(Aether.muted)
             }
             Spacer()
             Button(String(localized: "start.scan", defaultValue: "Scan", comment: "Scan this mounted volume.")) { scan(volume) }

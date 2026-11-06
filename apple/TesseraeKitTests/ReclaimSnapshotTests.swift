@@ -64,12 +64,11 @@ final class ReclaimSnapshotTests: XCTestCase {
             let name = "degraded-" + name + (dark ? "-dark" : "-light")
             let content = view
                 .frame(width: size.width, height: size.height, alignment: .topLeading)
-                .background(dark ? Color(red: 0.10, green: 0.10, blue: 0.11) : Color.white)
+                .aetherTheme()
                 .environment(\.colorScheme, dark ? .dark : .light)
                 .environment(\.locale, locale).environment(\.timeZone, zone)
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.displayScale, 1)
-                .tint(.blue)
             let renderer = ImageRenderer(content: content)
             renderer.proposedSize = ProposedViewSize(size)
             renderer.scale = 1

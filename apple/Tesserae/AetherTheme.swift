@@ -26,6 +26,7 @@ enum Aether {
     static let ice = color(0x99C5E3)
     static let navy = color(0x13294B)
     static let accent = adaptive(light: 0x2B72A6, dark: 0x7BAFD4)
+    static let accentTint = adaptive(light: 0x4B9CD3, dark: 0x7BAFD4, lightAlpha: 0.12, darkAlpha: 0.15)
     static let canvas = adaptive(light: 0xEDF3F8, dark: 0x0A1320)
     static let card = adaptive(light: 0xFFFFFF, dark: 0x0E1A2B)
     static let well = adaptive(light: 0xE3EEF7, dark: 0x13294B)
@@ -37,7 +38,21 @@ enum Aether {
     static let warning = adaptive(light: 0xB45309, dark: 0xF59E0B)
     static let danger = adaptive(light: 0xB91C1C, dark: 0xEF4444)
     static let success = adaptive(light: 0x047857, dark: 0x10B981)
-    static let metadata = Font.system(size: 12, design: .monospaced)
+    // These type tokens and TesseraeKit's AetherTypography in ReconciliationView.swift
+    // both mirror Aether7B v1.1; keep them aligned without a Kit dependency here.
+    enum TypeSize {
+        static let xs: CGFloat = 12
+        static let sm: CGFloat = 13
+        static let md: CGFloat = 15
+        static let xl: CGFloat = 22
+        static let xxl: CGFloat = 34
+    }
+    static let xs = Font.system(size: TypeSize.xs)
+    static let sm = Font.system(size: TypeSize.sm)
+    static let md = Font.system(size: TypeSize.md)
+    static let xl = Font.system(size: TypeSize.xl, weight: .semibold)
+    static let xxl = Font.system(size: TypeSize.xxl, weight: .semibold)
+    static let metadata = Font.system(size: TypeSize.xs, design: .monospaced)
 
     private static func color(_ hex: UInt32) -> Color {
         Color(nsColor: nsColor(hex))
@@ -59,13 +74,14 @@ enum Aether {
 }
 
 struct AetherCanvas: View {
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         Aether.canvas
             .overlay {
                 if !reduceTransparency {
-                    RadialGradient(colors: [Aether.web.opacity(0.14), .clear],
+                    RadialGradient(colors: [(scheme == .dark ? Aether.web.opacity(0.18) : Aether.classic.opacity(0.22)), .clear],
                                    center: UnitPoint(x: 0.1, y: 0), startRadius: 0, endRadius: 520)
                 }
             }
@@ -105,6 +121,72 @@ struct AetherChrome: View {
     }
 }
 
+/// Localize before passing text; casing follows the user's locale.
+struct AetherEyebrow: View {
+    let text: String
+    @Environment(\.locale) private var locale
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: "//").opacity(0.6).accessibilityHidden(true)
+            Text(text.uppercased(with: locale))
+        }
+        .font(Aether.metadata).kerning(0.72)
+        .foregroundStyle(Aether.accent)
+        .monospacedDigit()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+    }
+}
+
+struct AetherSheetHeading: View {
+    let title: String
+    let eyebrow: String
+    init(_ title: String, eyebrow: String = String(localized: "aether.sheet.section", defaultValue: "Review",
+        comment: "Section label above confirmation sheet headings.")) {
+        self.title = title
+        self.eyebrow = eyebrow
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            AetherEyebrow(eyebrow)
+            Text(title).font(Aether.xl).kerning(-0.33)
+                .monospacedDigit().accessibilityAddTraits(.isHeader)
+        }
+    }
+}
+
+/// Status stays on an opaque card: colour belongs to the rim, dot and message.
+struct AetherStatus: View {
+    let text: String
+    var color: Color = Aether.warning
+    var isDanger: Bool { color == Aether.danger }
+    init(_ text: String, color: Color = Aether.warning) {
+        self.text = text
+        self.color = color
+    }
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(color).frame(width: 7, height: 7).accessibilityHidden(true)
+            Text(text).font(Aether.sm)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(color).padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Aether.card, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(color, lineWidth: 1))
+        .overlay {
+            if isDanger {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(color.opacity(0.3), lineWidth: 2).padding(-2)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+}
+
 struct AetherBadge: View {
     let text: String
 
@@ -112,9 +194,9 @@ struct AetherBadge: View {
         Text(text)
             .font(Aether.metadata)
             .foregroundStyle(Aether.accent)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Aether.classic.opacity(0.15), in: Capsule())
+            .background(Aether.accentTint, in: Capsule())
             .overlay(Capsule().strokeBorder(Aether.borderStrong, lineWidth: 1))
     }
 }
@@ -126,20 +208,26 @@ struct AetherPrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .font(Aether.sm.weight(.semibold))
             .padding(.horizontal, 16)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
             .foregroundStyle(Aether.colorForButtonText)
             .background {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(LinearGradient(colors: [Aether.classic, Aether.web],
                                          startPoint: .top, endPoint: .bottom))
             }
+            .overlay(alignment: .top) {
+                // CTA specular is inset inside the rim, distinct from chrome specular.
+                Rectangle().fill(.white.opacity(0.4)).frame(height: 1)
+                    .padding(.horizontal, 8).padding(.top, 1)
+                    .allowsHitTesting(false)
+            }
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Aether.ice, lineWidth: 1))
             .overlay {
                 if isFocused {
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Aether.accent, lineWidth: 2).padding(-3)
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Aether.accent, lineWidth: 2).padding(-4)
                 }
             }
             .brightness(configuration.isPressed ? -0.08 : 0)
@@ -155,22 +243,23 @@ extension Aether {
                                                           blue: 32.0 / 255, alpha: 1))
 }
 
-private struct AetherCanvasPresentKey: EnvironmentKey {
+private struct AetherCanvasPresent: EnvironmentKey {
     static let defaultValue = false
 }
 private extension EnvironmentValues {
     var aetherCanvasPresent: Bool {
-        get { self[AetherCanvasPresentKey.self] }
-        set { self[AetherCanvasPresentKey.self] = newValue }
+        get { self[AetherCanvasPresent.self] }
+        set { self[AetherCanvasPresent.self] = newValue }
     }
 }
+
 private struct AetherTheme: ViewModifier {
     @Environment(\.aetherCanvasPresent) private var canvasPresent
     func body(content: Content) -> some View {
         content.tint(Aether.accent)
             .buttonStyle(AetherSecondaryButtonStyle())
             .foregroundStyle(Aether.text, Aether.muted)
-            .font(.system(size: 13))
+            .font(Aether.sm)
             .background { if !canvasPresent { AetherCanvas() } }
             .environment(\.aetherCanvasPresent, true)
     }
@@ -213,12 +302,27 @@ struct AetherSecondaryButtonStyle: ButtonStyle {
     @Environment(\.isFocused) private var focused
     @Environment(\.colorSchemeContrast) private var contrast
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        GhostBody(label: configuration.label, pressed: configuration.isPressed,
+                  enabled: enabled, focused: focused, contrast: contrast)
+    }
+
+    private struct GhostBody<Label: View>: View {
+        let label: Label
+        let pressed: Bool
+        let enabled: Bool
+        let focused: Bool
+        let contrast: ColorSchemeContrast
+        @State private var hovering = false
+        var body: some View {
+            label
             .foregroundStyle(enabled ? Aether.text : Aether.muted)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(configuration.isPressed ? Aether.well : Aether.card, in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 12).padding(.vertical, 4)
+            .background(enabled && (hovering || pressed) ? Aether.accentTint : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6))
+            .onHover { hovering = $0 }
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
                 focused ? Aether.accent : (contrast == .increased ? Aether.muted : Aether.borderStrong),
                 lineWidth: focused ? 2 : 1))
+        }
     }
 }

@@ -1931,6 +1931,72 @@
           }
         }
       }
+    },
+    "aether.sheet.section": {
+      "comment": "Section label above sheet headings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review"
+          }
+        }
+      }
+    },
+    "history.section": {
+      "comment": "Settings section for stored scan comparisons.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan history"
+          }
+        }
+      }
+    },
+    "aether.sheet.privacy": {
+      "comment": "Section label above privacy sheet headings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        }
+      }
+    },
+    "aether.sheet.progress": {
+      "comment": "Section label above progress sheet headings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Progress"
+          }
+        }
+      }
+    },
+    "aether.sheet.scan": {
+      "comment": "Section label above scan sheet headings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan"
+          }
+        }
+      }
+    },
+    "aether.sheet.cleanup": {
+      "comment": "Section label above cleanup sheet headings.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean up"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

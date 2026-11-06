@@ -129,7 +129,7 @@ struct TesseraeApp: App {
                     comment: "Saved and excluded locations settings tab.")) }
                 UpdateSettingsView(updates: updates).tabItem { Text(String(localized: "detail.updates", defaultValue: "Updates",
                     comment: "Automatic updates settings tab.")) }
-            }.frame(width: 520, height: 420)
+            }.frame(width: 520, height: 420).aetherTheme()
         }
     }
 }
@@ -138,12 +138,13 @@ private struct GeneralSettingsView: View {
     @ObservedObject private var detail = DetailSettings.shared
     var body: some View {
         Form {
+            AetherEyebrow(String(localized: "detail.general", defaultValue: "General", comment: "General settings tab."))
             Picker(String(localized: "detail.label", defaultValue: "Detail", comment: "Presentation detail setting."), selection: $detail.current) {
                 Text(String(localized: "detail.simple", defaultValue: "Simple", comment: "Plain presentation option.")).tag(DetailLevel.simple)
                 Text(String(localized: "detail.detailed", defaultValue: "Detailed", comment: "Full technical presentation option.")).tag(DetailLevel.detailed)
             }.pickerStyle(.segmented)
             Text(String(localized: "detail.explanation", defaultValue: "Simple uses plain summaries; Detailed shows all technical information.",
-                comment: "One-line explanation of the presentation setting.")).font(.footnote).foregroundStyle(Aether.muted)
-        }.padding(24)
+                comment: "One-line explanation of the presentation setting.")).font(Aether.xs).foregroundStyle(Aether.muted)
+        }.padding(16).aetherSurface().padding(24)
     }
 }

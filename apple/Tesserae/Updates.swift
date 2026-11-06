@@ -74,12 +74,13 @@ struct UpdateSettingsView: View {
 
     var body: some View {
         Form {
+            AetherEyebrow(String(localized: "detail.updates", defaultValue: "Updates", comment: "Automatic updates settings tab."))
             Toggle(String(
                 localized: "updates.check.for.updates.automatically",
                 defaultValue: "Check for updates automatically",
                 comment: "Updates: Check for updates automatically."
             ), isOn: $updates.automaticallyChecksForUpdates)
-            Text(AppChrome.updateDisclosure).font(.footnote).foregroundStyle(Aether.muted)
-        }.padding(24).frame(width: 440)
+            Text(AppChrome.updateDisclosure).font(Aether.xs).foregroundStyle(Aether.muted)
+        }.padding(16).aetherSurface().padding(24).frame(width: 440)
     }
 }

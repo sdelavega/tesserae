@@ -70,6 +70,20 @@ public final class AppSession: ObservableObject, Identifiable {
             duplicateGroups.append(group)
         }
     }
+    /// A successful search replaces discoveries wholly inside its captured root,
+    /// including when the new search finds no groups. Failed searches keep guards.
+    public func replaceDuplicateGroups(_ groups: [DuplicateGroup], under root: UInt32) {
+        func covered(_ node: UInt32) -> Bool {
+            var cursor = node
+            while cursor != Tile.noNode {
+                if cursor == root { return true }
+                cursor = snapshot.nodes[Int(cursor)].parent
+            }
+            return false
+        }
+        duplicateGroups.removeAll { $0.members.allSatisfy(covered) }
+        rememberDuplicateGroups(groups)
+    }
     @Published public private(set) var isPreparingReclaim = false
     @Published public private(set) var changedSinceScan = false
     public let reclaim: Reclaim

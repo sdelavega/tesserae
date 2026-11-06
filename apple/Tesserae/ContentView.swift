@@ -111,7 +111,7 @@ struct ContentView: View {
                 }
             } else {
                 // The scan this search belonged to was replaced; nothing here can be staged.
-                VStack { ProgressView() }.frame(width: 200, height: 120).onAppear { cleanup.close() }
+                VStack { ProgressView() }.frame(width: 200, height: 120).aetherTheme().onAppear { cleanup.close() }
             }
         }
         .sheet(isPresented: Binding(get: { reclaimUI.decompression != nil }, set: { if !$0 { reclaimUI.dismissDecompression() } })) {
@@ -154,10 +154,10 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 OnboardingView(state: model.onboarding, send: model.sendOnboarding)
                 Text(AppChrome.updateDisclosure)
-                    .font(.footnote).foregroundStyle(Aether.muted)
+                    .font(Aether.xs).foregroundStyle(Aether.muted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding([.horizontal, .bottom], 24)
-            }.frame(width: 560)
+            }.frame(width: 560).aetherTheme()
         }
         .navigationTitle(model.windowTitle)
         .toolbar {
@@ -210,13 +210,13 @@ struct ContentView: View {
                     localized: "contentView.scanning",
                     defaultValue: "Scanning…",
                     comment: "ContentView: Scanning…."
-                )).font(.title2)
+                )).font(Aether.xl).kerning(-0.33)
                 Text(String(
                     localized: "scan.progress.counts",
                     defaultValue: "\(progress.dirs) folders · \(progress.files) files",
                     locale: L10n.pluralLocale(locale),
                     comment: "Folders and files visited so far; pluralize each count independently."
-                ))
+                )).monospacedDigit()
                 Text(String(
                     localized: "contentView.entries.s",
                     defaultValue: "\(progress.displayedEntriesPerSecond.formatted()) entries/s · \(displaySize(progress.bytes, locale: locale))",
@@ -228,7 +228,7 @@ struct ContentView: View {
                     defaultValue: "\(progress.errors) errors",
                     locale: L10n.pluralLocale(locale),
                     comment: "ContentView: {progress.errors} errors."
-                )).foregroundStyle(Aether.muted) }
+                )).foregroundStyle(Aether.muted).monospacedDigit() }
             } else if case .failed(let errno) = model.scanState {
                 ScanFailureView(errno: errno, chooseFolder: chooseFolder)
             } else {
@@ -244,13 +244,13 @@ struct ContentView: View {
     }
 
     private var focusControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(String(
+                AetherEyebrow(String(
                     localized: "contentView.focus.on.up.to.three.types",
                     defaultValue: "Focus on up to three types",
                     comment: "ContentView: Focus on up to three types."
-                )).font(.caption).foregroundStyle(Aether.muted)
+                ))
                 ForEach(FileKind.allCases, id: \.self) { kind in
                     Toggle(kind.displayName, isOn: Binding(
                         get: { model.focusKinds.contains(kind) },
@@ -260,11 +260,13 @@ struct ContentView: View {
                     .disabled(model.focusKinds.count == 3 && !model.focusKinds.contains(kind))
                 }
             }
-            HStack(spacing: 18) {
+            HStack(spacing: 16) {
                 ForEach(Array(model.focusLegend(dark: dark).enumerated()), id: \.offset) { _, item in
-                    HStack(spacing: 6) {
-                        RoundedRectangle(cornerRadius: 3).fill(colour(item.colour)).frame(width: 12, height: 12)
-                        Text(item.accessibilityLabel).font(.caption)
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 6).fill(colour(item.colour))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Aether.borderStrong, lineWidth: 1))
+                            .frame(width: 12, height: 12)
+                        Text(item.accessibilityLabel).font(Aether.xs)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(item.accessibilityLabel)
@@ -284,7 +286,7 @@ struct ContentView: View {
 
     /// Stage what a cleanup sheet found, then show it in Reclaim Space for review.
     private func stageFound(_ nodes: [UInt32]) {
-        guard canStage else { return }
+        guard cleanup.session === model.session, canStage else { return }
         let groups: [DuplicateGroup]
         if cleanup.sheet == .duplicates, case .done(let found) = cleanup.duplicates { groups = found }
         else { groups = [] }
@@ -320,7 +322,7 @@ private struct PhaseGateStatus: View {
     @ObservedObject var runner: PhaseGateRunner
     var body: some View {
         if let status = runner.status {
-            Text(status).font(.caption).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+            Text(status).font(Aether.xs).padding(8).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -351,7 +353,7 @@ struct SessionView: View {
         let generation = session.layoutGeneration
         VStack(spacing: 0) {
             warningBanners
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Button { session.navigator.ascend() } label: { Image(systemName: "arrow.up") }
                     .help(String(
                         localized: "contentView.parent.folder",
@@ -365,11 +367,11 @@ struct SessionView: View {
                     ))
                     .disabled(session.root == session.snapshot.root)
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         ForEach(session.navigator.breadcrumbItems, id: \.node) { item in
                             Button(item.title) { session.go(to: item.node) }
                                 .buttonStyle(.plain).lineLimit(1)
-                            if item.node != session.root { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Aether.muted) }
+                            if item.node != session.root { Image(systemName: "chevron.right").font(Aether.xs).foregroundStyle(Aether.muted) }
                         }
                     }
                 }
@@ -389,7 +391,7 @@ struct SessionView: View {
                         ZStack(alignment: .topLeading) {
                             if session.isEmpty {
                                 VStack(spacing: 8) {
-                                    Image(systemName: "folder").font(.largeTitle)
+                                    Image(systemName: "folder").font(Aether.xxl)
                                     Text(String(
                                         localized: "contentView.no.allocated.file.data.in.this.folder",
                                         defaultValue: "No allocated file data in this folder",
@@ -455,7 +457,7 @@ struct SessionView: View {
                             RecentlyCompressedView(entries: reclaimUI.compressedHistory,
                                 busy: appModel.reclaimBusy || appModel.isScanning || reclaimUI.running,
                                 decompress: { entry in Task { await reclaimUI.prepareDecompression(entry, model: appModel) } })
-                            if let text = reclaimUI.decompressResult { Text(reclaimUI.decompressOutcome?.displayResult(detailLevel: detail.current) ?? text).padding(18) }
+                            if let text = reclaimUI.decompressResult { Text(reclaimUI.decompressOutcome?.displayResult(detailLevel: detail.current) ?? text).padding(16) }
                             RecentlyTrashedView(entries: reclaimUI.history, messages: reclaimUI.messages, restoring: reclaimUI.restoring, canRestore: appModel.canPutBack,
                                 restore: { entry in Task { await reclaimUI.restore(entry, model: appModel) } })
                         }
@@ -489,9 +491,10 @@ struct SessionView: View {
             let tile = item.tile
             let badge = FolderBadge(snapshot: session.snapshot, tile: tile, locale: locale)
             Image(systemName: badge.symbol)
-                .font(.system(size: min(11, max(3, min(tile.rect.width, tile.rect.height) - 1))))
+                .font(Aether.xs)
                 .foregroundStyle(LabelStyle.inkColour(over: Palette.colours(mode, dark: dark)[Palette.statusIndex]))
                 .frame(width: tile.rect.width, height: tile.rect.height, alignment: .topLeading)
+                .clipped()
                 .offset(x: tile.rect.minX, y: tile.rect.minY)
                 .accessibilityLabel(badge.label)
                 .allowsHitTesting(false)
@@ -510,11 +513,11 @@ private struct InspectorPane: View {
     @Environment(\.locale) private var locale
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(String(
+            AetherEyebrow(String(
                 localized: "contentView.inspector",
                 defaultValue: "Inspector",
                 comment: "ContentView: Inspector."
-            )).font(.headline)
+            ))
             Button(String(
                 localized: "contentView.add.to.reclaim.space",
                 defaultValue: "Add to Reclaim Space",
@@ -527,7 +530,7 @@ private struct InspectorPane: View {
                     comment: "ContentView: Stage the selected items (⌘⌫)."
                 ))
             if let info = model.info {
-                Text(info.displayTitle).font(.callout).lineLimit(1).truncationMode(.middle)
+                Text(info.displayTitle).font(Aether.sm).lineLimit(1).truncationMode(.middle)
                     .help(info.displayTitle).textSelection(.enabled)
                 Divider()
                 detail(String(
@@ -560,7 +563,7 @@ private struct InspectorPane: View {
                     defaultValue: "Point to a tile to see its path, size and modification date.",
                     comment: "ContentView: Point to a tile to see its path, size and modification date."
                 ))
-                    .foregroundStyle(Aether.muted).font(.callout)
+                    .foregroundStyle(Aether.muted).font(Aether.sm)
             }
             Spacer()
         }.padding(16).frame(maxHeight: .infinity, alignment: .topLeading)
@@ -568,8 +571,8 @@ private struct InspectorPane: View {
 
     private func detail(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(Aether.muted)
-            Text(value).font(.callout).textSelection(.enabled)
+            AetherEyebrow(title)
+            Text(value).font(Aether.sm).monospacedDigit().textSelection(.enabled)
         }
     }
 }
@@ -598,7 +601,7 @@ private struct TablePane: View {
                     defaultValue: "Largest 1,000 files in this folder · column sorts apply to this list",
                     comment: "ContentView: Largest 1,000 files in this folder · column sorts apply to this list."
                 ))
-                    .font(.caption).foregroundStyle(Aether.muted).padding(8)
+                    .font(Aether.xs).foregroundStyle(Aether.muted).padding(8)
                 if let content = rows.content {
                     FileTableView(snapshot: content.snapshot, rows: content.rows, selection: selection, overlay: session.overlay, locale: locale, onStage: stagingDisabled ? nil : stage) { key, ascending in
                         Task { await rows.sort(by: key, ascending: ascending) }

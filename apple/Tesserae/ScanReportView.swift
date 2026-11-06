@@ -32,11 +32,11 @@ struct ScanReportView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(String(
+                AetherEyebrow(String(
                     localized: "scanReportView.scan.report",
                     defaultValue: "Scan report",
                     comment: "ScanReportView: Scan report."
-                )).font(.headline)
+                ))
                 Button(String(
                     localized: "scanReportView.copy.diagnostics",
                     defaultValue: "Copy Diagnostics",
@@ -44,13 +44,13 @@ struct ScanReportView: View {
                 )) { copyFailed = !report.copyDiagnostics(to: GeneralDiagnosticsPasteboard()) }
                     .background { if let layout { CopyDiagnosticsBounds(layout: layout) } }
             }
-            Text(ScanReport.sharingNote).font(.caption).foregroundStyle(Aether.muted)
+            Text(ScanReport.sharingNote).font(Aether.xs).foregroundStyle(Aether.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            if copyFailed { Text(String(
+            if copyFailed { AetherStatus(String(
                 localized: "scanReportView.the.clipboard.could.not.be.written.try.copy",
                 defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
                 comment: "ScanReportView: The clipboard could not be written. Try Copy Diagnostics again."
-            )).foregroundStyle(Aether.danger) }
+            ), color: Aether.danger) }
             if detail.current == .simple {
                 Button(showDetails ? String(localized: "detail.hideDetails", defaultValue: "Hide details",
                     comment: "Collapse the full scan report.") : String(localized: "detail.showDetails", defaultValue: "Show details",

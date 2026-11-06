@@ -26,12 +26,12 @@ struct ReclaimSummaryView: View {
     var canRestore: (LogEntry) -> Bool = { _ in true }
     var restore: (LogEntry) -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(String(
+        VStack(alignment: .leading, spacing: 16) {
+            AetherEyebrow(String(
                 localized: "reclaimSummaryView.results",
                 defaultValue: "Reclaim results",
                 comment: "ReclaimSummaryView: Reclaim results."
-            )).font(.title2.bold())
+            ))
             SummaryLine(result: result)
             if result.hasTrashedItems { Button(String(
                 localized: "trashSummaryView.open.trash",
@@ -39,9 +39,9 @@ struct ReclaimSummaryView: View {
                 comment: "ReclaimSummaryView: Open Trash."
             )) { openTrash() } }
             ForEach(Array(result.outcomes.enumerated()), id: \.offset) { _, pair in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(pair.0.displayPath).font(.headline).textSelection(.enabled)
-                    Text(outcomeText(pair.1, detailLevel: detail.current))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(pair.0.displayPath).font(Aether.sm.weight(.semibold)).textSelection(.enabled)
+                    Text(outcomeText(pair.1, detailLevel: detail.current)).monospacedDigit()
                     if let url = pair.1.trashDestination {
                         if let entry = entries.first(where: { $0.trashURL == url.absoluteString }) {
                             Button(String(
@@ -60,7 +60,7 @@ struct ReclaimSummaryView: View {
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .aetherSurface()
             }
-        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -68,6 +68,6 @@ private struct SummaryLine: View {
     let result: ExecutionResult
     @Environment(\.locale) private var locale
     var body: some View {
-        if let text = result.summary(locale: locale) { Text(text).font(.headline) }
+        if let text = result.summary(locale: locale) { Text(text).font(Aether.sm.weight(.semibold)).monospacedDigit() }
     }
 }

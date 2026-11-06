@@ -62,11 +62,11 @@ struct LimitedAccessView: View {
     var dismiss: (() -> Void)? = nil
     var body: some View {
         HStack {
-            Text(LimitedAccessViewModel.title).font(.caption)
+            AetherStatus(LimitedAccessViewModel.title)
             Spacer()
             Button(LimitedAccessViewModel.reopen, action: reopen)
             if let dismiss { WarningDismissButton(dismiss: dismiss) }
-        }.padding(10)
+        }.padding(12)
     }
 }
 
@@ -88,7 +88,7 @@ struct ScanWarningView: View {
     var dismiss: (() -> Void)? = nil
     var body: some View {
         HStack {
-            Label(text, systemImage: "exclamationmark.triangle.fill")
+            AetherStatus(text)
             if let explain {
                 Button(String(localized: "partial.link", defaultValue: "What wasn't scanned?",
                     comment: "Link from the partial-result banner to an explanation sheet."), action: explain)
@@ -96,9 +96,7 @@ struct ScanWarningView: View {
             }
             Spacer(minLength: 8)
             if let dismiss { WarningDismissButton(dismiss: dismiss) }
-        }.font(.callout).padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Aether.card)
-            .overlay(alignment: .leading) { Rectangle().fill(Aether.warning).frame(width: 3) }
+        }.font(Aether.sm).padding(12).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -109,18 +107,18 @@ struct ScanFailureView: View {
     private var model: ScanFailureViewModel { ScanFailureViewModel(errno: errno) }
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle").font(.largeTitle)
-            Text(model.title).font(.title2)
+            Image(systemName: "exclamationmark.triangle").font(Aether.xxl)
+            Text(model.title).font(Aether.xl).kerning(-0.33)
             Text(model.reason).foregroundStyle(Aether.muted)
             Button(model.copyTitle) {
                 NSPasteboard.general.clearContents()
                 copyFailed = !NSPasteboard.general.setString(model.diagnostics, forType: .string)
             }
-            if copyFailed { Text(String(
+            if copyFailed { AetherStatus(String(
                 localized: "scanStatusViews.the.clipboard.could.not.be.written.try.copy",
                 defaultValue: "The clipboard could not be written. Try Copy Diagnostics again.",
                 comment: "ScanStatusViews: The clipboard could not be written. Try Copy Diagnostics again."
-            )).foregroundStyle(Aether.danger) }
+            ), color: Aether.danger) }
             Button(String(
                 localized: "scanStatusViews.choose.another.folder",
                 defaultValue: "Choose another folder…",

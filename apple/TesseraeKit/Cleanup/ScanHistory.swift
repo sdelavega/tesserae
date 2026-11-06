@@ -142,10 +142,11 @@ public struct ScanHistoryStore: Sendable {
         guard !Task.isCancelled else { return }
         try encoded.write(to: fileURL(for: summary.rootPath, limited: summary.limited), options: .atomic)
         // Retire legacy summaries in place on the first new-format write.
-        for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
             where url.pathExtension == "plist" {
             let name = url.deletingPathExtension().lastPathComponent
-            if name.count == 64 && name.allSatisfy({ $0.isHexDigit }) {
+            if name.count == 64 && name.allSatisfy({ $0.isHexDigit }),
+               try url.resourceValues(forKeys: [.fileSizeKey]).fileSize != 0 {
                 try Data().write(to: url, options: .atomic)
             }
         }
